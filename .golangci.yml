@@ -1,0 +1,394 @@
+# Linter configuration for ArchUnitGo.
+#
+# This file is the deterministic half of code review. Everything expressible here is enforced
+# mechanically, on every change, identically for a human and for an agent — which is why the review
+# prompts in the ArchUnitDev harness are told *not* to report anything this config already catches.
+#
+# Two sections encode AGENTS.md directly rather than trusting a reviewer to remember it:
+#   - `depguard` implements the four dependency rules against the real import graph.
+#   - `forbidigo` implements the library-hygiene rules (no printing, no exit, no clock, no panic).
+#
+# Run it the same way the gate does:
+#   golangci-lint config verify && golangci-lint fmt --diff && golangci-lint run ./...
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  relative-path-mode: gomod
+  modules-download-mode: readonly
+
+issues:
+  # The defaults (50 per linter, 3 of a kind) HIDE findings. An agent fixing what it was shown would
+  # believe it was done, re-run, and be handed a fresh batch — so it never converges.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: true
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+  sort-order: [file, linter]
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - asasalint
+    - bidichk
+    - copyloopvar
+    - depguard
+    - durationcheck
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - gochecknoglobals
+    - gochecknoinits
+    - gocritic
+    - godoclint
+    - makezero
+    - misspell
+    - nilerr
+    - nolintlint
+    - predeclared
+    - recvcheck
+    - revive
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - usetesting
+
+  settings:
+    errcheck:
+      check-blank: true # `_ = f()` is the cheapest way to fake a clean build
+      check-type-assertions: true
+      # Deliberately NOT setting disable-default-exclusions: errcheck's built-in stdlib
+      # exclusions are correct and removing them buries the real findings.
+
+    govet:
+      enable-all: true # adds nilness and unusedwrite, neither of which bare `go vet` runs
+      disable:
+        - fieldalignment # struct packing micro-optimisation, not a defect
+        - shadow # fires on idiomatic `if err := ...` shadowing
+      settings:
+        unusedresult:
+          # The fluent-API safety net. Every non-terminal chain method returns a new value; calling
+          # one and discarding the result compiles cleanly and silently does nothing. That is
+          # zerolog's documented worst failure mode ("there is no compile time error to alert you").
+          # Listing the methods here turns it into a build failure.
+          #
+          # THIS LIST MUST GROW WITH THE FLUENT API. Add every stage method as it is written;
+          # a terminal (Check, Evaluate) does not belong here.
+          funcs:
+            # - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
+            # - (github.com/LukasNiessen/ArchUnitGo/files/fluentapi.FileConditionBuilder).InFolder
+            []
+
+    staticcheck:
+      # Set explicitly: golangci-lint's own default silences ST1000 and ST1020-ST1022, which are
+      # exactly the doc-comment checks a public library wants, and enables QF1* quickfix hints that
+      # the staticcheck CLI never reports.
+      checks:
+        - all
+        - -ST1003 # initialisms — revive var-naming owns this
+        - -ST1016 # receiver name consistency — revive receiver-naming owns this
+        - -ST1023 # omit redundant type from declaration; taste
+        - -SA9003 # empty branch; off upstream by default, noisy
+        - -QF1001
+        - -QF1003
+        - -QF1008
+      # ST1000 (package comment), ST1020/ST1021/ST1022 (doc comment must begin with the symbol
+      # name) are ON ON PURPOSE. They are the mechanical form of "// Foo does ...".
+
+    revive:
+      severity: error
+      confidence: 0.8
+      enable-all-rules: false
+      # Listing rules explicitly means only these run, so a revive upgrade cannot silently move the
+      # gate under a running loop.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: exported
+          arguments: [checkPrivateReceivers, sayRepetitiveInsteadOfStutters]
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range-val-address
+        - name: range-val-in-closure
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: var-naming
+        - name: atomic
+        - name: datarace
+        - name: defer
+          arguments: [[loop, method-call, recover, return]]
+        - name: duplicated-imports
+        - name: identical-branches
+        - name: modifies-value-receiver # a value-receiver builder that is not actually immutable
+        - name: unconditional-recursion
+        - name: unchecked-type-assertion
+        - name: waitgroup-by-value
+        - name: redefines-builtin-id
+        - name: import-shadowing
+        - name: bare-return
+        - name: deep-exit
+        - name: use-errors-new
+        - name: use-any
+        - name: package-directory-mismatch # AGENTS.md: directory is package
+        - name: package-naming
+        - name: filename-format
+          arguments: ["^[_a-z][_a-z0-9]*\\.go$"] # snake_case stems, matching the sibling ports
+        - name: early-return
+          arguments: [preserveScope]
+        - name: superfluous-else
+          arguments: [preserveScope]
+        - name: unused-parameter
+        - name: unused-receiver
+
+    godoclint:
+      default: basic # pkg-doc, single-pkg-doc, start-with-name, deprecated
+      enable: [require-doc, no-unused-link]
+      options:
+        require-doc:
+          ignore-exported: false
+          ignore-unexported: true
+        start-with-name:
+          include-unexported: false
+
+    # ---- AGENTS.md's four dependency rules, against the real import graph ----
+    #
+    # This replaces a grep over import strings: depguard sees resolved imports, so an alias, a
+    # blank import or a line-wrapped import block cannot slip past it.
+    #
+    # Rule 4 ("nothing depends on the public surface") is NOT here: depguard matches package
+    # prefixes, and the public surface's path is the module path itself, so denying it would deny
+    # every package in the repository. That one rule stays with the idiom critic.
+    depguard:
+      rules:
+        # A library with no dependencies but the stdlib and the analysis toolchain. AGENTS.md
+        # rule 1 states this for common/; there is no reason for the rest to be looser.
+        library:
+          list-mode: strict
+          files: ["!$test"]
+          allow:
+            - $gostd
+            - github.com/LukasNiessen/ArchUnitGo
+            - golang.org/x/tools/go/packages
+            - golang.org/x/tools/go/ast
+            - golang.org/x/mod
+          deny:
+            - pkg: io/ioutil
+              desc: deprecated since Go 1.16; use os and io
+            - pkg: math/rand
+              desc: nondeterministic; rule output must be reproducible
+
+        # Rule 1: common depends on nothing but the stdlib and the analysis toolchain.
+        common-imports-no-domain:
+          list-mode: lax
+          files: ["**/common/**"]
+          deny:
+            - pkg: github.com/LukasNiessen/ArchUnitGo/files
+              desc: "AGENTS.md rule 1: common must not depend on a domain module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/layers
+              desc: "AGENTS.md rule 1: common must not depend on a domain module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/slices
+              desc: "AGENTS.md rule 1: common must not depend on a domain module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/metrics
+              desc: "AGENTS.md rule 1: common must not depend on a domain module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/graph
+              desc: "AGENTS.md rule 1: common must not depend on a domain module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/testing
+              desc: "AGENTS.md rule 1: common must not depend on testing"
+
+        # Rule 2, the one AGENTS.md says decays first: domain modules must not depend on each
+        # other. The shared helper belongs in common/projection.
+        domain-files:
+          list-mode: lax
+          files: ["**/files/**"]
+          deny:
+            - pkg: github.com/LukasNiessen/ArchUnitGo/layers
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/slices
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/metrics
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/graph
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+        domain-layers:
+          list-mode: lax
+          files: ["**/layers/**"]
+          deny:
+            - pkg: github.com/LukasNiessen/ArchUnitGo/files
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/slices
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/metrics
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/graph
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+        domain-slices:
+          list-mode: lax
+          files: ["**/slices/**"]
+          deny:
+            - pkg: github.com/LukasNiessen/ArchUnitGo/files
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/layers
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/metrics
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/graph
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+        domain-metrics:
+          list-mode: lax
+          files: ["**/metrics/**"]
+          deny:
+            - pkg: github.com/LukasNiessen/ArchUnitGo/files
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/layers
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/slices
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/graph
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+        domain-graph:
+          list-mode: lax
+          files: ["**/graph/**"]
+          deny:
+            - pkg: github.com/LukasNiessen/ArchUnitGo/files
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/layers
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/slices
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+            - pkg: github.com/LukasNiessen/ArchUnitGo/metrics
+              desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
+
+        # AGENTS.md: "assertion, projection and calculation are pure — no filesystem, no clock, no
+        # globals." extraction is deliberately absent: it is the layer that reads the filesystem.
+        # The clock half of this rule is forbidigo's `time.Now`, below; denying `time` outright
+        # would also ban time.Duration.
+        pure-packages:
+          list-mode: lax
+          files:
+            - "**/assertion/**"
+            - "**/projection/**"
+            - "**/calculation/**"
+            - "!$test"
+          deny:
+            - pkg: os
+              desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
+            - pkg: io/fs
+              desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
+            - pkg: path/filepath
+              desc: "pure packages take normalised identifiers, not paths; path helpers live in common/util"
+            - pkg: net
+              desc: "AGENTS.md: assertion/projection/calculation are pure — no network"
+            - pkg: os/exec
+              desc: "AGENTS.md: assertion/projection/calculation are pure"
+            - pkg: go/packages
+              desc: "pure packages work on an extracted Graph, not on the toolchain"
+            - pkg: golang.org/x/tools
+              desc: "pure packages work on an extracted Graph, not on the toolchain"
+
+        # AGENTS.md: "Globs are sugar, regex is the substrate. Every user pattern compiles to a
+        # regex at build time in one place. Nothing downstream ever sees a glob."
+        # Enforced here as "no domain module compiles a regex" — the one place lives in common/.
+        # Whether it is genuinely ONE file inside common/ is the idiom critic's call.
+        regex-lives-in-common:
+          list-mode: lax
+          files:
+            - "**/files/**"
+            - "**/layers/**"
+            - "**/slices/**"
+            - "**/metrics/**"
+            - "**/graph/**"
+            - "!$test"
+          deny:
+            - pkg: regexp
+              desc: "AGENTS.md: user patterns compile to regex in one place, in common/ — take a compiled Filter instead"
+
+    forbidigo:
+      analyze-types: true
+      exclude-godoc-examples: true
+      forbid:
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: a library must not write to stdout; return the data and let the caller print
+        - pattern: '^println?$'
+          msg: a library must not write to stdout
+        - pattern: '^log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$'
+          msg: a library must not log; return a TechnicalError instead
+        - pattern: '^os\.Exit$'
+          msg: a library must never terminate its host process
+        - pattern: '^time\.Now$'
+          msg: "AGENTS.md: pure packages have no clock; inject one if a caller genuinely needs time"
+        - pattern: ^panic$
+          msg: "AGENTS.md: a failing architecture rule is a Violation, never a panic. If this is a genuine programmer error, add //nolint:forbidigo with the reason."
+
+    exhaustive:
+      check: [switch, map]
+      default-signifies-exhaustive: true
+
+    gocritic:
+      enabled-tags: [diagnostic] # NOT performance — those are off upstream for good reason
+      disabled-checks:
+        - appendAssign # false-positives on the clone-then-append immutable builder idiom
+
+    unparam:
+      check-exported: false
+
+    misspell:
+      locale: US
+
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true # a bare //nolint or //nolint:all is itself a finding
+
+  exclusions:
+    generated: lax
+    warn-unused: true
+    # DELIBERATELY EMPTY. The `comments` preset silently disables revive's `exported` rule and
+    # staticcheck ST1000/ST1020-ST1022 — i.e. exactly the doc-comment enforcement above.
+    presets: []
+    paths:
+      - third_party
+      - testdata
+    rules:
+      # Tests are code, but they are not public API: they need no doc comments, and table-driven
+      # tests legitimately have unused struct fields and helper receivers.
+      - path: _test\.go$
+        linters: [revive]
+        text: '^(exported|package-comments|unused-parameter|unused-receiver):'
+      - path: _test\.go$
+        linters: [godoclint, gochecknoglobals, unparam]
+      # Fixtures are inputs to the tests, not code to be linted.
+      - path: (^|/)testdata/
+        linters: [default]
+      # errcheck stays ON in tests on purpose: a swallowed error in a test is how a test stops
+      # testing anything.
+
+formatters:
+  enable: [gofumpt, goimports]
+  settings:
+    gofumpt:
+      module-path: github.com/LukasNiessen/ArchUnitGo
+      extra-rules: false # -extra is the genuinely contested part of gofumpt
+    goimports:
+      local-prefixes: [github.com/LukasNiessen/ArchUnitGo]
+  exclusions:
+    generated: lax
+    paths:
+      - third_party
+      - testdata
+
+severity:
+  default: error

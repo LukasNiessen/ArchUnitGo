@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ImportKind is the flavour of a single Go import declaration. It is the one part of the shared
+// ImportKind is the flavor of a single Go import declaration. It is the one part of the shared
 // data model that is deliberately language-specific: every ArchUnit port names the import kinds
 // its own language has.
 type ImportKind uint8
@@ -22,6 +22,7 @@ const (
 	ImportKindDot
 )
 
+//nolint:gochecknoglobals // an immutable lookup table indexed by ImportKind; Go has no const array.
 var importKindNames = [...]string{
 	ImportKindPlain:   "plain",
 	ImportKindAliased: "aliased",

@@ -112,7 +112,7 @@ func TestEdgeMergeUnionsExternality(t *testing.T) {
 		t.Error("merging an external edge in should keep the target external")
 	}
 	if !external.merge(internal).External {
-		t.Error("merging an internal edge in should not un-externalise the target")
+		t.Error("merging an internal edge in should not un-externalize the target")
 	}
 }
 
