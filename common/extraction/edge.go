@@ -16,7 +16,7 @@ type Edge struct {
 	Target string
 	// External marks a target outside the project — the standard library or a dependency module.
 	External bool
-	// ImportKinds is the set of import flavours that produced this edge. Parallel imports are
+	// ImportKinds is the set of import flavors that produced this edge. Parallel imports are
 	// merged into one Edge whose kinds are the union of theirs.
 	ImportKinds ImportKindSet
 }

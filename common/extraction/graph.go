@@ -1,3 +1,11 @@
+// Package extraction turns a Go project into the dependency graph every rule is evaluated
+// against. It is the SOURCE and EXTRACT stages of the pipeline, and the only part of the library
+// that is Go-specific: everything downstream works on the Edge and Graph values defined here and
+// never sees an import declaration, a file path or the toolchain.
+//
+// A Graph built with NewGraph carries three invariants that downstream code relies on:
+// identifiers are normalised, parallel edges are merged with their import kinds unioned so that
+// (Source, Target) is unique, and edges are ordered so that reports are reproducible.
 package extraction
 
 import (
