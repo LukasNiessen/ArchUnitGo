@@ -90,3 +90,37 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: no fluent-API integration test, for the same reason as issues #1 and #2. The level above the
   unit tests is `TestRegexFactorySelectsNodesOfAFixtureGraph` — user strings in, selected nodes of a
   hand-built `extraction.Graph` out, which is what a scope verb will do with the factory.
+
+## Issue #4 — Kernel: Violation base type and EmptyTestViolation
+
+- WHY: the "base type" is an interface with one method, `Kind() ViolationKind`, not an embeddable base
+  struct. Go has no inheritance and violations share no state — only a contract — and the interface is
+  deliberately left without an unexported method so a rule family in any module can implement it.
+  `violation_test.go` is therefore an external `assertion_test` package: an in-package test cannot tell
+  an open interface from a sealed one, so sealing `Violation` has to break a compile somewhere.
+- WHY: `Kind()` returns a named `ViolationKind` string rather than a bare `string`. It is the key the
+  testing layer will pick a phrasing by, so it is a stable cross-port spelling (`empty-test`,
+  lower-case, hyphenated) and each rule family declares its own constant of that type — naming the
+  type is what makes that convention statable in one place.
+- WHY: `Kind()` is the interface's only method. A violation's data stays on the concrete type: rule 3
+  in `AGENTS.md` has `testing` depending on the domain modules' violation types by design, so a
+  generic `Details()`-style accessor would be a second, weaker way to read the same data.
+- WHY: `GatherEmptyTestViolations` ships with the type, not with the first terminal. The type alone
+  cannot answer *when* zero matches is a violation, and that decision must be made once for every rule
+  family; the function is the `gather <thing> violations` form `AGENTS.md` names, over a match count so
+  it is indifferent to what was being counted. There is no `Passed([]Violation) bool` helper — an empty
+  list is the pass, and a boolean beside it is the thing the issue rules out.
+- WHY: `allowEmptyTests` reaches the guard as a field on `EmptyTestOptions`, not as `*CheckOptions`.
+  `fluentapi.Checkable` returns `[]Violation`, so `fluentapi` depends on `assertion`; taking the check
+  options here would invert that. The terminal copies the one flag across.
+- WHY: `EmptyTestViolation` carries `[]matching.Filter`, not the pattern strings. A `Filter` already
+  holds the pattern as the user typed it *and* the part of an identifier it was matched against, which
+  is what a reader needs to see which selector was wrong — and it keeps the violation free of prose.
+- WHY: file stems are `violation.go` and `empty_test_violation.go`, one concept each, rather than the
+  sibling extractor stems in `AGENTS.md`. `empty_test_violation.go` is ordinary source: Go only treats
+  a `_test.go` *suffix* as a test file.
+- WHY: the package doc says "color", not `AGENTS.md`'s "colour" — `misspell` in `.golangci.yml` is set
+  to `locale: US`.
+- WHY: no fluent-API integration test, for the same reason as issues #1 to #3. The level above the unit
+  tests is `TestEmptyTestGuardOnAFixtureGraph`: a filter over the nodes of a hand-built
+  `extraction.Graph`, and the guard where a terminal will call it.
