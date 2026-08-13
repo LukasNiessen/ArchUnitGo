@@ -31,6 +31,7 @@ type Checkable interface {
 	// The error reports a technical failure — a project that will not load, a file that will not
 	// parse, an option used wrongly — and never a failing rule. A rule that fails returns violations
 	// and a nil error; when the error is non-nil the violations say nothing and the caller should
-	// ignore them. Once common/error lands, the error is a TechnicalError or a UserError.
+	// ignore them. The error is an archerror.TechnicalError or an archerror.UserError, so that a
+	// caller can read off whether the library or the rule as written is at fault.
 	Check(options *CheckOptions) ([]assertion.Violation, error)
 }
