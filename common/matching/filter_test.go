@@ -162,6 +162,25 @@ func TestZeroFilterMatchesNothing(t *testing.T) {
 	}
 }
 
+func TestFilterNormalisesTheIdentifierBeforeExtracting(t *testing.T) {
+	// Filter.Matches normalises separators before the target extracts its part of the identifier, and
+	// that normalisation is invisible to every other test here: Pattern.Matches normalises a second
+	// time, so a backslash identifier still matches at the Pattern level even if the Filter forgot.
+	// Only a Filter whose target slices the identifier can tell the difference — drop the call in
+	// Filter.Matches and path.Base returns the whole backslash string while path.Dir returns ".".
+	windows := `internal\api\handler.go`
+
+	for _, filter := range []Filter{
+		FilenameMatcher(mustGlob(t, "*.go", nil)),
+		FolderMatcher(mustGlob(t, "internal/api", nil)),
+		PathMatcher(mustGlob(t, "internal/**", nil)),
+	} {
+		if !filter.Matches(windows) {
+			t.Errorf("(%s).Matches(%q) = false: the identifier was not normalised before extraction", filter, windows)
+		}
+	}
+}
+
 func TestFilterMatchesNothingWhenTheIdentifierIsEmpty(t *testing.T) {
 	filter := PathMatcher(mustGlob(t, "**", nil))
 
