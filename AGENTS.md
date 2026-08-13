@@ -76,7 +76,7 @@ common/         the kernel — everything shared
   assertion/    Violation, EmptyTestViolation
   fluentapi/    Checkable, CheckOptions
   error/        TechnicalError, UserError
-  util/         logging, pattern matching, path helpers
+  matching/     globs, regex, match targets  <- was util/; see the note below
 files/          file-level dependency and naming rules
 layers/         named-layer policy
 slices/         component and diagram rules
@@ -85,6 +85,14 @@ graph/          dependency-graph reports
 testing/        violation formatting and test-framework glue
 archunit.go     the public surface — re-exports, nothing else
 ```
+
+**There is no `common/util`, and there will not be one.** The sibling libraries have one and this table
+used to say so, but `revive`'s `package-naming` rule in `.golangci.yml` rejects the name, citing
+[go.dev/blog/package-names](https://go.dev/blog/package-names#bad-package-names) — and in Go the
+directory *is* the package, so the directory has to carry a real name too. Logging and path helpers get
+their own named packages when they land, the same way pattern matching got `matching/`. This is the
+"idiomatic Go wins over a sibling convention" rule below, applied once so that nobody has to rediscover
+it against a failing lint run.
 
 Every domain module has the same internal shape. This is the single most useful convention in the
 whole file, because it means reading any one module teaches you how to navigate all of them.

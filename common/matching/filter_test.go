@@ -120,6 +120,38 @@ func TestFiltersAreImmutable(t *testing.T) {
 	}
 }
 
+func TestSiblingFiltersDoNotShareAnExclusionArray(t *testing.T) {
+	// TestFiltersAreImmutable checks the parent, which is not enough: it passes even if Excluding
+	// drops the slices.Clone, because every append in a chain built through the public API happens
+	// to allocate an exactly-fitting array, so the hazard never arises.
+	//
+	// The hazard is a parent whose exclusion slice has spare capacity. Two siblings then append into
+	// the same slot and the second silently overwrites the first. This test therefore builds that
+	// precondition directly through the unexported field — creating the hazard is the whole point,
+	// and an in-package test is the only thing that can.
+	parent := FilenameMatcher(mustGlob(t, "*.go", nil))
+	parent.exclusions = append(make([]Pattern, 0, 4), mustGlob(t, "zz_generated.go", nil))
+
+	left := parent.Excluding(mustGlob(t, "*_test.go", nil))
+	right := parent.Excluding(mustGlob(t, "mock_*.go", nil))
+
+	if left.Matches("handler_test.go") {
+		t.Error("left should exclude *_test.go")
+	}
+	if right.Matches("mock_handler.go") {
+		t.Error("right should exclude mock_*.go")
+	}
+	if !left.Matches("mock_handler.go") {
+		t.Error("left can see right's exclusion: the two share a backing array")
+	}
+	if !right.Matches("handler_test.go") {
+		t.Error("right can see left's exclusion: the two share a backing array")
+	}
+	if !parent.Matches("handler_test.go") || !parent.Matches("mock_handler.go") {
+		t.Error("the parent gained an exclusion from one of its children")
+	}
+}
+
 func TestZeroFilterMatchesNothing(t *testing.T) {
 	var filter Filter
 

@@ -76,18 +76,82 @@ linters:
         - shadow # fires on idiomatic `if err := ...` shadowing
       settings:
         unusedresult:
-          # The fluent-API safety net. Every non-terminal chain method returns a new value; calling
-          # one and discarding the result compiles cleanly and silently does nothing. That is
-          # zerolog's documented worst failure mode ("there is no compile time error to alert you").
-          # Listing the methods here turns it into a build failure.
+          # READ THIS BEFORE EDITING. Two traps, both verified against the analyzer source in
+          # $GOROOT/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/unusedresult:
           #
-          # THIS LIST MUST GROW WITH THE FLUENT API. Add every stage method as it is written;
-          # a terminal (Check, Evaluate) does not belong here.
+          # 1. THIS LIST CANNOT GUARD METHODS. `run` does `if sig.Recv() != nil`, and a method only
+          #    reaches a report through the separate `stringmethods` flag, which fires only when the
+          #    signature is exactly `func() string`. A fluent `func(string) Filter` will never be
+          #    reported no matter what is written here. An unterminated chain *method* is therefore
+          #    unguarded by any linter — it is a thing the idiom critic has to catch by reading.
+          #    Entries for package-level functions (an entry point like `ProjectFiles`) do work.
+          #
+          # 2. SETTING THIS FLAG REPLACES THE ANALYZER'S DEFAULTS RATHER THAN ADDING TO THEM.
+          #    An earlier `funcs: []` here silently switched off every default below — including
+          #    slices.Clone/Compact/Delete/Insert and maps.Clone, which are exactly the
+          #    shallow-copy and mutate-in-place traps a value-receiver builder falls into. Losing
+          #    those is a real regression, so the defaults are restored verbatim and anything
+          #    project-specific goes at the end.
           funcs:
+            # --- the analyzer's own defaults, restored verbatim ---
+            - context.WithCancel
+            - context.WithDeadline
+            - context.WithTimeout
+            - context.WithValue
+            - errors.New
+            - fmt.Append
+            - fmt.Appendf
+            - fmt.Appendln
+            - fmt.Errorf
+            - fmt.Sprint
+            - fmt.Sprintf
+            - fmt.Sprintln
+            - maps.All
+            - maps.Clone
+            - maps.Collect
+            - maps.Equal
+            - maps.EqualFunc
+            - maps.Keys
+            - maps.Values
+            - slices.All
+            - slices.AppendSeq
+            - slices.Backward
+            - slices.BinarySearch
+            - slices.BinarySearchFunc
+            - slices.Chunk
+            - slices.Clip
+            - slices.Clone
+            - slices.Collect
+            - slices.Compact
+            - slices.CompactFunc
+            - slices.Compare
+            - slices.CompareFunc
+            - slices.Concat
+            - slices.Contains
+            - slices.ContainsFunc
+            - slices.Delete
+            - slices.DeleteFunc
+            - slices.Equal
+            - slices.EqualFunc
+            - slices.Grow
+            - slices.Index
+            - slices.IndexFunc
+            - slices.Insert
+            - slices.IsSorted
+            - slices.IsSortedFunc
+            - slices.Max
+            - slices.MaxFunc
+            - slices.Min
+            - slices.MinFunc
+            - slices.Repeat
+            - slices.Replace
+            - slices.Sorted
+            - slices.SortedFunc
+            - slices.SortedStableFunc
+            - slices.Values
+            - sort.Reverse
+            # --- ours: package-level entry points only, for the reason in trap 1 above ---
             # - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
-            # - (github.com/LukasNiessen/ArchUnitGo/files/fluentapi.FileConditionBuilder).InFolder
-            - (github.com/LukasNiessen/ArchUnitGo/common/matching.Filter).Excluding
-            - (github.com/LukasNiessen/ArchUnitGo/common/matching.Filter).NotMatching
 
     staticcheck:
       # Set explicitly: golangci-lint's own default silences ST1000 and ST1020-ST1022, which are
@@ -212,6 +276,11 @@ linters:
 
         # Rule 2, the one AGENTS.md says decays first: domain modules must not depend on each
         # other. The shared helper belongs in common/projection.
+        #
+        # These blocks have no `!$test`, unlike `library` and `pure-packages` above: a test under
+        # files/ that imports slices/ is exactly how rule 2 decays. The consequence for issue #40
+        # (dogfooding) is that its test suite, which imports every module by design, cannot live
+        # under a domain module directory — put it at the repository root or in its own package.
         domain-files:
           list-mode: lax
           files: ["**/files/**"]
@@ -290,7 +359,7 @@ linters:
             - pkg: io/fs
               desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
             - pkg: path/filepath
-              desc: "pure packages take normalised identifiers, not paths; path helpers live in common/util"
+              desc: "pure packages take normalised identifiers, not paths; path helpers belong in their own named package under common/, never a common/util"
             - pkg: net
               desc: "AGENTS.md: assertion/projection/calculation are pure — no network"
             - pkg: os/exec
@@ -326,11 +395,11 @@ linters:
         - pattern: '^println?$'
           msg: a library must not write to stdout
         - pattern: '^log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$'
-          msg: a library must not log; return a TechnicalError instead
+          msg: "these write to log's process-global logger, which a library must not own. Issue #39's logging is opt-in via CheckOptions and writes to an injected io.Writer (log/slog over that writer is fine); a failure is still a TechnicalError, not a log line."
         - pattern: '^os\.Exit$'
           msg: a library must never terminate its host process
         - pattern: '^time\.Now$'
-          msg: "AGENTS.md: pure packages have no clock; inject one if a caller genuinely needs time"
+          msg: "no ambient clock: take the time as a field on the options bag (zero value means omit it) so reports and log filenames are reproducible in a test. Issues #37 and #39 want timestamps and this is how they get one."
         - pattern: ^panic$
           msg: "AGENTS.md: a failing architecture rule is a Violation, never a panic. If this is a genuine programmer error, add //nolint:forbidigo with the reason."
 
