@@ -124,3 +124,40 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: no fluent-API integration test, for the same reason as issues #1 to #3. The level above the unit
   tests is `TestEmptyTestGuardOnAFixtureGraph`: a filter over the nodes of a hand-built
   `extraction.Graph`, and the guard where a terminal will call it.
+
+## Issue #5 — Kernel: CheckOptions and the Checkable contract
+
+- WHY: `Check` returns `([]assertion.Violation, error)`, not the data model's bare list of violations.
+  A check loads and parses a real project, so a technical failure has to go somewhere; Go has no
+  exception to throw as the siblings do, and `.golangci.yml`'s `forbidigo` bans `panic`. The contract is
+  documented on the method: violations are rule failures, the error is only ever technical or misuse,
+  and the two are mutually exclusive. It is what `TechnicalError`/`UserError` will travel in when
+  `common/error` lands.
+- WHY: `logging` is one `io.Writer` field rather than a nested `{enabled, level}` bag. Non-nil is
+  "enabled" and the destination is injected, which is what `.golangci.yml`'s `forbidigo` note on
+  `log.Print*` requires of issue #39; a bool beside the writer would be a second way to say off.
+- WHY: the Go-specific toggles are exactly three — `IncludeTestFiles` (go/packages' `Tests`),
+  `IgnoredImportKinds` (an `extraction.ImportKindSet`, so blank driver imports can be dropped without
+  four bools) and `BuildTags`. Each is a knob the extractor cannot work without; anything else would be
+  speculative before extraction lands.
+- WHY: every default is the zero value, so a nil bag, the zero bag and an explicitly empty one are the
+  same check. `WithDefaults` exists anyway, and terminals are told to go through it, so that a
+  non-zero default can be added later without touching a terminal.
+- WHY: all `CheckOptions` methods take a pointer receiver and tolerate a nil one — `recvcheck` rejects
+  mixed receivers, and a nil-safe read is the whole point of the "nil means defaults" contract.
+  `CheckOptions` is uncomparable because of `BuildTags`, so its tests compare with `reflect.DeepEqual`.
+- WHY: `WithDefaults` clones `BuildTags` instead of returning a bare `*o`. A struct copy separates every
+  other field, but the slice header points at the caller's array, so a terminal appending a tag to its
+  resolved bag would write through to the user's own options — which a stored half-built rule shares —
+  and to every sibling copy. Same reason `EmptyTestOptions` clones its selectors.
+- WHY: `CheckOptions.EmptyTestOptions` translates the bag into `assertion.EmptyTestOptions` rather than
+  the guard taking `*CheckOptions`. `fluentapi` depends on `assertion` for the violations `Check`
+  returns, so the dependency cannot run the other way; this is where issue #4's "the terminal copies
+  the one flag across" actually happens, once.
+- WHY: no `CheckFunc` adapter and no `Passed([]Violation) bool` helper. The seam is one method and an
+  empty list is the pass; both would be a second way to say what already exists.
+- WHY: no fluent-API integration test, for the same reason as issues #1 to #4 — no builder chain exists
+  yet. The level above the unit tests is `checkable_test.go`, which implements the contract from
+  outside the package as `dependencyRule`, the terminal shape of `project files, in folder X, should
+  not, depend on files, in folder Y`, over a hand-built `extraction.Graph`, and runs it through a
+  consumer that sees nothing but `Checkable`.
