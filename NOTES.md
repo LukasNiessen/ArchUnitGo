@@ -161,3 +161,49 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   outside the package as `dependencyRule`, the terminal shape of `project files, in folder X, should
   not, depend on files, in folder Y`, over a hand-built `extraction.Graph`, and runs it through a
   consumer that sees nothing but `Checkable`.
+
+## Issue #6 — Kernel: TechnicalError and UserError
+
+- WHY: the package is `common/archerror`, not `common/error` as the `AGENTS.md` layout table says.
+  "Directory is package" makes the directory name the identifier, and `error` is a predeclared *type*:
+  a file importing it loses `error` at file scope, so `func Check() ([]Violation, error)` stops
+  compiling — verified, `error (package name) is not a type` — and every consumer in the library would
+  have to alias the import. `.golangci.yml`'s own `predeclared` linter rejects it too (`package name
+  error has same name as predeclared identifier`). `errors` was the other candidate and shadows the
+  stdlib package in exactly the files that need both. `archerror` is the same answer `AGENTS.md`
+  already reaches for with `archtest`, applied once so nobody rediscovers it against a failing build.
+- WHY: neither type carries a message string, and the constructors take a cause instead: the reason a
+  failure gives is always another error, normally a sentinel declared beside the API that produced it
+  (`matching.ErrInvalidPattern` is the first). The siblings pass prose to the constructor; in Go that
+  would make `errors.Is` useless and give a caller two ways to ask why. The three fields are
+  `Operation` (what was being done / the call at fault), `Subject` (the thing it was about, quoted as
+  the user wrote it) and `Cause`.
+- WHY: `Error()` builds prose, which `AGENTS.md` otherwise reserves for the testing layer. Go's `error`
+  interface requires it, so the rule is kept where it can be: both types render through one unexported
+  `describe`, and violations still carry data only. The two types differ solely in the headline —
+  `could not <operation>` against the operation as the user typed it.
+- WHY: pointer receivers, and the constructors return `*TechnicalError` / `*UserError` rather than
+  `error`. `errors.As(err, &user)` with `var user *UserError` is the form every caller writes, and a
+  value receiver would silently not satisfy it.
+- WHY: no `IsUserError`/`IsTechnicalError` helpers and no shared marker interface. `errors.As` is the
+  idiom, the tests use it directly, and a helper would be a second way to ask the one question the two
+  types exist to answer.
+- WHY: `matching`'s pattern constructors are *not* wrapped in a `UserError` here, though issue #2's note
+  said this is where that would land. `UserError.Operation` names the call the user made (`in folder`),
+  and `matching` cannot know it — only a fluent stage can. The wrap therefore belongs to the scope verbs
+  when they land; `user_error_test.go`'s `inFolder` is that wrap point, written out in test code so the
+  shape is on record. `matching.ErrInvalidPattern` stays exactly as it is and travels as the cause.
+- WHY: file stems are `technical_error.go` and `user_error.go`, one concept each, rather than the sibling
+  extractor stems in `AGENTS.md` — as in issues #1 and #4. The package doc, the `archunit: ` message
+  prefix and `describe` sit in `technical_error.go` because they are the package's message policy and it
+  is the file the package comment is on; splitting a shared three-line renderer into a third file would
+  be worse.
+- WHY: one line of `common/fluentapi/checkable.go`'s doc comment changed, which is the only edit outside
+  the new package. It promised "once `common/error` lands, the error is a `TechnicalError` or a
+  `UserError`"; that is now true and names the real package. No behaviour changed.
+- WHY: no fluent-API integration test, for the same reason as issues #1 to #5. The level above the unit
+  tests is two tests: `TestCheckTellsAFailureApartFromAFailingRule`, which runs a terminal through
+  `fluentapi.Checkable` and reads the blame off the returned error — including the third outcome, a rule
+  the code disagrees with, which is neither error — and
+  `TestUserErrorIsWhereAFluentStageRejectsWhatTheUserTyped`, which is a scope verb in the shape every one
+  of them will have.
