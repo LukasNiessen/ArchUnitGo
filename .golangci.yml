@@ -86,7 +86,8 @@ linters:
           funcs:
             # - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
             # - (github.com/LukasNiessen/ArchUnitGo/files/fluentapi.FileConditionBuilder).InFolder
-            []
+            - (github.com/LukasNiessen/ArchUnitGo/common/matching.Filter).Excluding
+            - (github.com/LukasNiessen/ArchUnitGo/common/matching.Filter).NotMatching
 
     staticcheck:
       # Set explicitly: golangci-lint's own default silences ST1000 and ST1020-ST1022, which are
