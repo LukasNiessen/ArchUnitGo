@@ -6,6 +6,11 @@
 // A Graph built with NewGraph carries three invariants that downstream code relies on:
 // identifiers are normalised, parallel edges are merged with their import kinds unioned so that
 // (Source, Target) is unique, and edges are ordered so that reports are reproducible.
+//
+// The stages run in order, and each one is a function of the last: LocateProject finds the project
+// root by walking up to a go.mod, ExtractSourceFiles enumerates the Go files under it, and the graph
+// is built from those files. Everything before the graph deals in host paths; everything from the
+// graph onwards deals in the normalised identifiers of identifier.go, and nothing mixes the two.
 package extraction
 
 import (
