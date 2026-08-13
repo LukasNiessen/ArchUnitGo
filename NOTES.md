@@ -207,3 +207,56 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   the code disagrees with, which is neither error — and
   `TestUserErrorIsWhereAFluentStageRejectsWhatTheUserTyped`, which is a scope verb in the shape every one
   of them will have.
+
+## Issue #7 — Extraction: locate the project and enumerate source files
+
+- WHY: file stems are `locate_project.go`, `source_options.go` and `extract_source_files.go`, one concept
+  each, rather than the sibling `extract_graph.go` — as in issues #1, #4 and #6. `extract_graph` names the
+  stage after this one, and taking the name now would leave the graph extractor nowhere to land.
+- WHY: `LocateProject` returns a `string`, and that string is a *host path* — absolute, cleaned, in the
+  host's own separators, symlinks left alone — not an identifier and not a one-field `Project` struct. The
+  root is the only value in the library that has to stay a path: it is what `filepath.WalkDir` and
+  `go/packages` are pointed at, while everything from the graph onwards is the project-relative
+  identifiers of `identifier.go`. `FileInfo` carries both forms precisely so nothing downstream has to
+  convert between them, and its doc says which one a pattern may be matched against.
+- WHY: the module path in `go.mod` is deliberately *not* parsed, so `golang.org/x/mod` stays unused even
+  though `.golangci.yml` allows it. Locating a project needs only the file's presence; the module path is
+  what tells an internal import from an external one, which is the graph extractor's problem, and
+  `modfile` is the way to read it when that issue lands.
+- WHY: "no go.mod at or above the starting point" is a `UserError`, not a `TechnicalError`. Nothing failed
+  — the library was pointed at something that is not a Go project — and only the caller can say where the
+  project is, by running the test inside it or by passing a locator. A `TechnicalError` would tell them to
+  file a bug. `os.Getwd` failing is the one genuinely technical outcome here, and a starting point that is
+  a file or is missing is a `UserError` quoting the directory as the user typed it.
+- WHY: the exclusion set has two halves, and only one is configurable. The Go toolchain's own rule — a name
+  beginning with `.` or `_`, and any directory named `testdata` — is applied unconditionally, because a file
+  there is not in the build and so cannot be a node in a graph the toolchain would ever produce; that is
+  what covers VCS directories, editor state and caches without a list of names to maintain. Vendored
+  dependencies and build output are a name list, `DefaultExcludedFolders`, because a project may legitimately
+  keep Go source in `build/` and has to be able to say so.
+- WHY: `SourceOptions.ExcludedFolders` *replaces* that default list rather than extending it, with nil meaning
+  the defaults and a non-nil empty slice meaning "exclude nothing". Extending-only would make the defaults
+  impossible to escape, and a second `KeepDefaults` flag would be a second way to say the same thing.
+  `WithDefaults` therefore keeps the cloned slice non-nil even when it is empty — otherwise resolving a
+  caller's empty list would hand the defaults back.
+- WHY: `DefaultExcludedFolders` is a function returning a fresh slice, not the `//nolint:gochecknoglobals`
+  package-level table the harness sanctions. The doc promises `append(DefaultExcludedFolders(), "generated")`
+  as the way to extend it, and a shared global would let that append write through into every later caller's
+  defaults.
+- WHY: `SourceOptions` has exactly two knobs, and extra exclusions are not `[]matching.Filter`. Folder names
+  are what the walk can act on — a name match lets it `fs.SkipDir` a whole subtree instead of walking it and
+  filtering afterwards — and a path-pattern exclusion belongs to the `ignoring ...` modifier when it lands, on
+  identifiers, where every other user pattern is already matched. So `extraction` does not import `matching`.
+- WHY: one addition outside the issue's package, `CheckOptions.SourceOptions()` in `common/fluentapi`. It is
+  the same translation as issue #5's `EmptyTestOptions`: `IncludeTestFiles` exists in both bags, and this is
+  where it crosses, once, so no terminal assembles a second enumeration bag by hand. Nothing else changed
+  there; the `common/extraction` package doc gained a paragraph naming the stage order.
+- WHY: `ExtractSourceFiles` resolves the root when the root *itself* is a symlink, which is the one place
+  the "symlinks left alone" rule above is broken, and only there. `filepath.WalkDir` lstats what it is
+  pointed at, so a linked root arrives as a non-directory entry and the walk visits nothing; resolving
+  unconditionally instead would rewrite every `Path` (macOS `/var` is a link to `/private/var`) and with
+  it every identifier. No link met during the walk is followed, so a link to a parent cannot loop.
+- WHY: no fluent-API integration test, for the same reason as issues #1 to #6. The level above the unit tests
+  is dogfooding on this repository — `TestLocateProjectFindsThisRepository` walks up out of
+  `common/extraction` to the real root, and `TestExtractSourceFilesEnumeratesThisRepository` enumerates it and
+  looks for this library's own files, with nothing hand-built about either step.

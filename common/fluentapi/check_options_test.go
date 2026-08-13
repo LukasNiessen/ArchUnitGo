@@ -188,6 +188,36 @@ func TestCheckOptionsEmptyTestOptionsCopyTheirSelectors(t *testing.T) {
 	}
 }
 
+func TestCheckOptionsSourceOptionsCarryTheFilesTheUserAskedFor(t *testing.T) {
+	tests := []struct {
+		name    string
+		options *fluentapi.CheckOptions
+		want    bool
+	}{
+		{name: "a rule is about the production code by default", options: &fluentapi.CheckOptions{}, want: false},
+		{name: "nil options means the same", options: nil, want: false},
+		{name: "includeTestFiles holds tests to the same rules", options: &fluentapi.CheckOptions{IncludeTestFiles: true}, want: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := test.options.SourceOptions()
+
+			if source.IncludeTestFiles != test.want {
+				t.Errorf("IncludeTestFiles = %v, want %v", source.IncludeTestFiles, test.want)
+			}
+			// Nothing on the check options says which folders to skip, so the enumeration's own defaults
+			// have to survive the translation rather than being replaced by an empty list.
+			if source.ExcludedFolders != nil {
+				t.Errorf("ExcludedFolders = %v, want nil, which is the enumeration's defaults", source.ExcludedFolders)
+			}
+			if !source.ExcludesFolder("vendor") {
+				t.Error("the translated options walk into vendor")
+			}
+		})
+	}
+}
+
 func mustGlob(t *testing.T, glob string) matching.Pattern {
 	t.Helper()
 
