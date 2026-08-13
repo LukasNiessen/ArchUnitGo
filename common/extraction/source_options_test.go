@@ -11,12 +11,16 @@ func TestNilSourceOptionsMeansTheDefaults(t *testing.T) {
 	defaults := options.WithDefaults()
 
 	// The defaults spelled out, because they are a promise: the production code of the project itself,
-	// with vendored dependencies and build output left out.
+	// with vendored dependencies and build output left out. Spelled out as a literal, and not as a call
+	// to DefaultExcludedFolders(), which is the function WithDefaults assigns this field from —
+	// comparing against that call holds for any list it returns, so deleting `out` from the defaults
+	// would change both sides of the comparison together and no test would notice.
+	wantExcludedFolders := []string{"vendor", "node_modules", "bin", "dist", "build", "out", "target"}
 	if defaults.IncludeTestFiles {
 		t.Error("IncludeTestFiles defaults to true; a rule is about the production code")
 	}
-	if !slices.Equal(defaults.ExcludedFolders, DefaultExcludedFolders()) {
-		t.Errorf("ExcludedFolders defaults to %v, want %v", defaults.ExcludedFolders, DefaultExcludedFolders())
+	if !slices.Equal(defaults.ExcludedFolders, wantExcludedFolders) {
+		t.Errorf("ExcludedFolders defaults to %v, want %v", defaults.ExcludedFolders, wantExcludedFolders)
 	}
 	// A nil bag has to answer the question the walk actually asks it, without being resolved first.
 	if !options.ExcludesFolder("vendor") {
