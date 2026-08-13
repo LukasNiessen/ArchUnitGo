@@ -59,3 +59,34 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: no fluent-API integration test, for the same reason as issue #1. The level above the unit
   tests is `TestFilterSelectsNodesOfAFixtureGraph`, which runs filters over the nodes of a
   hand-built `extraction.Graph` — the shape every rule will use them in.
+
+## Issue #3 — Kernel: RegexFactory and the matcher factories
+
+- WHY: `RegexFactory` joins the pattern constructors in `common/matching/regex_factory.go` rather than
+  taking a file of its own. The sibling stem names one thing — the place a user pattern becomes a
+  compiled regex — and the factory is the string-facing front door to the constructors already there;
+  splitting them would put the two halves of one concept in two files and churn passing tests.
+- WHY: the five matchers exist at two levels, with the same names: `FilenameMatcher(Pattern) Filter`
+  from issue #2, and `RegexFactory.FilenameMatcher(string) (Filter, error)` now. The methods do not
+  re-decide which part of an identifier a selector looks at — each one is `matcher(pattern, build)`
+  over the package-level factory, so that pairing is still stated once, in `filter.go`. The receiver
+  is what distinguishes them at a call site: a compiled `Pattern` in, or the string the user typed.
+- WHY: glob-versus-regex is a `PatternSyntax` on the factory, not a second set of `RegexFilename…`
+  methods and not a per-call argument. Go has no `string | RegExp` union, ten methods would double
+  every future selector, and the fluent API needs the choice as a value anyway — `defined by` and
+  `defined by regex` differ only in which factory they carry.
+- WHY: `ExactFileMatcher` has no package-level twin, and needed a third pattern constructor,
+  `NewLiteralPattern` (`regexp.QuoteMeta` over the normalised string, source kept as written). Its
+  exactness lives in the pattern, not in the match target — a `Filter`-level `ExactFileMatcher` would
+  just be `PathMatcher` under a name that promises more. For the same reason the factory's syntax does
+  not apply to it, though case sensitivity still does.
+- WHY: `ExactFileMatcher` matches the whole identifier, so it wants `internal/api/handler.go` and not
+  `handler.go`; a bare filename is `FilenameMatcher`'s job. Choosing on whether the argument contains
+  a separator would be exactly the hidden matching branch this issue exists to remove, and a
+  no-match is already caught by the empty-test guard.
+- WHY: `Compile` is exported. A filter's exclusions must be compiled in the same syntax as the pattern
+  they qualify, and without it every caller would reach past the factory to `NewGlobPattern` and
+  decide the syntax a second time.
+- WHY: no fluent-API integration test, for the same reason as issues #1 and #2. The level above the
+  unit tests is `TestRegexFactorySelectsNodesOfAFixtureGraph` — user strings in, selected nodes of a
+  hand-built `extraction.Graph` out, which is what a scope verb will do with the factory.

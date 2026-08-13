@@ -80,6 +80,21 @@ func NewRegexPattern(expression string, options *PatternOptions) (Pattern, error
 	return compilePattern(expression, expression, options)
 }
 
+// NewLiteralPattern compiles a string into a Pattern that matches exactly that string and nothing
+// else. It is the third and last way a user pattern becomes a Pattern, and the one an exact selector
+// needs: every character is escaped, so a filename containing `*`, `[`, `+` or `.` is matched as
+// written rather than as a pattern the user never meant to type.
+//
+// Separators are normalised as they are for a glob, so an identifier spelled `internal\api\x.go`
+// compiles to the same Pattern as `internal/api/x.go`.
+func NewLiteralPattern(literal string, options *PatternOptions) (Pattern, error) {
+	normalized := normalizeSeparators(literal)
+	if normalized == "" {
+		return Pattern{}, fmt.Errorf("%w: literal is empty", ErrInvalidPattern)
+	}
+	return compilePattern(literal, regexp.QuoteMeta(normalized), options)
+}
+
 // Source is the pattern as the user wrote it, for reports and violation data. The compiled regular
 // expression is deliberately not exposed: it is an implementation detail of matching, and a
 // violation should quote what the user typed.
@@ -100,6 +115,132 @@ func (p Pattern) Matches(candidate string) bool {
 // String renders the pattern as the user wrote it.
 func (p Pattern) String() string {
 	return p.source
+}
+
+// PatternSyntax says how the pattern strings handed to a RegexFactory are spelled. It is the value
+// behind the difference between the `defined by` and `defined by regex` scope verbs: the syntax is
+// chosen once, where the rule is built, instead of at every call site that matches something.
+type PatternSyntax uint8
+
+// The two ways a user can spell a pattern.
+const (
+	// SyntaxGlob reads a pattern as a glob, as NewGlobPattern describes. It is the zero value,
+	// because a glob is the sugar users write and the substrate is nobody's default.
+	SyntaxGlob PatternSyntax = iota
+	// SyntaxRegex reads a pattern as a regular expression, taken as written and anchored.
+	SyntaxRegex
+)
+
+// RegexFactory is the collection of Filter constructors the rest of the library builds selectors
+// with: one method per selector — FilenameMatcher, FolderMatcher, PathMatcher, ClassnameMatcher,
+// ExactFileMatcher — each taking a pattern as the user typed it and handing back a Filter with the
+// pattern already compiled and the match target already chosen.
+//
+// It is the seam that keeps two promises. Adding a selector means adding a method here, not a
+// matching branch somewhere downstream. And no caller ever chooses between glob and regex
+// compilation at the point of use — the choice travels with the factory, which is why nothing outside
+// this package needs to know that a glob was ever involved.
+//
+// A RegexFactory is immutable, and the zero value is the useful one: glob syntax, case-sensitive.
+type RegexFactory struct {
+	syntax  PatternSyntax
+	options PatternOptions
+}
+
+// RegexFactoryOptions are the knobs on a factory, and they are set once for every pattern it
+// compiles. A nil *RegexFactoryOptions means the defaults — glob syntax, case-sensitive — which is
+// what most callers pass.
+type RegexFactoryOptions struct {
+	// Syntax is how this factory's pattern strings are spelled. Glob by default.
+	Syntax PatternSyntax
+	// CaseInsensitive makes every pattern this factory compiles ignore letter case. It is off by
+	// default, because Go import paths and identifiers are case-sensitive.
+	CaseInsensitive bool
+}
+
+// NewRegexFactory returns the factory described by options.
+func NewRegexFactory(options *RegexFactoryOptions) RegexFactory {
+	if options == nil {
+		return RegexFactory{}
+	}
+	return RegexFactory{
+		syntax:  options.Syntax,
+		options: PatternOptions{CaseInsensitive: options.CaseInsensitive},
+	}
+}
+
+// Syntax is how this factory reads a pattern string.
+func (f RegexFactory) Syntax() PatternSyntax {
+	return f.syntax
+}
+
+// Compile turns one pattern string into a Pattern in this factory's syntax. Every pattern-taking
+// matcher below is this function plus a match target; ExactFileMatcher is the exception — it compiles
+// a literal, so this factory's syntax does not reach it.
+//
+// It is exported for one reason: a filter's exclusions have to be compiled the same way as the
+// pattern they qualify, and a caller reaching for NewGlobPattern directly would be deciding the
+// syntax a second time.
+func (f RegexFactory) Compile(pattern string) (Pattern, error) {
+	switch f.syntax {
+	case SyntaxGlob:
+		return NewGlobPattern(pattern, &f.options)
+	case SyntaxRegex:
+		return NewRegexPattern(pattern, &f.options)
+	default:
+		return Pattern{}, fmt.Errorf("%w: unknown pattern syntax %d", ErrInvalidPattern, f.syntax)
+	}
+}
+
+// FilenameMatcher compiles pattern and matches it against the last segment of an identifier. It is
+// the string-facing twin of the package-level function of the same name, which takes a Pattern that
+// is already compiled.
+func (f RegexFactory) FilenameMatcher(pattern string) (Filter, error) {
+	return f.matcher(pattern, FilenameMatcher)
+}
+
+// FolderMatcher compiles pattern and matches it against the identifier without its last segment,
+// which is the folder a file lives in.
+func (f RegexFactory) FolderMatcher(pattern string) (Filter, error) {
+	return f.matcher(pattern, FolderMatcher)
+}
+
+// PathMatcher compiles pattern and matches it against the whole identifier.
+func (f RegexFactory) PathMatcher(pattern string) (Filter, error) {
+	return f.matcher(pattern, PathMatcher)
+}
+
+// ClassnameMatcher compiles pattern and matches it against a declared name, with any package or path
+// qualification stripped.
+func (f RegexFactory) ClassnameMatcher(pattern string) (Filter, error) {
+	return f.matcher(pattern, ClassnameMatcher)
+}
+
+// ExactFileMatcher matches one identifier and nothing else. The string is taken literally, so a file
+// whose name contains `*`, `[` or `.` needs no defensive spelling; the factory's syntax does not
+// apply, because an exact match is neither a glob nor a regular expression, while case sensitivity
+// still does.
+//
+// It matches the whole identifier, so it wants the identifier as the graph spells it —
+// `internal/api/handler.go`, not `handler.go`. Selecting by bare filename is FilenameMatcher's job.
+func (f RegexFactory) ExactFileMatcher(identifier string) (Filter, error) {
+	literal, err := NewLiteralPattern(identifier, &f.options)
+	if err != nil {
+		return Filter{}, err
+	}
+	return PathMatcher(literal), nil
+}
+
+// matcher compiles pattern in this factory's syntax and hands the result to build, which is one of
+// the package-level Filter factories in filter.go. Every matcher method above except
+// ExactFileMatcher is this function with a different build, so which selector looks at which part of
+// an identifier is still stated in exactly one place. A pattern that does not compile yields the zero Filter, which matches nothing.
+func (f RegexFactory) matcher(pattern string, build func(Pattern) Filter) (Filter, error) {
+	compiled, err := f.Compile(pattern)
+	if err != nil {
+		return Filter{}, err
+	}
+	return build(compiled), nil
 }
 
 // compilePattern anchors a regex body and compiles it. Anchoring happens in exactly one place, and
