@@ -25,7 +25,9 @@ func TestEveryTerminalOfThisModuleGuardsAgainstAnEmptyTest(t *testing.T) {
 	scope := fluentapi.ProjectFiles(fixtureLocator(t, writeFixtureProject(t))).InFolder("internal/apis/**")
 	terminals := terminalsOf(t, scope.Should(), scope.ShouldNot())
 
-	for _, name := range []string{"HaveNoCycles", "HaveName", "BeInFolder", "BeInPath", "DependOnFiles", "AdhereTo"} {
+	for _, name := range []string{
+		"HaveNoCycles", "HaveName", "BeInFolder", "BeInPath", "DependOnFiles", "DependOnExternalModules", "AdhereTo",
+	} {
 		if !slices.ContainsFunc(terminals, func(found terminal) bool { return strings.Contains(found.sentence, name) }) {
 			t.Fatalf("the walk found %d terminals and none of them is %s: it has gone blind, and the sweep below proves nothing", len(terminals), name)
 		}

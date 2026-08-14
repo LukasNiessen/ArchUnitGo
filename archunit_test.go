@@ -46,6 +46,18 @@ var (
 	_ archunit.FilesDependencyCondition = archunit.ProjectFiles(nil).Should().DependOnFiles().InPath("common/**/*.go")
 )
 
+// The third-party rule, in both moods, is one type that is both the object stage and the terminal — and its
+// object verb is repeatable, so a policy naming several modules is still one storable value.
+var (
+	_ archunit.Checkable = archunit.ProjectFiles(nil).ShouldNot().
+		DependOnExternalModules().Matching("*.*/**")
+	_ archunit.FilesExternalDependencyCondition = archunit.ProjectFiles(nil).ShouldNot().DependOnExternalModules()
+	_ archunit.FilesExternalDependencyCondition = archunit.ProjectFiles(nil).Should().
+		DependOnExternalModules().Matching("golang.org/x/tools/**")
+	_ archunit.FilesExternalDependencyCondition = archunit.ProjectFiles(nil).ShouldNot().
+		DependOnExternalModules().Matching("github.com/deprecated/**").Matching("gopkg.in/**")
+)
+
 // The rule whose predicate the user writes themselves, in both moods, is one terminal type — and the function
 // it takes and the file that function is handed are named on the surface too, so that a predicate can be
 // declared as a variable, stored beside the rules it is used by or shared between two of them.
@@ -68,14 +80,17 @@ var (
 	_ archunit.Violation     = archunit.EmptyTestViolation{}
 	_ archunit.Violation     = archunit.FileNamingViolation{}
 	_ archunit.Violation     = archunit.FileDependencyViolation{}
+	_ archunit.Violation     = archunit.FileExternalDependencyViolation{}
 	_ archunit.Violation     = archunit.FileAdherenceViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
 	_ archunit.ViolationKind = archunit.KindFileDependency
+	_ archunit.ViolationKind = archunit.KindFileExternalDependency
 	_ archunit.ViolationKind = archunit.KindFileAdherence
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
+	_ archunit.Mood          = archunit.FileExternalDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
 )
 
@@ -584,6 +599,86 @@ func TestADependencyRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 	}
 	if !slices.Contains(offenders, "files/fluentapi/depend_on_files.go") {
 		t.Errorf("%s reports %v, want the file that compiles the object's patterns among them", rule, offenders)
+	}
+}
+
+func TestThisRepositoryObeysItsOwnThirdPartyDependencyPolicy(t *testing.T) {
+	// The third-party policy this library was built to keep, written in the library's own words and held
+	// against the library itself: one dependency outside the standard library, reached from one package. Every
+	// rule here names third-party modules with `*.*/**` — a first segment with a dot in it is a domain — so the
+	// standard library, which is external too, is deliberately outside what they forbid.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rules := []archunit.FilesExternalDependencyCondition{
+		// The one third-party module this repository has is reached from the one package whose job is to know
+		// what Go source means. Every other package is stdlib-only, so a new dependency anywhere else fails
+		// here rather than in a reviewer's reading of go.mod.
+		archunit.ProjectFiles(nil).InFolder("files/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("archtest").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("common/assertion").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("common/projection/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("common/fluentapi").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("common/matching").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("common/archerror").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		// And the positive mood of the same predicate over the one file that is allowed to know the loader:
+		// extraction is the only layer that knows Go, so this is where the dependency belongs.
+		archunit.ProjectFiles(nil).InFile("common/extraction/extract_graph.go").Should().
+			DependOnExternalModules().Matching("golang.org/x/tools/**"),
+	}
+
+	for _, rule := range rules {
+		t.Run(rule.String(), func(t *testing.T) {
+			violations, err := rule.Check(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", rule, err)
+			}
+			for _, violation := range violations {
+				t.Errorf("%s: %s", rule, violation)
+			}
+		})
+	}
+}
+
+func TestAThirdPartyRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.T) {
+	// The failing half, because a rule that cannot fail says nothing: this repository does depend on
+	// golang.org/x/tools, from the extractor, and forbidding that reports the file that does it — carrying the
+	// import path as the file wrote it, which is the package rather than the module it was published as. That
+	// data is what a report phrases a failure from.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("common/extraction").ShouldNot().
+		DependOnExternalModules().Matching("golang.org/**")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	offenders := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindFileExternalDependency {
+			t.Errorf("%s reports a %s violation, want an external dependency one", rule, kind)
+			continue
+		}
+		dependency, ok := violation.(archunit.FileExternalDependencyViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a FileExternalDependencyViolation", rule, violation)
+		}
+		if dependency.Mood != archunit.ShouldNot {
+			t.Errorf("the violation of %s was judged in mood %s, want %s", dependency.File, dependency.Mood, archunit.ShouldNot)
+		}
+		if len(dependency.Required) != 1 || dependency.Required[0].Pattern().Source() != "golang.org/**" {
+			t.Errorf("the violation of %s quotes %v, want the object the rule was written with", dependency.File, dependency.Required)
+		}
+		if !slices.Contains(dependency.Modules, "golang.org/x/tools/go/packages") {
+			t.Errorf("the violation of %s carries %v, want the package it imports rather than the module",
+				dependency.File, dependency.Modules)
+		}
+		offenders = append(offenders, dependency.File)
+	}
+
+	if !slices.Equal(offenders, []string{"common/extraction/extract_graph.go"}) {
+		t.Errorf("%s reports %v, want the one file that loads a Go project", rule, offenders)
 	}
 }
 

@@ -89,6 +89,42 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 			message: `internal/api/handler.go: should not, depend on files; it depends on internal/db/conn.go`,
 		},
 		{
+			name: "an external module a file should not depend on and does",
+			violation: filesassertion.NewExternalDependencyViolation(
+				"internal/domain/order.go",
+				[]matching.Filter{pathMatcher(t, "*.*/**")},
+				[]string{"gorm.io/gorm", "github.com/gin-gonic/gin"},
+				kernel.ShouldNot,
+			),
+			// The import paths sorted, as the violation itself sorted them, and each spelled as the file wrote
+			// it: a package of a module, not the module it was published as.
+			message: `internal/domain/order.go: should not, depend on external modules, path matches "*.*/**"; ` +
+				`it depends on github.com/gin-gonic/gin, gorm.io/gorm`,
+		},
+		{
+			name: "several external modules any one of which would do, and none of them does",
+			violation: filesassertion.NewExternalDependencyViolation(
+				"internal/adapter/store.go",
+				[]matching.Filter{pathMatcher(t, "gorm.io/**"), pathMatcher(t, "github.com/lib/pq")},
+				nil,
+				kernel.Should,
+			),
+			// Joined with `or`, where the object of `depend on files` is joined with a comma: these are
+			// alternatives, and a report that spelled them as one requirement would name a module that
+			// cannot exist.
+			message: `internal/adapter/store.go: should, depend on external modules, path matches "gorm.io/**" or ` +
+				`path matches "github.com/lib/pq"; it depends on none of them`,
+		},
+		{
+			name: "a dependency on anything outside the project at all",
+			violation: filesassertion.NewExternalDependencyViolation(
+				"internal/domain/order.go", nil, []string{"net/http"}, kernel.ShouldNot,
+			),
+			// The standard library is external too, because what leaves the project was decided in extraction
+			// and this layer does not re-decide it.
+			message: `internal/domain/order.go: should not, depend on external modules; it depends on net/http`,
+		},
+		{
 			name:      "a rule that selected nothing",
 			violation: kernel.NewEmptyTestViolation("files", folderMatcher(t, "internal/renamed/**")),
 			message:   `no files matched: path without filename matches "internal/renamed/**"; ` + theEmptyTestHint,
@@ -146,6 +182,8 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 		filesassertion.KindFileNaming:     filesassertion.NewNamingViolation("a.go", filenameMatcher(t, "*.go"), kernel.Should),
 		filesassertion.KindFileDependency: filesassertion.NewDependencyViolation("a.go", nil, nil, kernel.Should),
 		filesassertion.KindFileAdherence:  filesassertion.NewAdherenceViolation("a.go", "be short", kernel.Should),
+		filesassertion.KindFileExternalDependency: filesassertion.NewExternalDependencyViolation(
+			"a.go", nil, nil, kernel.Should),
 	}
 
 	for kind, violation := range phrased {
@@ -328,6 +366,16 @@ func folderMatcher(t *testing.T, pattern string) matching.Filter {
 	selector, err := matching.NewRegexFactory(nil).FolderMatcher(pattern)
 	if err != nil {
 		t.Fatalf("compiling the folder pattern %q failed: %v", pattern, err)
+	}
+	return selector
+}
+
+func pathMatcher(t *testing.T, pattern string) matching.Filter {
+	t.Helper()
+
+	selector, err := matching.NewRegexFactory(nil).PathMatcher(pattern)
+	if err != nil {
+		t.Fatalf("compiling the path pattern %q failed: %v", pattern, err)
 	}
 	return selector
 }

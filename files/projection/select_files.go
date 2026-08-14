@@ -2,12 +2,17 @@
 // into the files one rule is about, and drops every file, and every dependency, the rule's scope does
 // not name.
 //
-// Three exported functions, one for the first of those halves and two for the second:
+// Five exported functions, two that resolve a population and three that project the dependencies
+// between two of them:
 //
 //   - SelectFiles answers which files a rule is talking about. It is where `project files, in folder
 //     "internal/api/**", with name "*.go"` stops being a sentence and becomes a list of file
 //     identifiers: the scope verbs the user chained arrive as compiled matching.Filter values and are
 //     combined with AND, which is what makes chaining them narrow the selection.
+//   - SelectExternalModules answers which of the modules the project depends on a rule is talking
+//     about: the import paths that leave the project and match any of the patterns the object of
+//     `depend on external modules` named. Its selectors are combined with OR, because a module cannot
+//     be two modules at once.
 //   - PerSelectedFileEdge is this module's MapFunction, for the dependencies *between* those files.
 //     Projected through common/projection.ProjectEdges it keeps exactly the edges both of whose ends
 //     that selection holds, which is what the scope means for a rule about dependencies rather than
@@ -16,10 +21,13 @@
 //     separately: the dependencies *from* the files a scope selected *to* the files its object named,
 //     which is what `should not depend on files in folder "internal/db/**"` is judged over.
 //     PerSelectedFileEdge is it with one population at both ends.
+//   - PerExternalDependencyEdge is the same across the project's boundary: the dependencies *from* the
+//     files a scope selected *to* the external modules its object named, which is what `should not
+//     depend on external modules matching "*.*/**"` is judged over.
 //
-// Both are pure — a graph, and either compiled filters or the identifiers they selected, in — so the
-// meaning of a rule's scope can be tested against a hand-built graph before any project is extracted at
-// all.
+// All of them are pure — a graph, and either compiled filters or the identifiers they selected, in — so
+// the meaning of a rule's scope can be tested against a hand-built graph before any project is extracted
+// at all.
 package projection
 
 import (
