@@ -1,6 +1,7 @@
 package archunit_test
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -87,6 +88,18 @@ var (
 	_ archunit.Palette          = archunit.DefaultPalette()
 	_ archunit.Palette          = archunit.Palette{Subject: archunit.ColorCyan, Requirement: archunit.ColorYellow}
 	_ archunit.Color            = archunit.ColorNone
+)
+
+// And the assert helper's own two names, because the handle a framework hands a test is what a user passes to it
+// and the bag is what a suite fills in: the stdlib's handle satisfies the interface with no adapter, and so does
+// one written by hand.
+var (
+	_ archunit.TestingT      = (*testing.T)(nil)
+	_ archunit.TestingT      = (*recorder)(nil)
+	_ archunit.AssertOptions = archunit.AssertOptions{
+		Check:   archunit.CheckOptions{AllowEmptyTests: true},
+		Message: archunit.MessageOptions{MaxViolations: 10},
+	}
 )
 
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
@@ -766,6 +779,127 @@ func TestTheReportOfAnEmptyRuleExplainsWhyThatIsAFailure(t *testing.T) {
 	if result.Message != want {
 		t.Errorf("the report of %s reads\n%s\nwant\n%s", rule, result.Message, want)
 	}
+}
+
+func TestARuleThisRepositoryKeepsPassesThroughTheAssertHelper(t *testing.T) {
+	// The library used exactly as its documentation says to use it, on itself: a rule, the assert helper, the
+	// real *testing.T. Nothing is inspected here on purpose — a rule that holds reports nothing at all, so a
+	// green run is the assertion, and the day this repository breaks its own naming convention this test says
+	// so in the words a user would be shown.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	archunit.AssertPasses(t, archunit.ProjectFiles(nil).Should().HaveName("[_a-z][_a-z0-9]*.go"), nil)
+	archunit.AssertPasses(t, archunit.ProjectFiles(nil).InFolder("common/**").ShouldNot().BeInFolder("files/**"), nil)
+	archunit.AssertPasses(t, archunit.ProjectFiles(nil).Should().HaveNoCycles(), nil)
+}
+
+func TestTheAssertHelperFailsTheTestWithTheReportOfARuleThisRepositoryBreaks(t *testing.T) {
+	// The failing direction, which cannot be tested with the real handle without failing this test: a rule this
+	// repository does break, asserted against a handle that records instead of failing. What a user would see
+	// is one failure — the rule as they wrote it, the count, and their offending files numbered under it.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	framework := &recorder{}
+	rule := archunit.ProjectFiles(nil).InFolder("common/matching").Should().HaveName("regex_factory.go")
+
+	archunit.AssertPasses(framework, rule, nil)
+
+	if len(framework.failures) != 1 {
+		t.Fatalf("%s reported %d failures, want the one report:\n%v", rule, len(framework.failures), framework.failures)
+	}
+	lines := strings.Split(framework.failures[0], "\n")
+	if lines[0] != rule.String() {
+		t.Errorf("the failure begins %q, want the rule as it was written, %q", lines[0], rule.String())
+	}
+	if lines[1] != "2 violations:" {
+		t.Errorf("the failure counts them as %q, want %q", lines[1], "2 violations:")
+	}
+	for number, offender := range []string{"common/matching/filter.go", "common/matching/match_target.go"} {
+		want := "  " + strconv.Itoa(number+1) + ". " + offender +
+			`: should, filename matches "regex_factory.go"; it does not`
+		if lines[number+2] != want {
+			t.Errorf("the failure reads\n\t%s\nwant\n\t%s", lines[number+2], want)
+		}
+	}
+}
+
+func TestBothHalvesOfTheAssertOptionsReachTheirOwnHalfOfTheAssertion(t *testing.T) {
+	// The options bag through the public surface: the check half decides what the rule reports, the message half
+	// decides how it reads. The rule is the stale glob, because AllowEmptyTests is the one knob that changes a
+	// rule's answer — and a suite that really means an empty selection is the only reason it exists.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("common/renamed/**").Should().HaveNoCycles()
+	strict, allowed, painted := &recorder{}, &recorder{}, &recorder{}
+
+	archunit.AssertPasses(strict, rule, nil)
+	archunit.AssertPasses(allowed, rule, &archunit.AssertOptions{
+		Check: archunit.CheckOptions{AllowEmptyTests: true},
+	})
+	archunit.AssertPasses(painted, rule, &archunit.AssertOptions{
+		Message: archunit.MessageOptions{Palette: archunit.DefaultPalette()},
+	})
+
+	if len(allowed.failures) != 0 {
+		t.Errorf("%s with AllowEmptyTests reported %v, want the pass", rule, allowed.failures)
+	}
+	if len(strict.failures) != 1 {
+		t.Fatalf("%s reported %d failures, want the empty rule reported as the failure it is", rule, len(strict.failures))
+	}
+	want := rule.String() + "\n1 violation:\n" +
+		`  1. no files matched: path without filename matches "common/renamed/**"; ` +
+		"an empty rule would hold forever, so selecting nothing is a violation rather than a pass " +
+		"(AllowEmptyTests opts out)"
+	if strict.failures[0] != want {
+		t.Errorf("the failure reads\n%s\nwant\n%s", strict.failures[0], want)
+	}
+	if len(painted.failures) != 1 || !strings.Contains(painted.failures[0], "\x1b[") {
+		t.Errorf("the painted failure reads %q, want the same report with its parts colored", painted.failures)
+	}
+	if strings.Contains(strict.failures[0], "\x1b[") {
+		t.Errorf("the default failure reads %q, want plain text", strict.failures[0])
+	}
+}
+
+func TestEveryFrameBetweenTheUserAndTheReportMarksItselfAsAHelper(t *testing.T) {
+	// A framework blames the first frame on the stack that has not marked itself, so a re-export that forwarded
+	// without marking would attribute every failure to archunit.go instead of to the user's own assertion line —
+	// on exactly the call form the documentation prescribes. Two marks: this file's wrapper and the helper it
+	// delegates to. It is counted whether or not the rule holds, because a passing assertion leaves frames behind
+	// for the next one just the same.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	holds := archunit.ProjectFiles(nil).Should().HaveName("[_a-z][_a-z0-9]*.go")
+	broken := archunit.ProjectFiles(nil).InFolder("common/matching").Should().HaveName("regex_factory.go")
+
+	for _, rule := range []archunit.Checkable{holds, broken} {
+		framework := &recorder{}
+
+		archunit.AssertPasses(framework, rule, nil)
+
+		if framework.helpers != 2 {
+			t.Errorf("%s marked %d frames as helpers, want the re-export and the helper it delegates to",
+				rule, framework.helpers)
+		}
+	}
+}
+
+// recorder is a test framework's handle that records what it was told instead of failing, which is the only way
+// to test what a user is shown when a rule does not hold. It is also the whole of what archunit.TestingT asks
+// of a framework — one method — so it doubles as the proof that a framework other than the stdlib's needs no
+// adapter and no registration. Helper() is counted rather than acted on: it is the optional half of a handle,
+// and counting is how a test sees that the frames between the user and the report all step aside.
+type recorder struct {
+	failures []string
+	helpers  int
+}
+
+func (r *recorder) Error(args ...any) {
+	r.failures = append(r.failures, fmt.Sprint(args...))
+}
+
+func (r *recorder) Helper() {
+	r.helpers++
 }
 
 func selectFiles(t *testing.T, rule archunit.FilesBuilder) []string {
