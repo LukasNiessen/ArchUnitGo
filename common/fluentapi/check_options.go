@@ -37,8 +37,9 @@ type CheckOptions struct {
 	// every rule in a test suite asks about the same project, so caching is how a suite stays fast.
 	//
 	// The escape hatch matters when the source has changed underneath the library — a test that
-	// writes a fixture project, or generated code produced between two checks. No cache exists yet;
-	// this flag is the contract the extractor is written against.
+	// writes a fixture project, or generated code produced between two checks. ExtractGraph is where
+	// the flag is honored, and it clears the whole cache rather than this project's entry, for the
+	// reason extraction.ClearGraphCache gives: the reason to clear is that the source moved.
 	ClearCache bool
 
 	// The knobs below are Go-specific: they say how the Go toolchain is pointed at the project, and
@@ -142,4 +143,33 @@ func (o *CheckOptions) SourceOptions() *extraction.SourceOptions {
 		BuildTags:          resolved.BuildTags,
 		IgnoredImportKinds: resolved.IgnoredImportKinds,
 	}
+}
+
+// ExtractGraph gets the dependency graph a rule is to be checked against: the project the locator names,
+// located, extracted under these options, and memoised so that the next rule of the suite is a map
+// lookup. A nil locator means auto-detect, as it does at every entry point.
+//
+// It is the whole SOURCE-and-EXTRACT half of a terminal, in one call, so that a terminal reads
+//
+//	graph, err := options.ExtractGraph(rule.locator)
+//
+// and no terminal locates, clears and extracts in three steps of its own. That matters for exactly one
+// reason: ClearCache is honored here, and a terminal that assembled the sequence by hand would be a
+// terminal that could forget to.
+//
+// The error is technical or the user's — an unreadable root, no go.mod at or above the locator — never a
+// rule failure, which is a Violation in the list Check returns.
+func (o *CheckOptions) ExtractGraph(locator *extraction.ProjectLocator) (extraction.Graph, error) {
+	resolved := o.WithDefaults()
+	if resolved.ClearCache {
+		// Before the lookup, not instead of it: the check still caches its own graph, so the rules after
+		// it in the suite share the freshly extracted one.
+		extraction.ClearGraphCache()
+	}
+
+	root, err := extraction.LocateProject(locator)
+	if err != nil {
+		return nil, err
+	}
+	return extraction.CachedGraph(root, resolved.SourceOptions())
 }
