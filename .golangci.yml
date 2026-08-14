@@ -151,7 +151,8 @@ linters:
             - slices.Values
             - sort.Reverse
             # --- ours: package-level entry points only, for the reason in trap 1 above ---
-            # - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
+            - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
+            - github.com/LukasNiessen/ArchUnitGo.Files
 
     staticcheck:
       # Set explicitly: golangci-lint's own default silences ST1000 and ST1020-ST1022, which are
