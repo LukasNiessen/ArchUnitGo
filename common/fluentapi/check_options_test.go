@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
@@ -215,6 +216,35 @@ func TestCheckOptionsSourceOptionsCarryTheFilesTheUserAskedFor(t *testing.T) {
 				t.Error("the translated options walk into vendor")
 			}
 		})
+	}
+}
+
+func TestCheckOptionsSourceOptionsCarryTheGoSpecificKnobs(t *testing.T) {
+	// The two knobs that bear on the graph rather than on the walk cross here, in the one place, so that
+	// no terminal assembles a second extraction bag by hand and finds it disagreeing with the first.
+	options := &fluentapi.CheckOptions{
+		IgnoredImportKinds: extraction.NewImportKindSet(extraction.ImportKindBlank),
+		BuildTags:          []string{"integration", "linux"},
+	}
+
+	source := options.SourceOptions()
+
+	if !slices.Equal(source.BuildTags, []string{"integration", "linux"}) {
+		t.Errorf("BuildTags = %v, want the tags the user asked for", source.BuildTags)
+	}
+	if !source.IgnoresImportKind(extraction.ImportKindBlank) {
+		t.Error("the translated options count blank imports the user asked to ignore")
+	}
+	if source.IgnoresImportKind(extraction.ImportKindPlain) {
+		t.Error("the translated options drop plain imports")
+	}
+
+	source.BuildTags[0] = "windows"
+
+	// WithDefaults clones the tags on the way through, so the extraction bag does not share an array with
+	// the user's own options — which a stored half-built rule shares.
+	if options.BuildTags[0] != "integration" {
+		t.Errorf("the user's build tags changed with the translated bag: %v", options.BuildTags)
 	}
 }
 

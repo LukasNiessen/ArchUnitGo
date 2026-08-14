@@ -22,36 +22,59 @@ func TestNilSourceOptionsMeansTheDefaults(t *testing.T) {
 	if !slices.Equal(defaults.ExcludedFolders, wantExcludedFolders) {
 		t.Errorf("ExcludedFolders defaults to %v, want %v", defaults.ExcludedFolders, wantExcludedFolders)
 	}
-	// A nil bag has to answer the question the walk actually asks it, without being resolved first.
+	if len(defaults.BuildTags) != 0 {
+		t.Errorf("BuildTags defaults to %v; the toolchain's own answer for the host platform is the default", defaults.BuildTags)
+	}
+	if !defaults.IgnoredImportKinds.Empty() {
+		t.Errorf("IgnoredImportKinds defaults to %s; dropping an edge should be visible in the test that asked for it", defaults.IgnoredImportKinds)
+	}
+	// A nil bag has to answer the questions the walk and the graph extractor actually ask it, without
+	// being resolved first.
 	if !options.ExcludesFolder("vendor") {
 		t.Error("a nil options bag walks into vendor")
 	}
 	if options.ExcludesFolder("internal") {
 		t.Error("a nil options bag skips internal")
 	}
+	if options.IgnoresImportKind(ImportKindBlank) {
+		t.Error("a nil options bag drops blank imports")
+	}
 }
 
 func TestSourceOptionsWithDefaultsIsACopy(t *testing.T) {
 	options := &SourceOptions{
-		IncludeTestFiles: true,
-		ExcludedFolders:  []string{"generated"},
+		IncludeTestFiles:   true,
+		ExcludedFolders:    []string{"generated"},
+		BuildTags:          []string{"integration"},
+		IgnoredImportKinds: NewImportKindSet(ImportKindBlank),
 	}
 
 	resolved := options.WithDefaults()
 
+	// WithDefaults is where the extractor resolves its options, so it has to carry all of them across.
 	if !resolved.IncludeTestFiles {
 		t.Error("WithDefaults dropped IncludeTestFiles")
 	}
 	if !slices.Equal(resolved.ExcludedFolders, []string{"generated"}) {
 		t.Errorf("ExcludedFolders = %v, want the caller's own list", resolved.ExcludedFolders)
 	}
+	if !slices.Equal(resolved.BuildTags, []string{"integration"}) {
+		t.Errorf("BuildTags = %v, want the caller's own tags", resolved.BuildTags)
+	}
+	if !resolved.IgnoresImportKind(ImportKindBlank) || resolved.IgnoresImportKind(ImportKindPlain) {
+		t.Errorf("IgnoredImportKinds = %s, want just the blank imports the caller named", resolved.IgnoredImportKinds)
+	}
 
 	resolved.ExcludedFolders[0] = "vendor"
+	resolved.BuildTags[0] = "windows"
 
 	// The resolved bag is passed around by whatever is walking; the user's own options, which a stored
 	// half-built rule shares, must not move underneath them.
 	if options.ExcludedFolders[0] != "generated" {
 		t.Errorf("the caller's exclusions changed with the resolved copy: %v", options.ExcludedFolders)
+	}
+	if options.BuildTags[0] != "integration" {
+		t.Errorf("the caller's build tags changed with the resolved copy: %v", options.BuildTags)
 	}
 }
 

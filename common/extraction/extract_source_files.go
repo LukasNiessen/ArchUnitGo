@@ -66,28 +66,9 @@ type FileInfo struct {
 func ExtractSourceFiles(root string, options *SourceOptions) ([]FileInfo, error) {
 	resolved := options.WithDefaults()
 
-	walkRoot, err := filepath.Abs(root)
+	walkRoot, err := resolveProjectRoot(root)
 	if err != nil {
-		return nil, archerror.NewTechnicalError("resolve the project root", root, err)
-	}
-	info, err := os.Stat(walkRoot)
-	if err != nil {
-		return nil, archerror.NewTechnicalError("read the project root", root, err)
-	}
-	if !info.IsDir() {
-		return nil, archerror.NewTechnicalError("read the project root", root, ErrNotADirectory)
-	}
-	// os.Stat above followed a link at the end of root; filepath.WalkDir instead lstats what it is
-	// pointed at, so a linked root would arrive at the callback as a non-directory entry and the walk
-	// would visit nothing at all. Resolving it is conditional on there being a link to resolve:
-	// resolving unconditionally would rewrite every Path — on macOS /var is itself a link to
-	// /private/var — and with it the project-relative form of every identifier.
-	if link, err := os.Lstat(walkRoot); err == nil && link.Mode()&os.ModeSymlink != 0 {
-		linkTarget, err := filepath.EvalSymlinks(walkRoot)
-		if err != nil {
-			return nil, archerror.NewTechnicalError("read the project root", root, err)
-		}
-		walkRoot = linkTarget
+		return nil, err
 	}
 
 	var files []FileInfo
@@ -123,6 +104,37 @@ func ExtractSourceFiles(root string, options *SourceOptions) ([]FileInfo, error)
 
 	slices.SortFunc(files, compareFilesByIdentifier)
 	return files, nil
+}
+
+// resolveProjectRoot turns a root as a caller gave it into the one absolute host path the whole EXTRACT
+// stage is pointed at: the walk here, and the Go toolchain in ExtractGraph. Both have to agree on it,
+// because each turns the paths it gets back into identifiers relative to it, and the two sets of
+// identifiers are then matched against each other.
+func resolveProjectRoot(root string) (string, error) {
+	resolved, err := filepath.Abs(root)
+	if err != nil {
+		return "", archerror.NewTechnicalError("resolve the project root", root, err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", archerror.NewTechnicalError("read the project root", root, err)
+	}
+	if !info.IsDir() {
+		return "", archerror.NewTechnicalError("read the project root", root, ErrNotADirectory)
+	}
+	// os.Stat above followed a link at the end of root; filepath.WalkDir instead lstats what it is
+	// pointed at, so a linked root would arrive at the callback as a non-directory entry and the walk
+	// would visit nothing at all. Resolving it is conditional on there being a link to resolve:
+	// resolving unconditionally would rewrite every Path — on macOS /var is itself a link to
+	// /private/var — and with it the project-relative form of every identifier.
+	if link, err := os.Lstat(resolved); err == nil && link.Mode()&os.ModeSymlink != 0 {
+		linkTarget, err := filepath.EvalSymlinks(resolved)
+		if err != nil {
+			return "", archerror.NewTechnicalError("read the project root", root, err)
+		}
+		return linkTarget, nil
+	}
+	return resolved, nil
 }
 
 // isSourceFile reports whether a file of this name is Go source the enumeration should collect.
