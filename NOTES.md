@@ -323,3 +323,51 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   to two files of `common/extraction`, `common/extraction/extract_graph.go` to
   `golang.org/x/tools/go/packages` as external — plus `TestExtractImportsReadsThisFilesOwnFile`, on a file of
   this package.
+
+## Issue #9 — Extraction: classify internal vs external dependencies
+
+- WHY: the issue's literal ask — set `External`, keep the raw target — already landed with issue #8, which
+  could not resolve an import without deciding it. So this issue is the one that gives the decision a name
+  and a file of its own (`targetIndex.classify` in `classify_target.go`, unit-tested against a hand-built
+  index with no toolchain run), and closes the one hole the toolchain's answer alone cannot: an import path
+  under the project's own module that `go list` reported no package for — `<module>/internal/nope`, a package
+  half-written, renamed or deleted, or a folder holding no Go source — was being classified as an external
+  module, so every rule about third-party dependencies fired, naming the project's own path as the offender.
+  It is now the project's own code with no node to point at, and yields no edge, exactly like the
+  walk-excluded package of issue #8.
+- WHY: "keep the raw module name as the target" is read as the raw *import path*, unaltered — the target of
+  an external edge is still `golang.org/x/tools/go/packages`, not the module `golang.org/x/tools`, and no
+  `Module` field joined `Edge`. Three reasons: the siblings keep the import specifier as the file wrote it
+  and in TypeScript that specifier *is* the package name, so the import path is the faithful port; trimming
+  it would throw away which package of a module was imported, which `in path`-style rules want; and a
+  module-wide rule already reads naturally as `golang.org/x/tools/**`, since issue #2 made a trailing `/**`
+  match the folder itself as well as everything under it.
+- WHY: the module's own path comes from the toolchain — `packages.NeedModule` and the first package with
+  `Module.Main` — rather than from parsing `go.mod` with `golang.org/x/mod/modfile`, which issue #7's note
+  anticipated and `.golangci.yml`'s depguard already allows. It is the same `go list` invocation that
+  reported the package paths, so the two answers cannot disagree; it stays right when the toolchain was
+  pointed at another module file (`-modfile`, a workspace); it needs no second dependency; and `NeedModule`
+  adds no work, the field is in the JSON `go list` already prints. `x/mod` stays indirect.
+- WHY: a module nested inside the project is external even when it declares a path under its parent's, and a
+  `go.mod` between the project root (exclusive) and the folder an import names is what decides it. Such a
+  module is versioned, distributed and resolved on its own, none of its files are in this project's build,
+  and issue #8 already documented it as external. It is the only question in the classification the
+  filesystem rather than the toolchain answers.
+- WHY: the consequence, and it is a deliberate trade: a *separate* module whose path is under the main
+  module's but whose source is not inside the project — a `/v2` published from another repository, or a
+  `replace` pointing outside — is now read as the project's own code with no node, so its edges are dropped
+  instead of appearing as external. Telling that case from a missing package needs the `require` list out of
+  `go.mod`, which is a second source of truth about the project for a rare layout; the common case it would
+  buy is the exotic one, while the case it costs — an import of a package that is not there — happens in any
+  refactor.
+- WHY: an import path that is under the module path but climbs out of the project (`<module>/../elsewhere`)
+  is external, not owned. It is not legal in a module, but a file may write it, so the suffix is normalised
+  before it is used as a folder — which is also what keeps the nested-module search inside the project.
+- WHY: file stem is `classify_target.go`, one concept, as in issues #1, #4, #6 and #7 — no sibling stem names
+  this step. `targetIndex` and `classify` are unexported: the classification is a step inside `ExtractGraph`,
+  the `External` flag on `Edge` is its whole public result, and downstream rules read that flag.
+- WHY: still no fluent-API integration test — no builder chain exists yet, as in issues #1 to #8. The level
+  above the unit tests is three extractions: two fixture projects, one whose import points at a package that
+  is not there and one holding a nested module, plus
+  `TestExtractGraphClassifiesThisRepositoriesDependencies`, which extracts this repository and asserts that
+  no external target is this library's own module path under another name.
