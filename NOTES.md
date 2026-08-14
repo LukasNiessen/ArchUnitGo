@@ -1068,3 +1068,87 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
   `testing`" — is skipped again because that package still does not exist. Everything a phrasing needs is on
   the violation (`Kind`, `File`, `Required`, `Dependencies`, `Mood`).
+
+## Issue #22 — Files API: adhere to — custom user predicate
+
+- WHY: the `FileInfo` the issue describes is a **new type in a new package**, `files/extraction.FileInfo`, and
+  not the `common/extraction.FileInfo` that issue #7 already shipped. That one is the walk's enumeration
+  record — an identifier, the *host path* it was found at and whether the toolchain calls it a test file — and
+  it exists so the extractor never has to convert between the two forms of a location. This one is what a
+  user's function is handed, so it carries no host path at all (a predicate matches identifiers, like every
+  other rule in the library) and it carries the file's text, which the enumeration deliberately does not read.
+  Widening the shared record instead would have put a whole project's source in every graph extraction, and
+  cached it. `AGENTS.md` sanctions a module's own `extraction/` for exactly this, so the files module now has
+  its SOURCE half beside its `projection` and `assertion` ones.
+- WHY: the read is in `files/extraction`, so `files/assertion` stays pure and `GatherAdherenceViolations`
+  takes `[]FileInfo` — values already gathered — the same way `files/projection` takes an
+  `extraction.Graph`. `.golangci.yml`'s depguard `pure-packages` rule (no `os`, no `path/filepath` in a
+  non-test `assertion|projection|calculation`) is what makes that split enforced rather than remembered, and
+  it is why the file contents reach the judge as data rather than the judge opening the files.
+- WHY: `NonBlankLineCount` rather than a line count, because that is the number the issue names and the one a
+  size rule wants — a file's length in lines that carry something, so that padding cannot buy a limit. It is
+  computed once, at gathering time, over `strings.Lines`, and `Source` is kept verbatim beside it (nothing
+  stripped, no line endings normalised) so a predicate the library did not anticipate can still count
+  whatever it likes.
+- WHY: `Directory` is `.` at the project root, which is `path.Dir`'s answer and the identifier convention's —
+  not the empty string. A predicate comparing folders then has one spelling for "the root" instead of two, and
+  it is the same string `path.Join` round-trips.
+- WHY: `Check` **re-locates the project** (`filesRule.readSources` calls `extraction.LocateProject`) rather
+  than the selection carrying its root out of `FilesBuilder.resolve`. The identifiers were minted against that
+  root, so what matters is that the same locator answers both times — a locator is immutable and locating is a
+  walk up to a `go.mod`, so it does, and the cost is nothing beside reading the files. Widening `resolve`'s
+  three return values to four would have touched four passing terminals to give three of them a value they do
+  not want.
+- WHY: the files are read **after** the empty-test guard, not before. A rule whose glob matches nothing opens
+  no file at all, which is what makes the guard cheap enough to keep in front of the one predicate in the
+  module that does I/O of its own; `TestAdhereToOfAScopeThatSelectedNothingIsAnEmptyTest` counts the
+  predicate's invocations to hold it there.
+- WHY: **two** rejections, `ErrNoPredicate` and `ErrNoRequirement`, which the issue does not ask for. A nil
+  function would be a nil call in a user's test process — `.golangci.yml`'s `forbidigo` bans `panic` and
+  taking a test suite down is worse than any of them — and a blank message would leave a violation with
+  nothing to print, because a Go closure has no readable form and these words are the whole of what a failure
+  of this rule can say. Both travel the deferred-rejection road issues #16 and #19 built (`rejecting` on the
+  scope, so the first rejection of the chain still wins, the rule renders with `(rejected: ...)`, and `Check`
+  returns a `UserError` naming `adhere to` before the project is read) rather than being invented here.
+- WHY: `assertion.satisfies` answers `false` for a nil predicate anyway, so the pure half cannot be made to
+  call one either. It is the same defence as "a zero `matching.Filter` matches nothing" and it is the loud
+  direction: under `should` every file is reported, which is a rule that visibly says nothing rather than one
+  that quietly passes.
+- WHY: the requirement is a *required second argument* rather than an optional one or a `String()`-able
+  interface. Everything else in this library renders itself, and this is the single stage of the grammar it
+  cannot print; making it optional would produce reports whose offender has no readable requirement at all.
+  Its doc comment asks for a bare infinitive so the mood reads onto it, which is the same rule the predicate
+  names already follow.
+- WHY: one violation type, `AdherenceViolation` of kind `file-adherence`, carrying the file, the requirement
+  and the `assertion.Mood` — the shape `NamingViolation` settled on in issue #19, for the same reason: the
+  same file and requirement describe both failures ("does not satisfy" and "does, where the rule forbade
+  it"), so the mood has to travel or a report cannot tell them apart, and `String()` renders the requirement
+  as the rule stated it because `Mood.Holds` is the library's only inversion. It is the one violation whose
+  data is prose, and unavoidably so: the rule *was* a sentence the user typed beside a function.
+- WHY: no `files/calculation`. What the predicate computes is the user's, and the library's own contribution —
+  deriving a name, an extension, a folder and a non-blank line count from an identifier and a source text —
+  is the gathering step itself, not a metric over the graph.
+- WHY: the public surface gains `FileInfo`, `FilePredicate`, `FileAdherenceViolation` (aliasing
+  `files/assertion.AdherenceViolation`, renamed the way `FileCycleViolation`, `FileNamingViolation` and
+  `FileDependencyViolation` are), `KindFileAdherence` and `FilesAdherenceCondition`. `FileInfo` is the first
+  alias a user needs in order to *write* a rule rather than to read its result — the parameter of their own
+  function — so without it the escape hatch could not be reached without importing the library's internals.
+  The two sentinel errors are deliberately not re-exported, matching the surface's existing treatment of
+  `ErrModuleFileNotFound` and `ErrInvalidPattern`. Nothing was added to `govet.unusedresult.funcs`:
+  `AdhereTo` and `Check` are methods, and that flag cannot guard a method.
+- WHY: file stems are `files/extraction/extract_file_info.go` (the `extract <thing>` naming of issues #7 and
+  #8, holding the type it extracts as `extract_source_files.go` holds its own),
+  `files/assertion/adherence_violation.go` and `gather_adherence_violations.go` beside it (the `<Thing>Violation` /
+  `gather <thing> violations` pair of issue #10, with `FilePredicate` on the gathering file because it is that
+  function's parameter), and `files/fluentapi/adhere_to.go` — the predicate spelled as the user types it,
+  holding the terminal the way `have_no_cycles.go` and `depend_on_files.go` hold theirs.
+- WHY: the integration test in `archunit_test.go` dogfoods the escape hatch on this repository with the three
+  conventions no glob expresses that the library actually keeps — every file ends with a newline, every file
+  is Go source with something in it, and `files/assertion` mentions neither `os` nor `path/filepath`, which is
+  the purity rule `.golangci.yml` enforces from outside written as an ArchUnit rule from inside. Beside them
+  `TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles` holds the same package to 20 non-blank
+  lines, which it breaks, so the failing direction is exercised against real files and not only a fixture.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped again because that package still does not exist. Here the phrasing is nearly
+  written already: `Kind`, `File`, `Requirement` and `Mood` are on the violation, and the requirement is the
+  user's own words.
