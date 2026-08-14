@@ -887,3 +887,88 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: file stems are `common/assertion/mood.go` and `files/fluentapi/mood.go`. No sibling stem names this
   stage; `AGENTS.md`'s grammar table calls it the mood, and `should.go` would have named one of the two
   words. Both are one concept per file, as in issues #1, #4, #6, #7, #9, #11 and #12.
+
+## Issue #18 — Files API: have no cycles
+
+- WHY: `GatherCycleViolations(circuits)` takes **no** `assertion.Mood`, which is a deliberate departure
+  from `AGENTS.md`'s "Adding a new rule" step 4 ("handle both moods via the flag") and from every other
+  `gather <thing> violations` function so far. `should not have no cycles` is a double negative demanding
+  that the files *be* cyclic, and it fails exactly when there is no cycle — with nothing to report but the
+  absence of one, which is not data a violation can carry. The issue says "positive mood only", so the
+  predicate exists on `FilesShouldBuilder` alone and the flag would have been a parameter no caller could
+  vary. The doc comment carries a "# Why this one takes no mood" section so the next rule family does not
+  read it as licence to drop the flag, and `TestHaveNoCyclesExistsOnThePositiveMoodAlone` reflects over both
+  mood builders' method sets — the same mechanical enforcement issue #17 used for the synonyms, rather than
+  a sentence a reviewer has to remember.
+- WHY: the violation is built from `cycles.ProjectCircuits` (Johnson) and not from `cycles.ProjectCycles`
+  (Tarjan), the two doors issue #15 left. A strongly connected component names the *region* of the graph
+  that is cyclic; the issue asks the message to "print the cycle as a readable path", and a path is what a
+  reader has to break. `Check` deliberately drops the enumeration's `complete` flag: it bounds the size of
+  the report and not the verdict — a truncated enumeration still holds every cycle it did find, and a rule
+  reporting a thousand cycles is broken by the first of them. Reported as a `//` comment at the call site,
+  because a discarded second return value is otherwise read as an oversight.
+- WHY: `KindFileCycle = "file-cycle"` names the vocabulary as well as the failure, like `file-dependency`
+  will: a rule about cycles exists in every vocabulary the library grows (slices, layers, packages), each
+  reports its own type, and two families sharing one kind would be two shapes of data under one key.
+- WHY: `CycleViolation` carries the whole `cycles.Circuit` — not a `[]string` of files and not a message.
+  `Files()` is the offenders in cycle order and `String()` is the readable path
+  `internal/api/handler.go -> internal/db/conn.go -> internal/api/handler.go`, while the circuit's own
+  `Edges()` still hold the raw `extraction.Edge` behind each step, so the testing layer can name the import
+  that made the dependency when it lands. `String()` on a violation is the same latitude `FilesBuilder`,
+  `Circuit` and `archerror` already take: enough for a log line or a `t.Errorf`, with the user-facing
+  message still the testing layer's to build. That layer does not exist yet, so the dogfood test in
+  `archunit_test.go` prints the path itself.
+- WHY: cycles are computed over the edges whose **both** ends the scope selected —
+  `projection.PerSelectedFileEdge(selected)`. A rule's scope is read as "the dependencies between these
+  files", so a cycle that leaves the scope and comes back through a file the rule did not select is not
+  this rule's cycle, and widening the scope is what makes it visible. The alternative (project every edge,
+  then report a cycle if any selected file is in one) would report a failure a reader cannot see in the
+  files the rule names. Tested in both directions, at both levels: `internal/api` alone has no cycle,
+  `internal/**` has the one.
+- WHY: `PerSelectedFileEdge` takes `[]string` identifiers rather than `[]matching.Filter`. It is the
+  selection `projection.SelectFiles` already resolved, and a terminal needs the count of it for the
+  empty-test guard anyway; taking filters would have re-run the matching per edge — twice per edge — and
+  put a second, silently divergent answer to "which files is this rule about" in the module. It composes
+  `kernel.PerInternalEdge()` rather than re-deciding what an internal edge is, so an external target cannot
+  be one end of a kept edge even if a caller passes an import path among the identifiers, and it drops
+  self-edges like every other member of the `per <thing> edge` family. An empty selection projects nothing,
+  which is the loud direction: it is what the empty-test guard reports on.
+- WHY: three edits to code that was already passing its tests, all of them the "one shared implementation"
+  kind rather than refactors of taste. (1) `FilesBuilder.resolve` returns the graph *and* the selection in
+  one call, and `SelectFiles` now delegates to it — a terminal needs both, and asking for them separately
+  would extract the project twice or, worse, resolve the scope against a second graph. (2) `filesRule.render`
+  generalises `filesRule.String` so every stage after the mood appends its words in one place and a pattern
+  a scope verb rejected stays at the end of the sentence. (3) `filesRule.emptyTestOptions` spells the
+  subject word `files` once for every terminal the module will grow. `SelectFiles`'s and `String`'s output
+  is unchanged and their tests are untouched.
+- WHY: the empty-test guard is wired in here, at the first terminal, which is where issue #16 and #17 said
+  it belonged: `have no cycles` over no file at all is a projection with no edges, so a stale glob would be
+  green forever. It short-circuits — an empty selection is reported *instead of* being judged, not beside
+  it — because two violations of different kinds would make a report say the rule both did and did not have
+  a subject.
+- WHY: the public surface gains `Checkable`, `Violation`, `ViolationKind`, `EmptyTestViolation`,
+  `FileCycleViolation` (aliasing `files/assertion.CycleViolation`), `Circuit`, `FilesCyclesCondition` and
+  the two kind constants. A user who wants more than a pass or a fail reads the violation, and without the
+  aliases they could not name what `Check` returns without importing the library's internals — which is the
+  one thing the public surface exists to prevent, and the precedent issue #16 set. `FileCycleViolation` is
+  the one alias renaming its target: `archunit.CycleViolation` would have to be renamed the day slices or
+  layers report theirs, and the kind it carries is already `file-cycle`. Nothing was added to
+  `govet.unusedresult.funcs`: `HaveNoCycles` and `Check` are methods, and that flag cannot guard a method.
+- WHY: file stems are `files/projection/per_selected_file_edge.go` (the `per <thing>` naming of issue #14),
+  `files/assertion/cycle_violation.go` and `files/assertion/gather_cycle_violations.go` (the
+  `<Thing>Violation` / `gather <thing> violations` pair of issue #10, one concept per file), and
+  `files/fluentapi/have_no_cycles.go` — the predicate, spelled as the user types it, holding the condition
+  type, the verb and the terminal. `files/assertion` is a new package, so its doc comment lives on
+  `cycle_violation.go`, the type file, as `common/assertion`'s lives on `violation.go`.
+- WHY: the integration test needs a project that does **not** compile. A file-level cycle is a cycle
+  between Go files, and the compiler rejects an import cycle, so no project that builds has one — the
+  fixture's two packages import each other on purpose. That is only possible because extraction never
+  type-checks (`packages.Load` without `NeedTypes`, and "a package that does not compile is deliberately
+  not read here"), and it is the property this rule depends on: a project mid-refactor still has a shape.
+  Both levels of the test suite say so — hand-built cyclic graphs in `files/projection` and
+  `files/assertion`, the fixture project in `files/fluentapi` — and the dogfood test in `archunit_test.go`
+  holds this repository itself to `should have no cycles`.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped because that package does not exist yet; no issue has created it. The data the
+  phrasing will need is all on the violation (`Kind`, `Files`, `Cycle.Edges`), so the step is additive when
+  the layer lands, and nothing here has to be revisited but the message.

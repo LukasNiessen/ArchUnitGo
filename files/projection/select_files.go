@@ -1,16 +1,21 @@
 // Package projection is the files module's half of the PROJECT stage: it reshapes an extracted graph
-// into the files one rule is about, and drops every file the rule's scope does not name.
+// into the files one rule is about, and drops every file, and every dependency, the rule's scope does
+// not name.
 //
-// SelectFiles is the whole surface, and it is where `project files, in folder "internal/api/**", with
-// name "*.go"` stops being a sentence and becomes a list of file identifiers. The scope verbs the user
-// chained arrive as compiled matching.Filter values and are combined with AND, which is what makes
-// chaining them narrow the selection.
+// Two exported functions, one for each of those halves:
 //
-// It is pure — a graph and compiled filters in, sorted identifiers out — so the meaning of a rule's
-// scope can be tested against a hand-built graph before any project is extracted at all.
+//   - SelectFiles answers which files a rule is talking about. It is where `project files, in folder
+//     "internal/api/**", with name "*.go"` stops being a sentence and becomes a list of file
+//     identifiers: the scope verbs the user chained arrive as compiled matching.Filter values and are
+//     combined with AND, which is what makes chaining them narrow the selection.
+//   - PerSelectedFileEdge is this module's MapFunction, for the dependencies *between* those files.
+//     Projected through common/projection.ProjectEdges it keeps exactly the edges both of whose ends
+//     that selection holds, which is what the scope means for a rule about dependencies rather than
+//     about files.
 //
-// The dependencies *between* those files are common/projection's business, over the same graph and a
-// MapFunction. This package only answers which files a rule is talking about.
+// Both are pure — a graph, and either compiled filters or the identifiers they selected, in — so the
+// meaning of a rule's scope can be tested against a hand-built graph before any project is extracted at
+// all.
 package projection
 
 import (
