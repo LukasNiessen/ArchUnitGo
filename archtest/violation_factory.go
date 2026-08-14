@@ -78,6 +78,7 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //
 //	common/matching/filter.go: should, filename matches "regex_factory.go"; it does not
 //	files/api/handler.go: should not, depend on files, path without filename matches "files/db"; it depends on files/db/conn.go
+//	files/domain/order.go: should not, depend on external modules, path matches "*.*/**"; it depends on gorm.io/gorm
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
@@ -106,6 +107,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.naming(reported)
 	case filesassertion.DependencyViolation:
 		return f.dependency(reported)
+	case filesassertion.ExternalDependencyViolation:
+		return f.externalDependency(reported)
 	case filesassertion.AdherenceViolation:
 		return f.adherence(reported)
 	default:
@@ -198,6 +201,26 @@ func (f ViolationFactory) dependency(violation filesassertion.DependencyViolatio
 	return f.sentence(violation.File, requirement, finding)
 }
 
+// externalDependency phrases a file that depends on the external modules a rule named where that was
+// forbidden, or on none of them where it was required.
+//
+// It is dependency's sentence over the other kind of object, and it is written out beside it rather than
+// folded into it — as naming and adherence are — because phrasing is this layer's whole deliverable and the
+// two objects are different things to a reader: one names folders of this project, the other names somebody
+// else's modules. The selectors are joined with `or` rather than with a comma, which is the difference that
+// makes them alternatives, and it is the one thing a report of this family must not blur.
+func (f ViolationFactory) externalDependency(violation filesassertion.ExternalDependencyViolation) string {
+	requirement := violation.Mood.String() + ", depend on external modules"
+	if len(violation.Required) > 0 {
+		requirement += ", " + alternatives(violation.Required)
+	}
+	finding := "it depends on none of them"
+	if len(violation.Modules) > 0 {
+		finding = "it depends on " + strings.Join(violation.Modules, ", ")
+	}
+	return f.sentence(violation.File, requirement, finding)
+}
+
 // unphrased phrases a violation this layer has not been taught: its kind, and whatever it can say about
 // itself.
 //
@@ -252,6 +275,17 @@ func clauses(selectors []matching.Filter) string {
 		rendered = append(rendered, selector.String())
 	}
 	return strings.Join(rendered, ", ")
+}
+
+// alternatives renders the selectors that described a set of external modules, in the order the user chained
+// them onto the rule. They are combined with OR — a module cannot be two modules at once — and `or` is how the
+// library's own types already spell that, from the condition's rendering down to the violation's.
+func alternatives(selectors []matching.Filter) string {
+	rendered := make([]string, 0, len(selectors))
+	for _, selector := range selectors {
+		rendered = append(rendered, selector.String())
+	}
+	return strings.Join(rendered, " or ")
 }
 
 // plural counts a noun the way a report needs it — `1 violation`, `3 violations` — because a heading that

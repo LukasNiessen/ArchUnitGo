@@ -1341,3 +1341,51 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   — so without it every failure would be attributed to `archunit.go` instead of the user's assertion line.
   Exporting the probe from `archtest` would have shared the three lines at the price of a public name that
   exists only for one caller inside the module.
+
+## Issue #21 — Files API: depend on external modules
+
+- WHY: `matching(name)` is spelled `Matching(pattern)` and compiles a path matcher, the same glob syntax
+  every other selector in this repository takes. The issue calls the object selector a name; an import path
+  is the only name an external dependency has here, and a matcher keeps `gorm.io/**` and the exact
+  `net/http` in one verb rather than adding a second one for prefixes.
+- WHY: the object verbs are combined with OR, which makes this the one chain in the library that widens
+  instead of narrowing. The issue asks for it — "repeatable for OR" — and it is what the object means: a
+  module cannot be two modules at once, so two path patterns ANDed would name a set that cannot have a
+  member. The join is stated in `projection.matchesAny` and rendered in three places a reader can see it —
+  the condition's `String`, the violation's `String` and `archtest.alternatives` — because a report that
+  spelled alternatives with a comma would read as the AND every sibling rule uses.
+- WHY: `external` keeps the meaning EXTRACT already gave it — `Edge.External`, so the standard library is
+  external too — and this layer does not re-decide it. A rule that wants third-party code alone writes
+  `Matching("*.*/**")`, which is documented on the verb: the glob translator turns it into a first segment
+  containing a dot plus everything under it, and no standard library path has one. Teaching the projection
+  to exclude the stdlib would have put a second definition of "outside the project" one layer above the
+  one that computed it.
+- WHY: the empty-test guard is wired to the subject alone, and there is no object population. For this
+  family the object *is* the set of dependencies found, so "no module matched" and "no file depends on such
+  a module" are one statement — and under `should not` that statement is the pass, which a guarded object
+  would turn into a violation for every well-behaved project. Two tests pin it in both moods, and the
+  reflection sweep in `files/fluentapi/empty_test_guard_test.go` still holds the terminal to guarding its
+  subject.
+- WHY: `EmptyTestPopulation`'s doc in `common/fluentapi/empty_test_guard.go` was softened from "A relational
+  rule has two" to "usually has two", with the reason above. The sentence became false the moment this
+  terminal landed, and which populations a rule has was always the terminal's to say.
+- WHY: `GatherExternalDependencyViolations` writes out the per-file existential walk that
+  `GatherDependencyViolations` also has, rather than the two sharing one. The precedent is next door —
+  `GatherNamingViolations` and `GatherAdherenceViolations` are the same walk twice — and the two differ in
+  what they carry and in the fact that this one is handed a population it must not guard. Sharing it would
+  have made the shared function the place where a future rule family's object semantics get decided.
+- WHY: `ExternalDependencyViolation` is its own kind, phrased by an `externalDependency` method of its own in
+  `archtest`, rather than reusing `DependencyViolation`. It carries import paths and not the project's own
+  files, its object joins with `or`, and phrasing is the report layer's whole deliverable: one names folders
+  of this project, the other names somebody else's modules.
+- WHY: the integration fixtures live in a `writeExternalFixtureProject` of their own and import nothing but
+  the standard library. A fixture with a real third-party import would need the module proxy at test time;
+  stdlib imports are external by the same rule, so they exercise every branch without anything being
+  fetched, and the existing `writeFixtureProject` stays as its own tests wrote it.
+- WHY: file stems follow the sibling rule family exactly — `depend_on_external_modules.go`,
+  `select_external_modules.go`, `per_external_dependency_edge.go`,
+  `gather_external_dependency_violations.go`, `external_dependency_violation.go` — with each test file
+  beside the file it tests.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `DependOnExternalModules` and
+  `Matching` are methods, and that flag cannot guard a method; the immutability tests are what hold them to
+  returning a new builder.

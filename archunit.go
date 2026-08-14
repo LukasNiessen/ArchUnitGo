@@ -102,6 +102,12 @@ type FileAdherenceViolation = filesassertion.AdherenceViolation
 // found and the mood the rule was written in.
 type FileDependencyViolation = filesassertion.DependencyViolation
 
+// FileExternalDependencyViolation says that one file depends on the external modules a rule named where the rule
+// forbids it, or on none of them where the rule requires it. It is what `should depend on external modules` and
+// `should not depend on external modules` report, one per offending file — carrying the file, the object's
+// selectors, the import paths actually found and the mood the rule was written in.
+type FileExternalDependencyViolation = filesassertion.ExternalDependencyViolation
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -111,6 +117,8 @@ const (
 	KindFileNaming = filesassertion.KindFileNaming
 	// KindFileDependency is the kind of FileDependencyViolation.
 	KindFileDependency = filesassertion.KindFileDependency
+	// KindFileExternalDependency is the kind of FileExternalDependencyViolation.
+	KindFileExternalDependency = filesassertion.KindFileExternalDependency
 	// KindFileAdherence is the kind of FileAdherenceViolation.
 	KindFileAdherence = filesassertion.KindFileAdherence
 )
@@ -147,6 +155,13 @@ type FilesNamingCondition = filesapi.FilesNamingCondition
 // InFolder, InPath — are chainable and combined with AND, and it is a Checkable, so a built rule can be
 // stored, passed to a helper or kept in a list of the suite's rules.
 type FilesDependencyCondition = filesapi.FilesDependencyCondition
+
+// FilesExternalDependencyCondition is the object stage and the terminal of `project files, ..., should not, depend
+// on external modules, matching "*.*/**"`, which DependOnExternalModules returns on either mood. Its one object
+// verb — Matching — is repeatable and combined with OR, which is the one chain in this library that widens rather
+// than narrows, and it is a Checkable, so a built rule can be stored, passed to a helper or kept in a list of the
+// suite's rules.
+type FilesExternalDependencyCondition = filesapi.FilesExternalDependencyCondition
 
 // FilesAdherenceCondition is the terminal of `project files, ..., should, adhere to (a function), "be at most
 // 400 lines long"`, which AdhereTo returns on either mood. It is a Checkable, so a built rule can be stored,

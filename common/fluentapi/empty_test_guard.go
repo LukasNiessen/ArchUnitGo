@@ -10,9 +10,15 @@ import (
 // them.
 //
 // A rule about one vocabulary has one population — the files, the slices, the layers its scope named. A
-// relational rule has two, because `should not depend on files in folder "internal/db/**"` selects a
+// relational rule usually has two, because `should not depend on files in folder "internal/db/**"` selects a
 // subject and an object and either pattern can be the stale one; Subject is what tells them apart in a
 // report, in the entry point's own words.
+//
+// Usually, because a relational rule whose object is not a population of the project's own nodes hands over
+// its subject alone: the object of `should not depend on external modules matching "*.*/**"` *is* a set of
+// dependencies, so "no module matched" and "no file depends on such a module" are one statement, and for the
+// negated mood that statement is the pass. Which populations a rule has is the terminal's to say, and it says
+// it by which ones it passes here.
 //
 // The selectors are read and not kept: CheckOptions.GatherEmptyTestViolations clones them on the way to
 // the violation, for the reason assertion.NewEmptyTestViolation gives.
