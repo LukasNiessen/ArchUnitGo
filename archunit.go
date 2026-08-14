@@ -171,6 +171,15 @@ type ViolationFactory = archtest.ViolationFactory
 // violations it lists. A nil *MessageOptions means the defaults — plain text, every violation.
 type MessageOptions = archtest.MessageOptions
 
+// TestingT is the part of a test framework's handle AssertPasses needs: Error, and nothing else. *testing.T
+// satisfies it, and so does any other framework's handle that has the method every framework has — which is
+// what makes the assert helper work without registration or configuration.
+type TestingT = archtest.TestingT
+
+// AssertOptions is the one options bag AssertPasses takes: how the rule is run, and how a failure is written,
+// as the two bags each half already has. A nil *AssertOptions means the defaults.
+type AssertOptions = archtest.AssertOptions
+
 // Palette is which color each part of a report is painted in, one field per role a piece of a message plays:
 // the offender, the rule it broke, what was found instead. The zero Palette paints nothing, so color is
 // something a caller opts into.
@@ -226,6 +235,36 @@ func NewResultFactory(options *MessageOptions) ResultFactory {
 // of its own shape. A nil *MessageOptions means the defaults.
 func NewViolationFactory(options *MessageOptions) ViolationFactory {
 	return archtest.NewViolationFactory(options)
+}
+
+// AssertPasses checks the rule and fails the test with the formatted violations when it does not hold. It is
+// how an architecture rule becomes a unit test, and the last line of one:
+//
+//	func TestTheApiDoesNotTouchTheDatabase(t *testing.T) {
+//		rule := archunit.ProjectFiles(nil).
+//			InFolder("internal/api/**").
+//			ShouldNot().
+//			DependOnFiles().
+//			InFolder("internal/db/**")
+//
+//		archunit.AssertPasses(t, rule, nil)
+//	}
+//
+// A rule that holds reports nothing; one that does not is a single t.Error carrying the rule as it was written
+// and then the numbered violations. A nil *AssertOptions means the defaults, which is why this needs no
+// configuration to be useful, and AssertOptions is how a suite asks for color, a violation limit or a check
+// that allows an empty selection.
+//
+// This frame marks itself as a helper too, for the same reason the one it delegates to does: the first unmarked
+// frame on the stack is the one a framework blames, and a re-export that did not mark itself would move every
+// failure from the user's own assertion line to this file — which is exactly the call form the documentation
+// prescribes. The probe is optional, as it is one layer down, so a framework without Helper() still gets the
+// report.
+func AssertPasses(t TestingT, rule Checkable, options *AssertOptions) {
+	if marked, ok := t.(interface{ Helper() }); ok {
+		marked.Helper()
+	}
+	archtest.AssertPasses(t, rule, options)
 }
 
 // DefaultPalette is the palette a caller who wants a colored report and does not want to choose asks for: the

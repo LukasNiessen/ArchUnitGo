@@ -1299,3 +1299,45 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: nothing was added to `govet.unusedresult.funcs` and nothing was removed from it. `Message`, `Messages`
   and `Result` are methods, and that flag cannot guard a method; their results are consumed by construction
   in every test that calls them.
+
+## Issue #25 — Testing: the framework-agnostic assert helper
+
+- WHY: the options bag is a required third parameter, `AssertPasses(t, rule, nil)`, and not the optional
+  argument of `assert passes(rule, options?)` or of AGENTS.md's opening example. Go has no optional
+  parameter, and `Check(*CheckOptions)` with a nil-means-defaults contract is what AGENTS.md's Go-specifics
+  section picks over variadic options — so every entry point and terminal in this repository already reads
+  `ProjectFiles(nil)`, `Check(nil)`, `NewResultFactory(nil)`, and the helper reads the same way.
+- WHY: `TestingT` asks for `Error(args ...any)` alone; `Helper()` is an optional interface asserted at the
+  call, so the helper still calls it on every handle that has one — which AGENTS.md's `AssertPasses(t, rule)`
+  paragraph asks for — without locking out a framework whose handle lacks it. Requiring it would have made
+  "framework-agnostic" mean "stdlib-shaped".
+- WHY: that interface puts `any` in the public API, which AGENTS.md says to avoid. The signature is the
+  stdlib's and has to be, or `*testing.T` would not satisfy the interface without an adapter; the helper
+  always passes exactly one string, and a test holds it to that.
+- WHY: a failing assertion is headed by the rule's own sentence, taken through `fmt.Stringer`, above the
+  report `ResultFactory` shaped. Issue #24's note left "how a rule's description reaches the top of a report"
+  to the adapter issue, and this is it: without the heading, a test that asserts several rules — or one in a
+  loop — reports a list of files with nothing saying which sentence they broke. A `Checkable` that cannot
+  describe itself gets the report unheaded.
+- WHY: `AssertOptions` holds `fluentapi.CheckOptions` and `MessageOptions` as two fields rather than
+  flattening their knobs. The helper spans both halves of the pipeline's tail, and a flat bag would be a
+  second place where every knob either half ever grows has to be repeated, in step, forever.
+- WHY: a nil rule and a technical error from `Check` are reported through `t.Error` in their own words —
+  `there is no rule to check: ...`, `the rule could not be checked: ...` — rather than as violations or a
+  panic. A rule that failed to run is a different problem for the reader than one that does not hold, an
+  assertion that quietly asserted nothing is the outcome this library treats as the worst there is, and
+  `forbidigo` bans `panic` besides. A nil `t` is the one case left to panic: there is nowhere to report to.
+- WHY: the helper reports through `Error` and not a fatal call, so a suite asserting several rules reports
+  all of them, and it returns nothing — a caller who wants the violations rather than the failure calls
+  `Check`, which is public for that.
+- WHY: the fluent-API integration tests are in `archunit_test.go` at the root, for issue #24's reason
+  (`archtest` may not import `files/fluentapi`), and the failing direction is asserted against a handle that
+  records instead of failing — a real `*testing.T` there would fail this repository's own suite.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AssertPasses` returns nothing,
+  so there is no result to guard.
+- WHY: the re-exported `archunit.AssertPasses` probes for `Helper()` and marks itself before delegating, so the
+  probe exists twice rather than once. A framework blames the first frame that did not mark itself, and the
+  re-export is that frame on the call form the documentation prescribes — `archunit.AssertPasses(t, rule, nil)`
+  — so without it every failure would be attributed to `archunit.go` instead of the user's assertion line.
+  Exporting the probe from `archtest` would have shared the three lines at the price of a public name that
+  exists only for one caller inside the module.
