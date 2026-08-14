@@ -16,6 +16,7 @@
 package archunit
 
 import (
+	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
 	filesapi "github.com/LukasNiessen/ArchUnitGo/files/fluentapi"
@@ -29,10 +30,31 @@ type ProjectLocator = extraction.ProjectLocator
 // to what it says. A nil *CheckOptions means the defaults.
 type CheckOptions = fluentapi.CheckOptions
 
+// Mood is which of the two moods a rule was written in, `should` or `should not`. It is what the mood
+// stage of a chain reports, and the flag the library's assertions take so that a rule and its negation
+// are one piece of logic.
+type Mood = assertion.Mood
+
+const (
+	// Should is the positive mood: the rule holds where its predicate is satisfied.
+	Should = assertion.Should
+	// ShouldNot is the negated mood: the rule holds where its predicate is not satisfied.
+	ShouldNot = assertion.ShouldNot
+)
+
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
 // scope verb hands back a new one of. It is named here so that a half-built rule can be stored in a
 // struct field or passed to a helper.
 type FilesBuilder = filesapi.FilesBuilder
+
+// FilesShouldBuilder is the positive mood of a rule about files, which FilesBuilder.Should returns:
+// `project files, in folder "internal/api/**", should`.
+type FilesShouldBuilder = filesapi.FilesShouldBuilder
+
+// FilesShouldNotBuilder is the negated mood of a rule about files, which FilesBuilder.ShouldNot
+// returns: `project files, in folder "internal/api/**", should not`. It is the positive builder's twin,
+// one flag apart.
+type FilesShouldNotBuilder = filesapi.FilesShouldNotBuilder
 
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.

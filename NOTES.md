@@ -823,3 +823,67 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   of it, pointing at the last directory, with no error and no visible symptom.
   `TestTheLocatorAnEntryPointWasGivenCannotBeChangedAfterwards` writes the locator after the rule is built
   and both entry points still resolve the project they were given; it fails with the copy removed.
+
+## Issue #17 — Files API: should and should not
+
+- WHY: the flag is a named type, `common/assertion.Mood` (a `bool` with the constants `Should` and
+  `ShouldNot`), rather than a bare `negated bool` field in `files/fluentapi`. The issue's own sentence
+  is "a boolean flag threaded into the assertion function", and a type is what gives that flag one
+  spelling and one meaning across the library: `Mood.Holds(satisfied)` is the single comparison the two
+  moods differ by, so no `gather <thing> violations` function re-derives `satisfied != negated` and none
+  of them can branch on the mood instead. A plain `bool` parameter would have been re-invented, and
+  probably inverted, once per rule family.
+- WHY: it lives in `common/assertion`, not in `files/assertion` — which is why this issue adds no
+  `files/assertion` package at all. Mood is the family's grammar (`AGENTS.md` states it in the fluent-API
+  section, not the files one), every module's assertions take it, and rule 2 says the shared thing goes in
+  `common` *before* a second module reaches sideways for it. Nothing about it is files-specific.
+- WHY: `Mood` is `type Mood bool` with two typed constants rather than a struct or an `iota` enum. It has
+  exactly two members forever, so a bool is the honest shape; a struct could not be `const`, and a
+  package-level `var` pair would need `//nolint:gochecknoglobals` for values that are not tables. The zero
+  value is `Should`, which is the harmless mood for a rule value nobody set a mood on, and there is a test
+  saying so. `String()` renders `should` / `should not` — the two words the user typed, read back for a log
+  or a test failure, which is the same latitude `FilesBuilder.String()` and `archerror` already take;
+  violation prose is still the testing layer's.
+- WHY: `Negated()` and `Holds()` are both exported and are not two ways to ask one thing. `Holds` is the
+  assertion's question about a subject ("the predicate is satisfied — does the rule hold?"), `Negated` is
+  the flag itself, for a report that has to say which mood a rule was written in. Nothing else is on the
+  type.
+- WHY: the two mood builders are `FilesShouldBuilder` and `FilesShouldNotBuilder`, each holding one
+  unexported `filesRule{scope, mood}` — the "two thin types over one shared assertion" the issue asks for,
+  written as explicit one-line delegations rather than an embedded struct. Embedding would have removed the
+  duplication entirely, but the promoted methods' documentation would then live on an unexported type,
+  where `go doc archunit.FilesShouldNotBuilder` cannot show it to a user; for a library this documented
+  that is the worse trade. `filesRule` is what every coming predicate takes and passes on, and `String()`
+  is its one real method, so the rendering of a rule cannot differ between the moods.
+- WHY: a mood builder deliberately has **no** mood verb, which is how the grammar's "mood: exactly 1"
+  becomes the type system's problem rather than a reviewer's: `...ShouldNot().Should()` does not compile.
+  `TestTheMoodIsTwoWordsWithNoSynonyms` reflects over the method sets of all three stages and fails both if
+  a mood stage grows a mood and if any stage grows a synonym (`Must`, `May`, `Never`, `Cannot`, `IsNot`, …).
+  Verified by adding each mutation in turn. The issue's first line is "the two moods, and nothing else — no
+  synonyms", and a list in a doc comment is not enforcement.
+- WHY: `Mood()`, `Selectors()`, `SelectFiles()` and `String()` are on both mood builders, so the mood stage
+  can do everything the scope stage could plus report its flag. That is what keeps this issue from landing
+  as two structs nothing can resolve: `SelectFiles` is the SOURCE-and-EXTRACT-plus-scope half every
+  predicate will be written over (issue #16's reason for exporting it in the first place), and `Selectors`
+  is what the empty-test guard will report with. The empty-test guard is still not wired in — selecting
+  nothing is only a failure once a rule judges something, and there is nothing to judge until the first
+  predicate.
+- WHY: `FilesBuilder.String()` was refactored into `stages()` and `rejected()`, the only edit to code that
+  was already passing its tests. The mood appends its word to the scope's stages, and a pattern a scope verb
+  rejected has to stay at the end of the sentence rather than in the middle of it — `project files, ...,
+  should not (rejected: ...)`. `String()`'s output is unchanged and its test is untouched.
+- WHY: no predicate, no terminal, no `Checkable`. This issue is the mood; `Mood.Holds` therefore has no
+  production caller yet, and the assertion it is threaded into is written out in test code — the precedent
+  issues #5, #6 and #16 set with `dependencyRule`, `inFolder` and `selectFrom`. Both
+  `TestOneAssertionServesBothMoods` (over a hand-built graph, in `common/assertion`) and
+  `TestTheMoodReachesAnAssertionAsAFlag` (over the fluent API's own mood value) gather both moods with one
+  function and hold their results to being exactly complementary, which is the property a duplicated
+  negative code path would break.
+- WHY: the public surface gains `Mood`, `Should`, `ShouldNot`, `FilesShouldBuilder` and
+  `FilesShouldNotBuilder`. `Mood()` returns a `common/assertion` type, so without the alias a user could not
+  name what the mood stage hands them without importing the library's internals — which is the one thing
+  the public surface exists to prevent. Nothing was added to `govet.unusedresult.funcs`: `Should` and
+  `ShouldNot` are methods, and that flag cannot guard a method, as the note in `.golangci.yml` says.
+- WHY: file stems are `common/assertion/mood.go` and `files/fluentapi/mood.go`. No sibling stem names this
+  stage; `AGENTS.md`'s grammar table calls it the mood, and `should.go` would have named one of the two
+  words. Both are one concept per file, as in issues #1, #4, #6, #7, #9, #11 and #12.
