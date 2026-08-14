@@ -19,6 +19,8 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
+	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	filesapi "github.com/LukasNiessen/ArchUnitGo/files/fluentapi"
 )
 
@@ -42,6 +44,42 @@ const (
 	ShouldNot = assertion.ShouldNot
 )
 
+// Checkable is a rule that can be run: what every chain ends in, and the one thing a helper that loops
+// over a list of rules has to know about them. Check returns one Violation per place the code disagrees
+// with the rule, and an empty result is the pass.
+type Checkable = fluentapi.Checkable
+
+// Violation is one disagreement between the code and a rule: the atom of every rule's result. It carries
+// the thing that disagreed rather than a sentence about it, and Kind is what says which family it belongs
+// to.
+type Violation = assertion.Violation
+
+// ViolationKind identifies a family of violations — `empty-test`, `file-cycle` — spelled the same way in
+// every ArchUnit port. It is what a report groups and phrases by, without asserting on a concrete type
+// first.
+type ViolationKind = assertion.ViolationKind
+
+// EmptyTestViolation says a rule selected nothing at all: its scope matched no file, so there was nothing
+// to judge and a pass would have meant nothing. Every terminal reports it, and CheckOptions.AllowEmptyTests
+// is how a user who really means an empty selection opts out.
+type EmptyTestViolation = assertion.EmptyTestViolation
+
+// FileCycleViolation says that some of the files a rule selected depend on each other in a circle. It is
+// what `should have no cycles` reports, one per cycle, and it carries the cycle itself — printable as the
+// readable path `a.go -> b.go -> a.go`.
+type FileCycleViolation = filesassertion.CycleViolation
+
+// Circuit is one cycle: the chain of dependencies that leaves a node, returns to it and touches nothing
+// twice on the way. It is what a FileCycleViolation carries, and it renders itself as a readable path.
+type Circuit = cycles.Circuit
+
+const (
+	// KindEmptyTest is the kind of EmptyTestViolation.
+	KindEmptyTest = assertion.KindEmptyTest
+	// KindFileCycle is the kind of FileCycleViolation.
+	KindFileCycle = filesassertion.KindFileCycle
+)
+
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
 // scope verb hands back a new one of. It is named here so that a half-built rule can be stored in a
 // struct field or passed to a helper.
@@ -52,9 +90,16 @@ type FilesBuilder = filesapi.FilesBuilder
 type FilesShouldBuilder = filesapi.FilesShouldBuilder
 
 // FilesShouldNotBuilder is the negated mood of a rule about files, which FilesBuilder.ShouldNot
-// returns: `project files, in folder "internal/api/**", should not`. It is the positive builder's twin,
-// one flag apart.
+// returns: `project files, in folder "internal/api/**", should not`. It is the positive builder's twin —
+// same scope, same terminals, every predicate with a meaningful negation, one flag apart — with
+// HaveNoCycles the one predicate offered on the positive mood alone, because its negation would have
+// nothing to report.
 type FilesShouldNotBuilder = filesapi.FilesShouldNotBuilder
+
+// FilesCyclesCondition is the terminal of `project files, ..., should, have no cycles`, which
+// FilesShouldBuilder.HaveNoCycles returns. It is a Checkable, so a built rule can be stored in a struct
+// field, passed to a helper or kept in a list of the suite's rules.
+type FilesCyclesCondition = filesapi.FilesCyclesCondition
 
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.

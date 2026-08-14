@@ -16,6 +16,23 @@ var (
 	_ archunit.FilesShouldNotBuilder = archunit.ProjectFiles(nil).ShouldNot()
 )
 
+// A built rule is a Checkable, which is the one thing a helper looping over a suite's rules has to know
+// about it, and its own type is named too so that it can be stored. Both at compile time, for the same
+// reason as above.
+var (
+	_ archunit.Checkable            = archunit.ProjectFiles(nil).Should().HaveNoCycles()
+	_ archunit.FilesCyclesCondition = archunit.ProjectFiles(nil).Should().HaveNoCycles()
+)
+
+// The violation types a rule reports are on the surface too, because a user who wants more than a pass or
+// a fail reads the violation rather than its message.
+var (
+	_ archunit.Violation     = archunit.FileCycleViolation{}
+	_ archunit.Violation     = archunit.EmptyTestViolation{}
+	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
+	_ archunit.ViolationKind = archunit.KindFileCycle
+)
+
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
 	// The whole chain through the public surface, dogfooding on this library: no locator, so the project
 	// is the one this test is in, and the scope is a folder of it.
@@ -217,6 +234,66 @@ func TestAMoodIsTakenFromAStoredRuleWithoutChangingIt(t *testing.T) {
 	}
 	if base := selectFiles(t, base); !slices.Contains(base, "common/projection/project_edges.go") {
 		t.Errorf("the stored scope is about %v, want it unchanged by the branch that took a mood", base)
+	}
+}
+
+func TestThisRepositoryHasNoCyclesBetweenItsFiles(t *testing.T) {
+	// A whole rule through the public surface, dogfooding on this library: no locator, no scope verb, so
+	// every file of this repository is held to it. It is also the rule AGENTS.md asks of the layout — one
+	// concept per file, dependencies pointing one way — and a green run here means nothing has to be read
+	// in a circle.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).Should().HaveNoCycles()
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		if violation.Kind() != archunit.KindFileCycle {
+			t.Errorf("%s reports a %s violation, want a cycle", rule, violation.Kind())
+			continue
+		}
+		cycle, ok := violation.(archunit.FileCycleViolation)
+		if !ok {
+			t.Errorf("%s reports a %T, want a FileCycleViolation", rule, violation)
+			continue
+		}
+		// The readable path the report is for, printed here because a cycle is what has to be broken and
+		// the files alone would not say where.
+		t.Errorf("%s: the files %v depend on each other in a circle: %s", rule, cycle.Files(), cycle)
+	}
+}
+
+func TestARuleThatSelectedNothingFailsAsAnEmptyTest(t *testing.T) {
+	// The stale glob one stage further on than the scope test above: a terminal is what turns selecting
+	// nothing into a failure, because `have no cycles` over no file at all would be green forever.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("common/renamed/**").Should().HaveNoCycles()
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 1 {
+		t.Fatalf("%s reports %v, want the one empty-test violation", rule, violations)
+	}
+	if kind := violations[0].Kind(); kind != archunit.KindEmptyTest {
+		t.Errorf("the violation is of kind %q, want %q", kind, archunit.KindEmptyTest)
+	}
+	if _, ok := violations[0].(archunit.EmptyTestViolation); !ok {
+		t.Errorf("%s reports a %T, want an EmptyTestViolation", rule, violations[0])
+	}
+	// And the opt-out for a suite that really means an empty selection.
+	allowed, err := rule.Check(&archunit.CheckOptions{AllowEmptyTests: true})
+	if err != nil {
+		t.Fatalf("%s failed with AllowEmptyTests: %v", rule, err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
 	}
 }
 

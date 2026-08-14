@@ -18,21 +18,28 @@ import (
 // per rule, and a mood stage that had a Should of its own would let a chain say the word twice.
 //
 // Together with FilesShouldNotBuilder it is one of the two thin types over one shared rule — see
-// filesRule — so a predicate is implemented once, for both moods, and the mood reaches it as
-// assertion.Mood rather than as a second code path.
+// filesRule — so a predicate with a meaningful negation is implemented once, for both moods, and the
+// mood reaches it as assertion.Mood rather than as a second code path. The one predicate that is not on
+// both is HaveNoCycles, whose negation would have nothing to report; it is offered here, on the positive
+// mood alone, for the reason assertion.GatherCycleViolations gives.
 type FilesShouldBuilder struct {
 	rule filesRule
 }
 
 // FilesShouldNotBuilder is the negated mood of a rule about files — `project files, in folder
-// "internal/api/**", should not` — and is FilesShouldBuilder's exact twin: same scope, same
-// predicates, same terminals, one flag apart.
+// "internal/api/**", should not` — and is FilesShouldBuilder's twin: the same scope, the same
+// terminals, and every predicate that has a meaningful negation, one flag apart.
 //
 //	rule := archunit.ProjectFiles(nil).InFolder("internal/api/**").ShouldNot()
 //
 // It is what FilesBuilder.ShouldNot returns. The negation is not a second set of rules: it is
 // assertion.Mood threaded into the same assertion, which is what keeps the negative half of the API
 // free of logic of its own.
+//
+// A predicate whose negation would have nothing to report is the one thing the twins do not share:
+// HaveNoCycles is on FilesShouldBuilder alone and deliberately absent here, so that `should not have no
+// cycles` — a rule that fails on the absence of a cycle, with no data to name — cannot be typed. The
+// reason is spelled out in assertion.GatherCycleViolations.
 type FilesShouldNotBuilder struct {
 	rule filesRule
 }
@@ -141,6 +148,25 @@ type filesRule struct {
 // pattern a scope verb rejected is still visible — after the mood, because the rejection ends the
 // sentence rather than sitting inside it.
 func (r filesRule) String() string {
-	stages := append(r.scope.stages(), r.mood.String())
-	return strings.Join(stages, ", ") + r.scope.rejected()
+	return r.render()
+}
+
+// render is String with the stages a predicate and its object add: `project files, path without
+// filename matches "internal/**", should, have no cycles`.
+//
+// Every stage after the mood renders through it, so the sentence is joined in one place and a pattern a
+// scope verb rejected stays at the end of it however many stages were chained on.
+func (r filesRule) render(stages ...string) string {
+	sentence := append(r.scope.stages(), r.mood.String())
+	sentence = append(sentence, stages...)
+	return strings.Join(sentence, ", ") + r.scope.rejected()
+}
+
+// emptyTestOptions are the empty-test guard's options for this rule: the check options' own
+// AllowEmptyTests, the scope verbs the rule was built from, and what it was selecting.
+//
+// Every terminal in this module wires the guard in through it, so `files` — the word the entry point
+// names, and the vocabulary a report says the rule selected nothing of — is spelled once.
+func (r filesRule) emptyTestOptions(options *kernel.CheckOptions) *assertion.EmptyTestOptions {
+	return options.EmptyTestOptions("files", r.scope.selectors...)
 }

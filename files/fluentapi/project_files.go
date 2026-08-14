@@ -141,14 +141,29 @@ func (b FilesBuilder) Selectors() []matching.Filter {
 // The error is a pattern a scope verb rejected — a UserError naming the verb, returned before the
 // project is read — or a project that cannot be located or extracted. It is never a rule failure.
 func (b FilesBuilder) SelectFiles(options *kernel.CheckOptions) ([]string, error) {
+	_, selected, err := b.resolve(options)
+	return selected, err
+}
+
+// resolve is the SOURCE-and-EXTRACT-plus-scope half of a rule about files, in one call: the graph the
+// rule is to be judged against, and the identifiers of the files its scope names, sorted.
+//
+// It is what SelectFiles hands out the second half of and what every terminal in this module runs
+// first. A terminal needs both — the files, to count for the empty-test guard, and the graph, because
+// the dependencies between those files are edges of it — and asking for them separately would extract
+// the project twice or, worse, resolve the scope against a second graph.
+//
+// A pattern a scope verb rejected is returned before the project is read, and the error is otherwise a
+// project that cannot be located or extracted. It is never a rule failure.
+func (b FilesBuilder) resolve(options *kernel.CheckOptions) (extraction.Graph, []string, error) {
 	if b.err != nil {
-		return nil, b.err
+		return nil, nil, b.err
 	}
 	graph, err := options.ExtractGraph(b.locator)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return projection.SelectFiles(graph, b.selectors...), nil
+	return graph, projection.SelectFiles(graph, b.selectors...), nil
 }
 
 // String renders the scope for logs and test failures, as `project files, path without filename
