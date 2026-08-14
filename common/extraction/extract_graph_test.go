@@ -381,6 +381,80 @@ func TestExtractGraphDropsTheImportKindsTheOptionsIgnore(t *testing.T) {
 	}
 }
 
+// ignoreDirectiveProject is a project whose main file asks for two of its own imports to be left out of
+// the graph: one with a bare directive, which holds for every analysis, and one scoped to `layers`, which
+// holds only where that scope is answered to. The third import carries nothing and is the control.
+//
+// It compiles, for the reason fixtureSourceProject does: a directive is a comment, so leaving an import
+// out of the graph leaves it in the build.
+func ignoreDirectiveProject() map[string]string {
+	return map[string]string{
+		"main.go": `package main
+
+import (
+	"fmt" //archunit:ignore
+
+	//archunit:ignore layers
+	"example.com/fixture/internal/api"
+	"example.com/fixture/internal/db"
+)
+
+func main() { fmt.Println(api.Handle(), db.Query()) }
+`,
+		"internal/api/handler.go": `package api
+
+func Handle() string { return "handled" }
+`,
+		"internal/db/conn.go": `package db
+
+func Query() string { return "row" }
+`,
+	}
+}
+
+func TestExtractGraphDropsTheImportsTheFileItselfIgnores(t *testing.T) {
+	root := writeSourceProject(t, ignoreDirectiveProject())
+
+	// Under the defaults: an unscoped directive is honored, because a file saying "not this import" needs
+	// no configuration to be believed, and a scoped one is not, because no analysis answers to a scope.
+	graph := extractGraph(t, root, nil)
+
+	want := NewGraph(
+		SelfEdge("main.go"),
+		SelfEdge("internal/api/handler.go"),
+		SelfEdge("internal/db/conn.go"),
+
+		NewEdge("main.go", "internal/api/handler.go", false, ImportKindPlain),
+		NewEdge("main.go", "internal/db/conn.go", false, ImportKindPlain),
+	)
+	if !slices.Equal(graph, want) {
+		t.Errorf("graph =\n%s\n\nwant\n%s", graph, want)
+	}
+}
+
+func TestExtractGraphHonorsAScopedIgnoreDirectiveOnlyWhereItsScopeIsAnsweredTo(t *testing.T) {
+	root := writeSourceProject(t, ignoreDirectiveProject())
+
+	graph := extractGraph(t, root, &SourceOptions{IgnoreScopes: []string{"layers", "slices"}})
+
+	if _, found := graph.Find("main.go", "internal/api/handler.go"); found {
+		t.Errorf("graph =\n%s\n\nwant the import scoped to layers left out", graph)
+	}
+	// Dropping an import does not drop a file: the ignored package is still a node.
+	if _, found := graph.Find("internal/api/handler.go", "internal/api/handler.go"); !found {
+		t.Errorf("graph =\n%s\n\nwant the ignored package to still be a node", graph)
+	}
+	if _, found := graph.Find("main.go", "internal/db/conn.go"); !found {
+		t.Errorf("graph =\n%s\n\nwant the other imports of the same file kept", graph)
+	}
+
+	// And nowhere else: the same source read by an analysis answering to another name has the dependency.
+	elsewhere := extractGraph(t, root, &SourceOptions{IgnoreScopes: []string{"slices"}})
+	if _, found := elsewhere.Find("main.go", "internal/api/handler.go"); !found {
+		t.Errorf("graph =\n%s\n\nwant the import kept where its scope is not answered to", elsewhere)
+	}
+}
+
 func TestExtractGraphIncludesTestFilesWhenAsked(t *testing.T) {
 	root := writeSourceProject(t, fixtureSourceProject())
 

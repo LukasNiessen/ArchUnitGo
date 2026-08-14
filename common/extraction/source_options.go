@@ -16,7 +16,7 @@ const testDataFolder = "testdata"
 //
 // It is one bag for the whole EXTRACT stage rather than one per function, so that a caller resolves the
 // "nil means defaults" contract once and hands the same value to ExtractSourceFiles and ExtractGraph.
-// The first two fields bear on the walk, the last two only on the graph.
+// The first two fields bear on the walk, the last three only on the graph.
 type SourceOptions struct {
 	// IncludeTestFiles adds the project's _test.go files to the enumeration. It is the same knob as
 	// CheckOptions.IncludeTestFiles, which is where it comes from, and it is off by default: an
@@ -47,6 +47,15 @@ type SourceOptions struct {
 	// depends on no API of it. Empty by default, because dropping an edge is a decision that should be
 	// visible in the test that made it.
 	IgnoredImportKinds ImportKindSet
+	// IgnoreScopes are the ignore-directive scopes this analysis answers to. An import carrying a bare
+	// `//archunit:ignore` is left out of the graph whatever this holds; one carrying a scoped directive —
+	// `//archunit:ignore layers` — is left out only when the directive names one of these. IgnoreDirective
+	// is the whole convention, and it is the same knob as CheckOptions.IgnoreScopes.
+	//
+	// Empty by default, so only unscoped directives are honored: an import ignored for a scope nobody
+	// answers to stays in the graph, and the rule reports the dependency rather than a misspelled scope
+	// name silently passing.
+	IgnoreScopes []string
 }
 
 // DefaultExcludedFolders lists the folder names a walk skips unless a caller says otherwise: the ones
@@ -72,7 +81,7 @@ func DefaultExcludedFolders() []string {
 // starts with this, so that the "nil means defaults" contract is honored in one place instead of being
 // re-derived per field.
 //
-// Both slices are cloned, for the reason CheckOptions clones BuildTags: a struct copy shares the
+// Every slice is cloned, for the reason CheckOptions clones BuildTags: a struct copy shares the
 // slice's backing array, so writing through the resolved copy would reach into the caller's own
 // options. The ExcludedFolders clone is kept non-nil even when it is empty, because nil is how this bag
 // spells "the defaults" and a caller who excluded nothing on purpose must not be handed them back.
@@ -82,6 +91,7 @@ func (o *SourceOptions) WithDefaults() SourceOptions {
 	}
 	resolved := *o
 	resolved.BuildTags = slices.Clone(o.BuildTags)
+	resolved.IgnoreScopes = slices.Clone(o.IgnoreScopes)
 	if o.ExcludedFolders == nil {
 		resolved.ExcludedFolders = DefaultExcludedFolders()
 		return resolved
@@ -114,6 +124,29 @@ func (o *SourceOptions) IgnoresImportKind(kind ImportKind) bool {
 		return false
 	}
 	return o.IgnoredImportKinds.Contains(kind)
+}
+
+// IgnoresImport reports whether one import declaration should be left out of the graph. It is the whole
+// question the extractor asks of an import besides where it points: the flavor of the declaration, and
+// the ignore directive the file wrote on it.
+//
+// The answer is no for a nil options bag unless the file itself asked for it, because an unscoped
+// directive is honored under any options — a file saying "not this import" needs no configuration to be
+// believed.
+func (o *SourceOptions) IgnoresImport(imported ImportInfo) bool {
+	if o.IgnoresImportKind(imported.Kind) {
+		return true
+	}
+	return imported.Ignore.AppliesIn(o.ignoreScopes())
+}
+
+// ignoreScopes is the effective set of scopes a scoped ignore directive is matched against, and nothing
+// at all for a nil options bag.
+func (o *SourceOptions) ignoreScopes() []string {
+	if o == nil {
+		return nil
+	}
+	return o.IgnoreScopes
 }
 
 // excludedFolders is the effective exclusion list, without the copy WithDefaults makes: the walk asks

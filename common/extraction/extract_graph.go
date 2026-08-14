@@ -59,6 +59,9 @@ const edgesPerNodeEstimate = 8
 // # What is left out, and none of it is an error
 //
 //   - imports of a flavor SourceOptions.IgnoredImportKinds names;
+//   - an import the file itself asked to leave out, with an `//archunit:ignore` directive on it, when
+//     that directive applies to this analysis. IgnoreDirective is the whole convention and
+//     SourceOptions.IgnoreScopes is what a scoped one is matched against;
 //   - an import of the project's own code that has no node to point at: a package whose every file the
 //     walk excluded — one under `vendor` or `build` — one whose every file a build constraint excluded,
 //     or one that does not exist at all because it is half-written, renamed or deleted. None of the three
@@ -214,7 +217,7 @@ func (b projectBuild) importEdges(node FileInfo, options *SourceOptions) []Edge 
 
 	edges := make([]Edge, 0, len(imports))
 	for _, imported := range imports {
-		if options.IgnoresImportKind(imported.Kind) {
+		if options.IgnoresImport(imported) {
 			continue
 		}
 		targets, external := b.targets.classify(imported.Path)

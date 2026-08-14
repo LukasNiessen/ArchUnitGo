@@ -143,23 +143,24 @@ func (c *graphCache) clear() {
 //     are one key, and that is the point;
 //   - ExcludedFolders, which decides what the walk enumerates;
 //   - IncludeTestFiles and BuildTags, which decide what the toolchain puts in the build;
-//   - IgnoredImportKinds, which decides which imports become edges.
+//   - IgnoredImportKinds and IgnoreScopes, which decide which imports become edges.
 //
 // Nothing else reaches the extractor, and graph_cache_test.go fails if a field is added to
 // SourceOptions without arriving here.
 //
 // The options are resolved first, so that the three ways of spelling the defaults — a nil bag, a zero
 // bag, and one whose exclusions are nil — are one key, while a caller who excluded nothing on purpose
-// keeps their own. Both lists are sorted, because neither one's order changes what is extracted: an
-// exclusion list is a set, and `-tags=a,b` is the same build as `-tags=b,a`. Every string is quoted, so
-// that a folder named `a b` cannot forge a boundary between two entries.
+// keeps their own. Every list is sorted, because no list's order changes what is extracted: an exclusion
+// list is a set, `-tags=a,b` is the same build as `-tags=b,a`, and a scope is either answered to or not.
+// Every string is quoted, so that a folder named `a b` cannot forge a boundary between two entries.
 func graphCacheKey(root string, options *SourceOptions) string {
 	resolved := options.WithDefaults()
 	folders := slices.Sorted(slices.Values(resolved.ExcludedFolders))
 	tags := slices.Sorted(slices.Values(resolved.BuildTags))
+	scopes := slices.Sorted(slices.Values(resolved.IgnoreScopes))
 
 	return fmt.Sprintf(
-		"root=%q\nfolders=%q\ntests=%t\ntags=%q\nignored=%d",
-		root, folders, resolved.IncludeTestFiles, tags, uint8(resolved.IgnoredImportKinds),
+		"root=%q\nfolders=%q\ntests=%t\ntags=%q\nignored=%d\nscopes=%q",
+		root, folders, resolved.IncludeTestFiles, tags, uint8(resolved.IgnoredImportKinds), scopes,
 	)
 }
