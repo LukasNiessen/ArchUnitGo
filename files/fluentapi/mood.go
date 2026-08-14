@@ -162,11 +162,12 @@ func (r filesRule) render(stages ...string) string {
 	return strings.Join(sentence, ", ") + r.scope.rejected()
 }
 
-// emptyTestOptions are the empty-test guard's options for this rule: the check options' own
-// AllowEmptyTests, the scope verbs the rule was built from, and what it was selecting.
+// selection is the population this rule's scope selected, as the empty-test guard is asked about it: what
+// the rule was selecting, how many files that came to, and the scope verbs that described them.
 //
 // Every terminal in this module wires the guard in through it, so `files` — the word the entry point
-// names, and the vocabulary a report says the rule selected nothing of — is spelled once.
-func (r filesRule) emptyTestOptions(options *kernel.CheckOptions) *assertion.EmptyTestOptions {
-	return options.EmptyTestOptions("files", r.scope.selectors...)
+// names, and the vocabulary a report says the rule selected nothing of — is spelled once. A relational
+// predicate has a second population, its object, and names that one itself.
+func (r filesRule) selection(matched int) kernel.EmptyTestPopulation {
+	return kernel.EmptyTestPopulation{Subject: "files", Matched: matched, Selectors: r.scope.selectors}
 }

@@ -65,7 +65,7 @@ func (c FilesNamingCondition) Check(options *kernel.CheckOptions) ([]assertion.V
 		return nil, err
 	}
 
-	if empty := assertion.GatherEmptyTestViolations(len(selected), c.rule.emptyTestOptions(options)); len(empty) > 0 {
+	if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
 		// A rule with no subject is reported instead of being judged: every file of an empty selection
 		// satisfies every requirement, in either mood, so such a rule would otherwise pass forever.
 		return empty, nil

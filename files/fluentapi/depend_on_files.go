@@ -128,7 +128,7 @@ func (c FilesDependencyCondition) Check(options *kernel.CheckOptions) ([]asserti
 	}
 	objects := projection.SelectFiles(graph, c.objects...)
 
-	if empty := c.gatherEmptyTestViolations(len(selected), len(objects), options); len(empty) > 0 {
+	if empty := options.GatherEmptyTestViolations(c.populations(len(selected), len(objects))...); len(empty) > 0 {
 		// A sentence with no subject, or with no object, is reported instead of being judged: there is no
 		// dependency to find either way, so one mood of such a rule would pass forever and the other would
 		// report every file it selected.
@@ -182,22 +182,26 @@ func (c FilesDependencyCondition) selecting(verb, pattern string, compile func(s
 	return narrowed
 }
 
-// gatherEmptyTestViolations is the empty-test guard over both halves of the sentence: the files the scope
-// selected, and the files the object named. A relational rule has two populations, and either of them being
-// empty is the stale glob the guard exists for — an object naming a folder that has been renamed is exactly
-// the `should not depend on` rule that is green forever.
+// populations are both halves of the sentence, for the empty-test guard: the files the scope selected, and
+// the files the object named. A relational rule has two populations, and either of them being empty is the
+// stale glob the guard exists for — an object naming a folder that has been renamed is exactly the `should
+// not depend on` rule that is green forever.
 //
-// Both are reported when both are empty, because both patterns are then wrong and a reader fixing one would
-// come back for the other. The object is guarded only when the user named one: `depend on files` with nothing
-// chained onto it is every file of the project, so an empty object there is an empty project, which the
-// subject guard has already said.
-func (c FilesDependencyCondition) gatherEmptyTestViolations(subjects, objects int, options *kernel.CheckOptions) []assertion.Violation {
-	empty := assertion.GatherEmptyTestViolations(subjects, c.rule.emptyTestOptions(options))
+// Both are handed over when both are empty, because both patterns are then wrong and a reader fixing one
+// would come back for the other; the guard reports every population it is given. The object is guarded only
+// when the user named one: `depend on files` with nothing chained onto it is every file of the project, so
+// an empty object there is an empty project, which the subject guard has already said.
+func (c FilesDependencyCondition) populations(subjects, objects int) []kernel.EmptyTestPopulation {
+	populations := []kernel.EmptyTestPopulation{c.rule.selection(subjects)}
 	if len(c.objects) == 0 {
-		return empty
+		return populations
 	}
-	// The subject travels as its own vocabulary — `files to depend on` rather than `files` — because the two
-	// halves of the sentence are selected the same way, so a report that only carried the selectors could not
-	// say which half of the rule the user has to go and fix.
-	return append(empty, assertion.GatherEmptyTestViolations(objects, options.EmptyTestOptions("files to depend on", c.objects...))...)
+	// The object's subject word is its own vocabulary — `files to depend on` rather than `files` — because the
+	// two halves of the sentence are selected the same way, so a report that only carried the selectors could
+	// not say which half of the rule the user has to go and fix.
+	return append(populations, kernel.EmptyTestPopulation{
+		Subject:   "files to depend on",
+		Matched:   objects,
+		Selectors: c.objects,
+	})
 }
