@@ -1152,3 +1152,80 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   `testing`" — is skipped again because that package still does not exist. Here the phrasing is nearly
   written already: `Kind`, `File`, `Requirement` and `Mood` are on the violation, and the requirement is the
   user's own words.
+
+## Issue #23 — The empty-test guard on every terminal
+
+- WHY: the guard was already wired into all four terminals of `files` when they landed (issues #18–#20, #22),
+  and `files` is still the only domain module, so "on **every** terminal" could not be delivered by adding a
+  call anywhere. What was missing is the two things that make the claim hold for the terminals nobody has
+  written yet: the guard's *terminal-side* shape lives in the kernel rather than being reinvented per module,
+  and `every` is checked mechanically rather than remembered.
+- WHY: the new kernel file is `common/fluentapi/empty_test_guard.go`, holding `EmptyTestPopulation{Subject,
+  Matched, Selectors}` and `(*CheckOptions).GatherEmptyTestViolations(populations ...EmptyTestPopulation)`.
+  The decision itself stays in `common/assertion` — the method reads `AllowEmptyTests` out of the user's bag
+  through `CheckOptions.EmptyTestOptions` and asks `assertion.GatherEmptyTestViolations` per population — so
+  this adds the *wiring* a terminal repeats and no second implementation of the rule.
+- WHY: the method has the **same name** as the assertion function one layer down, distinguished by its
+  receiver, which is the convention issue #3's matchers set and issue #16's scope verbs followed: a terminal
+  asks the options bag for the guard, and a reader who knows `gather <thing> violations` reads both.
+- WHY: `EmptyTestPopulation` is a *type* rather than three positional arguments, and the method is variadic
+  over it, because the multi-population case is the one a relational terminal has and the one most likely to
+  be got wrong. `files/fluentapi/depend_on_files.go` privately owned that logic; a `layers` rule (`layer A
+  should not access layer B`) has exactly the same two halves, and a `slices` rule has more. Stating it once
+  is the whole of what moved.
+- WHY: four terminals that already passed their tests were touched. It is not a refactor of working code for
+  its own sake: they are the four call sites the shared wiring exists for, and leaving them on the old call
+  would have meant the kernel's guard was used by nothing and the next module would copy the old shape. The
+  renames follow the shift — `filesRule.emptyTestOptions` became `filesRule.selection`, which now answers with
+  the population rather than with an options bag, and `FilesDependencyCondition.gatherEmptyTestViolations`
+  became `populations`, which names both halves of the sentence and no longer gathers anything itself. Their
+  reasoning comments are unchanged.
+- WHY: `EmptyTestPopulation` is **not** re-exported on the public surface. Its `Selectors` field is
+  `[]matching.Filter`, and `matching.Filter` is deliberately not on the surface either — a user names a
+  selector by typing a scope verb, never by constructing one — so an alias would name a type nobody outside
+  the library can fill in. It is the vocabulary a *terminal author* writes with, and terminal authors are
+  inside the module.
+- WHY: `files/fluentapi/empty_test_guard_test.go` has no production twin in that package, which breaks the
+  sibling-stem convention. It is deliberate: the file is one test about a property of *every* terminal of the
+  module, so putting it beside any one of them would say it belonged to that one, and splitting it four ways
+  would be the list-of-terminals the test exists in order not to keep. The stem matches the kernel file the
+  property comes from.
+- WHY: that test finds the terminals by **walking the method sets** (`terminalsOf` → `reachableTerminals`),
+  the way issue #17's `TestTheMoodIsTwoWordsWithNoSynonyms` holds the mood to two words: every method whose
+  single result implements `fluentapi.Checkable`, from both mood builders and then one level further for the
+  object verbs that are chainable and terminal at once — 17 terminals today. A predicate that lands later is
+  swept up without anybody editing the test, which is the only version of "every" that stays true. Two levels
+  is where it stops because an object verb hands back its own type; a third would repeat the same three verbs.
+  `argumentOf` synthesizes a pattern as `**` and a user's function with `reflect.MakeFunc`, and `t.Fatalf`s on
+  any other kind rather than passing a zero value — a verb whose meaning the walk cannot guess could quietly
+  turn the rule into a sentence nobody meant, and the sweep would then hold the guard to nothing. A sanity net
+  fails the test if the six known predicate names are not among what it found, so a walk that has gone blind
+  cannot pass by finding nothing.
+- WHY: `archunit_test.go` gains `TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard`, an `adhere to` rule
+  over this repository: a file that declares a terminal's `Check` method must also mention
+  `GatherEmptyTestViolations`. The reflective sweep covers the module it lives in and cannot see a module that
+  does not exist yet; this one reads every file of the library, so a terminal in `layers/`, `slices/`,
+  `metrics/` or `graph/` that forgets the guard fails here on the day it is written, even if nobody writes a
+  sweep for it. It is `adhere to` because which methods a file declares is exactly what no glob expresses.
+  It looks for `) Check(` — the method declaration — so `Checkable` in `common/fluentapi/checkable.go`, which
+  declares the contract rather than implementing it, is not asked to satisfy it.
+- WHY: both mechanical checks were verified to bite, by temporarily unwiring the guard in
+  `naming_condition.go` (the sweep failed for `HaveName`, `BeInFolder`, `BeInPath` in both moods) and in
+  `have_no_cycles.go` (the dogfood rule reported the file), then reverting. A guard test that cannot fail is
+  the same silent pass the guard itself exists to prevent.
+- WHY: the kernel's own tests are `common/fluentapi/empty_test_guard_test.go`: the unit level over both
+  populations of a relational rule (neither, either and both empty; the opt-out; a nil options bag, which is
+  the defaults and so the guard *on*; the selectors copied on the way to the violation; no population at all,
+  which is a terminal that is not guarded and has nothing to report), and one level above over a hand-built
+  `extraction.Graph` in the shape a relational terminal resolves both halves of its sentence in.
+- WHY: `assertion.GatherEmptyTestViolations`'s signature is unchanged. Making *it* variadic over populations
+  was the other way to state the multi-population case once, but it is the pure layer's decision function —
+  one count, one options bag — and widening it would have churned its own passing tests to move logic that
+  belongs where the terminal is. A closure-taking `Guarded(judge func() (...))` helper was rejected too: it
+  is heavier at the call site, just as forgettable, and `adhere to` must run the guard *between* its two I/O
+  steps rather than around them.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing was removed from it.
+  `GatherEmptyTestViolations` is a method, and that flag cannot guard a method.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — the phrasing in `testing` — is skipped again because that
+  package still does not exist. `EmptyTestViolation` already carries the subject and the selectors, which is
+  the data such a phrasing would read.

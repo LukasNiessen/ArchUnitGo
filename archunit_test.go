@@ -341,6 +341,36 @@ func TestARuleThatSelectedNothingFailsAsAnEmptyTest(t *testing.T) {
 	}
 }
 
+func TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard(t *testing.T) {
+	// The guard held to the word `every`, across the whole library rather than one module: a file that
+	// declares a terminal's Check method has to ask the guard in it. Each module tests its own terminals
+	// through the grammar — files/fluentapi does it by walking its method sets — and this is the rule that
+	// notices a module nobody wrote such a test for, because it reads the source of every package.
+	//
+	// It is written with `adhere to` because that is what the predicate needs to be: which methods a file
+	// declares is not something a pattern over identifiers can say. A rule that passes today and fails the
+	// day a terminal in layers/, slices/, metrics/ or graph/ forgets the guard is the point of it.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).Should().AdhereTo(func(file archunit.FileInfo) bool {
+		// A file that declares no terminal has nothing to guard. The method declaration is what is looked
+		// for and not the word `Check`, so the interface in common/fluentapi — which declares the contract
+		// rather than implementing it — is not asked to satisfy its own requirement.
+		if !strings.Contains(file.Source, ") Check(") {
+			return true
+		}
+		return strings.Contains(file.Source, "GatherEmptyTestViolations(")
+	}, "ask the empty-test guard, if it declares a terminal's Check method")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, violation)
+	}
+}
+
 func TestEveryFileOfThisRepositoryIsNamedTheWayTheLayoutAsksFor(t *testing.T) {
 	// The three predicates dogfooded on this library, as rules a user would write: the file names of this
 	// repository are lower-case with underscores, the packages of common/ live where AGENTS.md puts them, and

@@ -66,7 +66,7 @@ func (c FilesCyclesCondition) Check(options *kernel.CheckOptions) ([]assertion.V
 		return nil, err
 	}
 
-	if empty := assertion.GatherEmptyTestViolations(len(selected), c.rule.emptyTestOptions(options)); len(empty) > 0 {
+	if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
 		// A rule with no subject is reported instead of being judged: no file selected means no
 		// dependency between two of them, so every such rule would otherwise pass forever.
 		return empty, nil
