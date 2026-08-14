@@ -469,3 +469,58 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   checks: the second check shares the first one's graph, `ClearCache` reads the source again,
   `IncludeTestFiles` is a different analysis rather than a cache hit, and a locator naming no project is a
   `UserError`.
+
+## Issue #12 — Extraction: per-line ignore directive
+
+- WHY: the Go spelling is `//archunit:ignore`, not the issue's `# archunit: ignore`. Every directive comment
+  in this language is a `//` line with no space after the slashes and a `tool:verb` word — `//go:build`,
+  `//go:generate`, `//nolint:gochecknoglobals` — and gofmt is what enforces that shape, so a directive
+  written any other way would be reformatted out from under the user. The parser is lenient about the
+  whitespace it accepts, so `// archunit: ignore` transliterated straight from a sibling port still works,
+  but the canonical form is the one the language uses. A `/* */` comment is never a directive: it cannot be
+  the last thing on the line an import is on, so accepting one would accept a spelling every other Go tool
+  disagrees about.
+- WHY: "optionally scoped to named modules" is implemented as *named scopes on the check*, end to end: a
+  bare directive is honored by every analysis, and `//archunit:ignore layers` is honored only by a check
+  whose `CheckOptions.IgnoreScopes` names `layers`. The other reading of the issue — naming the modules the
+  ignore applies to — does not arise in Go, where one import spec is one import path and the directive is
+  already on that line; there is nothing left to name. Scopes follow the `IgnoredImportKinds` precedent and
+  are wired through today rather than being a field nothing reads.
+- WHY: an unanswered or misspelled scope leaves the import **in** the graph. That is the loud direction: the
+  rule then reports a dependency the user thought they had suppressed, whereas honoring an unknown scope
+  would silently swallow real violations for a typo.
+- WHY: the scopes live on `IgnoreDirective` as one comma-separated `Scopes string`, not a `[]string`.
+  `ImportInfo` has to stay comparable — `extract_imports_test.go` compares imports with `!=`, and the
+  directive is a field of it — which is the same reason `Edge` carries an `ImportKindSet` bit set instead of
+  a list. `Names()` is the accessor that hands back the list.
+- WHY: the directive is *not* read from `ast.ImportSpec.Doc` / `.Comment`. Both are empty for shapes a user
+  will actually write — a trailing comment on a lone `import "fmt" //archunit:ignore`, and a trailing
+  comment inside a block when the next line is also a comment — so `newIgnoreDirectives` indexes every
+  comment by the line it is on, marks the lines that hold code, and answers "trailing" and "directly above"
+  from positions. Both blind spots are cases in `ignore_directive_test.go`.
+- WHY: a directive belongs to one import, never to a block or a file. It counts when it trails the import's
+  own line or sits on a comment line above it, with a blank line or a line of code ending the block; a
+  directive above `import (`, or beside the opening parenthesis, applies to nothing. Leaving a whole file
+  out is what `SourceOptions.ExcludedFolders` is for, and a directive that quietly ignored a block would be
+  the kind of invisible suppression the previous note avoids. It does reach across an ordinary comment
+  above the import, so a reason can be written above the directive; and a second `//` on the directive line
+  starts a reason, so prose is never read as a list of scope names.
+- WHY: `CheckOptions.IgnoreScopes` is the fourth knob translated in `CheckOptions.SourceOptions()`, and it
+  sits with the language-neutral knobs rather than the Go-specific ones: the directive convention is a
+  family convention, and only its comment syntax is Go's. It reaches `graphCacheKey` too — two checks
+  answering to different scopes are two analyses of one project, and the cache would otherwise hand the
+  second one the first one's graph.
+- WHY: file stem is `ignore_directive.go`, one concept, as in issues #1, #4, #6, #7, #9 and #11 — no sibling
+  stem names this convention. The parser and the per-file index live there with the type; the *decision* to
+  honor a directive is `SourceOptions.IgnoresImport`, next to `IgnoresImportKind`, because both are the same
+  question the extractor asks of one import.
+- WHY: still no fluent-API integration test through a builder chain — none exists, as in issues #1 to #11.
+  The level above the unit tests is `common/fluentapi`'s two new tests, which do what a terminal will do
+  (`options.ExtractGraph(locator)`) over a fixture whose file marks two of its imports: the bare directive
+  is honored by a default check, the scoped one only by the check that answers to its name.
+- WHY: the per-file index reads `fileSet.PositionFor(position, false)`, not `fileSet.Position(position)`.
+  `Position` applies `//line` directives, and a column-1 one is legal inside an import block — generated Go
+  (goyacc, committed cgo output) has them. Every question the index answers is about *physical* adjacency:
+  trailing this import, the line above holds code, a blank line ended the block. Rewritten numbering can
+  shift or collide two segments, losing a directive or attaching one to an import the file never marked;
+  `TestExtractImportsReadsDirectivesByPhysicalLine` is the file where the adjusted lines swap the two.

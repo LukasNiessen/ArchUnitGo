@@ -41,6 +41,15 @@ type CheckOptions struct {
 	// the flag is honored, and it clears the whole cache rather than this project's entry, for the
 	// reason extraction.ClearGraphCache gives: the reason to clear is that the source moved.
 	ClearCache bool
+	// IgnoreScopes are the ignore-directive scopes this check answers to. An import a file marked with a
+	// bare `//archunit:ignore` is left out of the graph for every rule; one marked with a scoped
+	// directive — `//archunit:ignore layers` — is left out only for a check naming that scope here, and
+	// counts as an ordinary dependency everywhere else.
+	//
+	// Empty by default, so an unscoped directive needs no configuration and a scoped one is honored only
+	// where it was asked for. extraction.IgnoreDirective is the whole convention, including what the
+	// comment looks like and where in a file it goes.
+	IgnoreScopes []string
 
 	// The knobs below are Go-specific: they say how the Go toolchain is pointed at the project, and
 	// have no counterpart in a sibling port.
@@ -76,7 +85,7 @@ type CheckOptions struct {
 // Going through it anyway is what lets a default that is not a zero value be added here later without
 // touching a single terminal.
 //
-// BuildTags is cloned, for the reason EmptyTestOptions clones its selectors: a struct copy shares the
+// Both slices are cloned, for the reason EmptyTestOptions clones its selectors: a struct copy shares the
 // slice's backing array, so a terminal appending a tag to its resolved bag would reach into the user's
 // own options — which a stored half-built rule shares — and into every other copy.
 func (o *CheckOptions) WithDefaults() CheckOptions {
@@ -85,6 +94,7 @@ func (o *CheckOptions) WithDefaults() CheckOptions {
 	}
 	resolved := *o
 	resolved.BuildTags = slices.Clone(o.BuildTags)
+	resolved.IgnoreScopes = slices.Clone(o.IgnoreScopes)
 	return resolved
 }
 
@@ -127,14 +137,14 @@ func (o *CheckOptions) EmptyTestOptions(subject string, selectors ...matching.Fi
 }
 
 // SourceOptions translates these check options into the extraction stage's own options, the way
-// EmptyTestOptions translates them into the empty-test guard's. It is where the three Go-specific knobs
-// cross from the bag a user filled in to the walk and the toolchain that read it, in one place, so that
-// a terminal never assembles a second one by hand and finds it disagreeing with the first.
+// EmptyTestOptions translates them into the empty-test guard's. It is where the knobs that describe the
+// analysis cross from the bag a user filled in to the walk and the toolchain that read it, in one place,
+// so that a terminal never assembles a second one by hand and finds it disagreeing with the first.
 //
 // Folder exclusions have no knob on the check options, so the enumeration's own defaults apply —
 // vendored dependencies and build output, plus everything the Go toolchain itself ignores.
 //
-// BuildTags arrives already cloned, from WithDefaults, so the extraction bag does not share an array
+// Both slices arrive already cloned, from WithDefaults, so the extraction bag does not share an array
 // with the user's own options.
 func (o *CheckOptions) SourceOptions() *extraction.SourceOptions {
 	resolved := o.WithDefaults()
@@ -142,6 +152,7 @@ func (o *CheckOptions) SourceOptions() *extraction.SourceOptions {
 		IncludeTestFiles:   resolved.IncludeTestFiles,
 		BuildTags:          resolved.BuildTags,
 		IgnoredImportKinds: resolved.IgnoredImportKinds,
+		IgnoreScopes:       resolved.IgnoreScopes,
 	}
 }
 

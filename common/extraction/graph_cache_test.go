@@ -239,6 +239,35 @@ func TestGraphCacheKeyIsOneKeyForEverySpellingOfTheDefaults(t *testing.T) {
 	}
 }
 
+func TestGraphCacheKeyIgnoresTheOrderOfAList(t *testing.T) {
+	// A scope is either answered to or not, and `-tags=a,b` is the same build as `-tags=b,a`, so neither
+	// list's order changes what is extracted — and two orderings of one analysis have to be one entry.
+	tests := []struct {
+		name  string
+		one   *SourceOptions
+		other *SourceOptions
+	}{
+		{
+			name:  "build tags",
+			one:   &SourceOptions{BuildTags: []string{"integration", "e2e"}},
+			other: &SourceOptions{BuildTags: []string{"e2e", "integration"}},
+		},
+		{
+			name:  "ignore scopes",
+			one:   &SourceOptions{IgnoreScopes: []string{"layers", "slices"}},
+			other: &SourceOptions{IgnoreScopes: []string{"slices", "layers"}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got, want := graphCacheKey("/project", test.other), graphCacheKey("/project", test.one); got != want {
+				t.Errorf("key =\n%s\n\nwant the key of the same list in the other order\n%s", got, want)
+			}
+		})
+	}
+}
+
 func TestGraphCacheKeyChangesWithEveryInputThatChangesTheGraph(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -259,6 +288,15 @@ func TestGraphCacheKeyChangesWithEveryInputThatChangesTheGraph(t *testing.T) {
 		}},
 		{name: "another import kind dropped", root: "/project", options: &SourceOptions{
 			IgnoredImportKinds: NewImportKindSet(ImportKindDot),
+		}},
+		{name: "an ignore scope answered to", root: "/project", options: &SourceOptions{
+			IgnoreScopes: []string{"layers"},
+		}},
+		{name: "another ignore scope", root: "/project", options: &SourceOptions{
+			IgnoreScopes: []string{"slices"},
+		}},
+		{name: "both of them", root: "/project", options: &SourceOptions{
+			IgnoreScopes: []string{"layers", "slices"},
 		}},
 	}
 

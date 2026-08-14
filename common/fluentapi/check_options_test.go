@@ -43,6 +43,9 @@ func TestNilCheckOptionsMeansTheDefaults(t *testing.T) {
 	if defaults.BuildTags != nil {
 		t.Errorf("BuildTags defaults to %v, want the toolchain's own", defaults.BuildTags)
 	}
+	if defaults.IgnoreScopes != nil {
+		t.Errorf("IgnoreScopes defaults to %v, want no scoped ignore directive honored", defaults.IgnoreScopes)
+	}
 	if got := options.LogWriter(); got != nil {
 		t.Errorf("LogWriter() = %v, want nil: a library logs nowhere until a writer is injected", got)
 	}
@@ -52,12 +55,13 @@ func TestNilCheckOptionsMeansTheDefaults(t *testing.T) {
 }
 
 func TestCheckOptionsWithDefaultsIsACopy(t *testing.T) {
-	// Every field is set to a non-zero value, so that a resolution which drops one is visible. BuildTags
-	// is the only field a struct copy does not separate: the copy shares its backing array.
+	// Every field is set to a non-zero value, so that a resolution which drops one is visible. The two
+	// slices are the fields a struct copy does not separate: the copy shares their backing arrays.
 	options := &fluentapi.CheckOptions{
 		AllowEmptyTests:    true,
 		Logging:            &bytes.Buffer{},
 		ClearCache:         true,
+		IgnoreScopes:       []string{"layers"},
 		IncludeTestFiles:   true,
 		IgnoredImportKinds: extraction.NewImportKindSet(extraction.ImportKindBlank),
 		BuildTags:          []string{"integration"},
@@ -72,25 +76,34 @@ func TestCheckOptionsWithDefaultsIsACopy(t *testing.T) {
 	}
 
 	resolved.BuildTags[0] = "e2e"
+	resolved.IgnoreScopes[0] = "slices"
 
 	// A terminal resolves the bag once and may well pass the value around; the user's own options,
 	// which a stored half-built rule shares, must not move underneath them.
 	if options.BuildTags[0] != "integration" {
 		t.Errorf("the caller's build tags changed with the resolved copy: %v", options.BuildTags)
 	}
+	if options.IgnoreScopes[0] != "layers" {
+		t.Errorf("the caller's ignore scopes changed with the resolved copy: %v", options.IgnoreScopes)
+	}
 }
 
 func TestCheckOptionsWithDefaultsCopiesAreIndependentOfEachOther(t *testing.T) {
 	// Spare capacity in the parent slice is what makes the sibling case bite: without a copy, both
 	// appends write the same array slot, and the second one wins for both.
-	options := &fluentapi.CheckOptions{BuildTags: append(make([]string, 0, 4), "integration")}
+	options := &fluentapi.CheckOptions{
+		IgnoreScopes: append(make([]string, 0, 4), "layers"),
+		BuildTags:    append(make([]string, 0, 4), "integration"),
+	}
 
 	first := options.WithDefaults()
 	second := options.WithDefaults()
 	first.BuildTags = append(first.BuildTags, "linux")
 	second.BuildTags = append(second.BuildTags, "darwin")
+	first.IgnoreScopes = append(first.IgnoreScopes, "slices")
+	second.IgnoreScopes = append(second.IgnoreScopes, "files")
 
-	// Two terminals resolve the same stored rule's options; neither may see the other's tags.
+	// Two terminals resolve the same stored rule's options; neither may see the other's tags or scopes.
 	if !reflect.DeepEqual(first.BuildTags, []string{"integration", "linux"}) {
 		t.Errorf("the first copy's build tags are %v, want its own append", first.BuildTags)
 	}
@@ -99,6 +112,15 @@ func TestCheckOptionsWithDefaultsCopiesAreIndependentOfEachOther(t *testing.T) {
 	}
 	if !reflect.DeepEqual(options.BuildTags, []string{"integration"}) {
 		t.Errorf("the caller's build tags are %v, want the one tag it was built with", options.BuildTags)
+	}
+	if !reflect.DeepEqual(first.IgnoreScopes, []string{"layers", "slices"}) {
+		t.Errorf("the first copy's ignore scopes are %v, want its own append", first.IgnoreScopes)
+	}
+	if !reflect.DeepEqual(second.IgnoreScopes, []string{"layers", "files"}) {
+		t.Errorf("the second copy's ignore scopes are %v, want its own append", second.IgnoreScopes)
+	}
+	if !reflect.DeepEqual(options.IgnoreScopes, []string{"layers"}) {
+		t.Errorf("the caller's ignore scopes are %v, want the one scope it was built with", options.IgnoreScopes)
 	}
 }
 
@@ -249,6 +271,97 @@ func TestCheckOptionsSourceOptionsCarryTheGoSpecificKnobs(t *testing.T) {
 	// the user's own options — which a stored half-built rule shares.
 	if options.BuildTags[0] != "integration" {
 		t.Errorf("the user's build tags changed with the translated bag: %v", options.BuildTags)
+	}
+}
+
+func TestCheckOptionsSourceOptionsCarryTheIgnoreScopes(t *testing.T) {
+	// The scopes a check answers to have to reach the extractor, because that is where a directive in the
+	// source is matched against them, and there is nothing else a scope does.
+	options := &fluentapi.CheckOptions{IgnoreScopes: []string{"layers", "slices"}}
+
+	source := options.SourceOptions()
+
+	if !slices.Equal(source.IgnoreScopes, []string{"layers", "slices"}) {
+		t.Errorf("IgnoreScopes = %v, want the scopes the user asked for", source.IgnoreScopes)
+	}
+	// The question the extractor actually asks, on both kinds of directive.
+	unscoped := extraction.ImportInfo{Path: "example.com/dependency", Ignore: extraction.IgnoreDirective{Present: true}}
+	if !source.IgnoresImport(unscoped) {
+		t.Error("the translated options keep an import the file marked with a bare directive")
+	}
+	scoped := extraction.ImportInfo{
+		Path:   "example.com/dependency",
+		Ignore: extraction.IgnoreDirective{Present: true, Scopes: "layers"},
+	}
+	if !source.IgnoresImport(scoped) {
+		t.Error("the translated options keep an import marked for a scope the check answers to")
+	}
+	elsewhere := extraction.ImportInfo{
+		Path:   "example.com/dependency",
+		Ignore: extraction.IgnoreDirective{Present: true, Scopes: "files"},
+	}
+	if source.IgnoresImport(elsewhere) {
+		t.Error("the translated options drop an import marked for a scope the check does not answer to")
+	}
+
+	// Defaults: only the directives that need no configuration.
+	byDefault := (&fluentapi.CheckOptions{}).SourceOptions()
+	if len(byDefault.IgnoreScopes) != 0 {
+		t.Errorf("IgnoreScopes = %v by default, want none", byDefault.IgnoreScopes)
+	}
+	if !byDefault.IgnoresImport(unscoped) || byDefault.IgnoresImport(scoped) {
+		t.Error("the default options do not honor exactly the unscoped directives")
+	}
+
+	source.IgnoreScopes[0] = "files"
+
+	// Cloned on the way through, for the reason the tags are: the extraction bag must not share an array
+	// with the user's own options.
+	if options.IgnoreScopes[0] != "layers" {
+		t.Errorf("the user's ignore scopes changed with the translated bag: %v", options.IgnoreScopes)
+	}
+}
+
+func TestCheckOptionsExtractGraphHonorsTheIgnoreDirectivesTheSourceWrote(t *testing.T) {
+	// The whole convention through the public surface, which is the only place it is visible as a feature:
+	// a file marks two of its imports, and a check decides which of the two marks it answers to.
+	t.Cleanup(extraction.ClearGraphCache)
+	extraction.ClearGraphCache()
+	root := writeFixtureProject(t)
+	writeFixtureFile(t, root, "handler.go", `package fixture
+
+import (
+	"errors" //archunit:ignore
+
+	//archunit:ignore layers
+	"strings"
+	"sort"
+)
+
+var _ = []any{errors.New, strings.TrimSpace, sort.Strings}
+`)
+	locator := &extraction.ProjectLocator{Directory: root}
+
+	byDefault := extractGraph(t, &fluentapi.CheckOptions{}, locator)
+	scoped := extractGraph(t, &fluentapi.CheckOptions{IgnoreScopes: []string{"layers"}}, locator)
+
+	if _, found := byDefault.Find("handler.go", "errors"); found {
+		t.Errorf("graph =\n%s\n\nwant the import the file marked with a bare directive left out", byDefault)
+	}
+	if _, found := byDefault.Find("handler.go", "strings"); !found {
+		t.Errorf("graph =\n%s\n\nwant the scoped directive ignored by a check that answers to no scope", byDefault)
+	}
+	if _, found := byDefault.Find("handler.go", "sort"); !found {
+		t.Errorf("graph =\n%s\n\nwant the unmarked import kept", byDefault)
+	}
+
+	// The scopes reach the cache key as well as the extractor: were they not part of it, this second check
+	// would be handed the graph the first one cached, with the dependency still in it.
+	if _, found := scoped.Find("handler.go", "strings"); found {
+		t.Errorf("graph =\n%s\n\nwant the import scoped to layers left out of a check answering to layers", scoped)
+	}
+	if _, found := scoped.Find("handler.go", "sort"); !found {
+		t.Errorf("graph =\n%s\n\nwant the unmarked import kept", scoped)
 	}
 }
 
