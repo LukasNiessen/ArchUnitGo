@@ -21,6 +21,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
+	filesextraction "github.com/LukasNiessen/ArchUnitGo/files/extraction"
 	filesapi "github.com/LukasNiessen/ArchUnitGo/files/fluentapi"
 )
 
@@ -79,6 +80,21 @@ type Circuit = cycles.Circuit
 // it was matched against, and the mood the rule was written in.
 type FileNamingViolation = filesassertion.NamingViolation
 
+// FileInfo is one of the project's files as a user's own predicate sees it: its identifier, its name without
+// the extension, that extension, its folder, its full source text and how many of its lines carry something.
+// It is what the function passed to `should adhere to` is handed, one per selected file.
+type FileInfo = filesextraction.FileInfo
+
+// FilePredicate is the rule a user writes themselves: a question about one file, answered yes or no. It is the
+// first argument of `adhere to`, and `should` requires it to answer yes about every selected file while
+// `should not` forbids it from ever doing so.
+type FilePredicate = filesassertion.FilePredicate
+
+// FileAdherenceViolation says that one file does not satisfy the predicate a rule was given, or does satisfy it
+// where the rule forbade it. It is what `should adhere to` and `should not adhere to` report, one per offending
+// file — carrying the file, the requirement in the words the user wrote beside their function, and the mood.
+type FileAdherenceViolation = filesassertion.AdherenceViolation
+
 // FileDependencyViolation says that one file depends on the files a rule named where the rule forbids it, or
 // on none of them where the rule requires it. It is what `should depend on files` and `should not depend on
 // files` report, one per offending file — carrying the file, the object's selectors, the dependencies actually
@@ -94,6 +110,8 @@ const (
 	KindFileNaming = filesassertion.KindFileNaming
 	// KindFileDependency is the kind of FileDependencyViolation.
 	KindFileDependency = filesassertion.KindFileDependency
+	// KindFileAdherence is the kind of FileAdherenceViolation.
+	KindFileAdherence = filesassertion.KindFileAdherence
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -128,6 +146,11 @@ type FilesNamingCondition = filesapi.FilesNamingCondition
 // InFolder, InPath — are chainable and combined with AND, and it is a Checkable, so a built rule can be
 // stored, passed to a helper or kept in a list of the suite's rules.
 type FilesDependencyCondition = filesapi.FilesDependencyCondition
+
+// FilesAdherenceCondition is the terminal of `project files, ..., should, adhere to (a function), "be at most
+// 400 lines long"`, which AdhereTo returns on either mood. It is a Checkable, so a built rule can be stored,
+// passed to a helper or kept in a list of the suite's rules.
+type FilesAdherenceCondition = filesapi.FilesAdherenceCondition
 
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.

@@ -44,6 +44,21 @@ var (
 	_ archunit.FilesDependencyCondition = archunit.ProjectFiles(nil).Should().DependOnFiles().InPath("common/**/*.go")
 )
 
+// The rule whose predicate the user writes themselves, in both moods, is one terminal type — and the function
+// it takes and the file that function is handed are named on the surface too, so that a predicate can be
+// declared as a variable, stored beside the rules it is used by or shared between two of them.
+var (
+	_ archunit.Checkable               = archunit.ProjectFiles(nil).Should().AdhereTo(isGoFile, "be a Go file")
+	_ archunit.FilesAdherenceCondition = archunit.ProjectFiles(nil).ShouldNot().AdhereTo(isGoFile, "be a Go file")
+	_ archunit.FilePredicate           = isGoFile
+)
+
+// isGoFile is a user predicate written the way a user would write one: a question about one archunit.FileInfo,
+// answered from the fields the public surface names on it.
+func isGoFile(file archunit.FileInfo) bool {
+	return file.Extension == ".go" && file.NonBlankLineCount > 0
+}
+
 // The violation types a rule reports are on the surface too, because a user who wants more than a pass or
 // a fail reads the violation rather than its message.
 var (
@@ -51,12 +66,15 @@ var (
 	_ archunit.Violation     = archunit.EmptyTestViolation{}
 	_ archunit.Violation     = archunit.FileNamingViolation{}
 	_ archunit.Violation     = archunit.FileDependencyViolation{}
+	_ archunit.Violation     = archunit.FileAdherenceViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
 	_ archunit.ViolationKind = archunit.KindFileDependency
+	_ archunit.ViolationKind = archunit.KindFileAdherence
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
+	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
 )
 
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
@@ -504,6 +522,78 @@ func TestADependencyRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 	}
 	if !slices.Contains(offenders, "files/fluentapi/depend_on_files.go") {
 		t.Errorf("%s reports %v, want the file that compiles the object's patterns among them", rule, offenders)
+	}
+}
+
+func TestThisRepositoryAdheresToTheConventionsNoGlobExpresses(t *testing.T) {
+	// `adhere to` dogfooded on this library: three conventions about the contents of a file, which is exactly
+	// what no pattern over identifiers can say. The predicate is a Go function, so these read as the rules a
+	// user would write for their own project — and the message beside each one is what a failure would say.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rules := []archunit.FilesAdherenceCondition{
+		// Every file is gofmt'ed, and the part of that a rule can see from the text is the final newline.
+		archunit.ProjectFiles(nil).Should().AdhereTo(func(file archunit.FileInfo) bool {
+			return strings.HasSuffix(file.Source, "\n")
+		}, "end with a newline"),
+		// Every file of this repository is Go source with something in it.
+		archunit.ProjectFiles(nil).Should().AdhereTo(isGoFile, "be a Go file with something in it"),
+		// AGENTS.md: the assertion half of a module is pure, so it does not reach for the filesystem. The
+		// linter holds this repository to it through depguard; here the library says it about itself.
+		archunit.ProjectFiles(nil).InFolder("files/assertion").ShouldNot().AdhereTo(func(file archunit.FileInfo) bool {
+			return strings.Contains(file.Source, `"os"`) || strings.Contains(file.Source, `"path/filepath"`)
+		}, "import the filesystem"),
+	}
+
+	for _, rule := range rules {
+		t.Run(rule.String(), func(t *testing.T) {
+			violations, err := rule.Check(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", rule, err)
+			}
+			for _, violation := range violations {
+				t.Errorf("%s: %s", rule, violation)
+			}
+		})
+	}
+}
+
+func TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.T) {
+	// The failing half, because a rule that cannot fail says nothing: a size limit this repository does not
+	// keep, over one folder of it. The violation carries the file, the words the rule was written with and the
+	// mood — all a report can have, because the rule itself was a function.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("files/assertion").Should().AdhereTo(func(file archunit.FileInfo) bool {
+		return file.NonBlankLineCount <= 20
+	}, "be at most 20 lines long")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) == 0 {
+		t.Fatalf("%s reports nothing, want the files of that folder that are longer than that", rule)
+	}
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindFileAdherence {
+			t.Errorf("%s reports a %s violation, want an adherence one", rule, kind)
+			continue
+		}
+		adherence, ok := violation.(archunit.FileAdherenceViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a FileAdherenceViolation", rule, violation)
+		}
+		if adherence.Requirement != "be at most 20 lines long" {
+			t.Errorf("the violation of %s says %q, want the message the rule was written with", adherence.File, adherence.Requirement)
+		}
+		if adherence.Mood != archunit.Should {
+			t.Errorf("the violation of %s was judged in mood %s, want %s", adherence.File, adherence.Mood, archunit.Should)
+		}
+		if !strings.HasPrefix(adherence.File, "files/assertion/") {
+			t.Errorf("%s reports %q, want only files the scope selected", rule, adherence.File)
+		}
 	}
 }
 
