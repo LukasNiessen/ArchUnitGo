@@ -24,13 +24,27 @@ var (
 	_ archunit.FilesCyclesCondition = archunit.ProjectFiles(nil).Should().HaveNoCycles()
 )
 
+// The three self-contained naming and location rules, in both moods, are one terminal type — and they are
+// Checkables like every other built rule, so a suite can keep them in one list.
+var (
+	_ archunit.Checkable            = archunit.ProjectFiles(nil).Should().HaveName("*.go")
+	_ archunit.FilesNamingCondition = archunit.ProjectFiles(nil).ShouldNot().HaveName("*.go")
+	_ archunit.FilesNamingCondition = archunit.ProjectFiles(nil).Should().BeInFolder("common/**")
+	_ archunit.FilesNamingCondition = archunit.ProjectFiles(nil).ShouldNot().BeInFolder("common/**")
+	_ archunit.FilesNamingCondition = archunit.ProjectFiles(nil).Should().BeInPath("common/**/*.go")
+	_ archunit.FilesNamingCondition = archunit.ProjectFiles(nil).ShouldNot().BeInPath("common/**/*.go")
+)
+
 // The violation types a rule reports are on the surface too, because a user who wants more than a pass or
 // a fail reads the violation rather than its message.
 var (
 	_ archunit.Violation     = archunit.FileCycleViolation{}
 	_ archunit.Violation     = archunit.EmptyTestViolation{}
+	_ archunit.Violation     = archunit.FileNamingViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
+	_ archunit.ViolationKind = archunit.KindFileNaming
+	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 )
 
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
@@ -294,6 +308,106 @@ func TestARuleThatSelectedNothingFailsAsAnEmptyTest(t *testing.T) {
 	}
 	if len(allowed) != 0 {
 		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
+	}
+}
+
+func TestEveryFileOfThisRepositoryIsNamedTheWayTheLayoutAsksFor(t *testing.T) {
+	// The three predicates dogfooded on this library, as rules a user would write: the file names of this
+	// repository are lower-case with underscores, the packages of common/ live where AGENTS.md puts them, and
+	// a named file is where it is expected to be. Real conventions, so a green run is worth something.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rules := []archunit.FilesNamingCondition{
+		// Snake case, the convention the linter also holds this repository to, spelled as a rule here so
+		// that the library says it about itself.
+		archunit.ProjectFiles(nil).Should().HaveName("[_a-z][_a-z0-9]*.go"),
+		// Nothing in the shared kernel sits outside it, whichever folder of it a file is in.
+		archunit.ProjectFiles(nil).InFolder("common/**").Should().BeInFolder("common/**"),
+		// A rule about one file: the cycle detection lives with the other cycle code.
+		archunit.ProjectFiles(nil).WithName("tarjan_scc.go").Should().BeInPath("common/projection/cycles/*.go"),
+		// And the negations of the same three, which is the half of the API most rules are written in.
+		archunit.ProjectFiles(nil).ShouldNot().HaveName("*.java"),
+		archunit.ProjectFiles(nil).InFolder("common/**").ShouldNot().BeInFolder("files/**"),
+		archunit.ProjectFiles(nil).ShouldNot().BeInPath("**/legacy/**"),
+	}
+
+	for _, rule := range rules {
+		t.Run(rule.String(), func(t *testing.T) {
+			violations, err := rule.Check(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", rule, err)
+			}
+			for _, violation := range violations {
+				t.Errorf("%s: %s", rule, violation)
+			}
+		})
+	}
+}
+
+func TestANamingRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.T) {
+	// The failing half, because a rule that cannot fail says nothing: one folder of this repository held to
+	// the name of one of its own files. The violation carries the file, the requirement and the mood, which
+	// is what a report needs in order to phrase the failure itself.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("common/matching").Should().HaveName("regex_factory.go")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	offenders := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindFileNaming {
+			t.Errorf("%s reports a %s violation, want a naming one", rule, kind)
+			continue
+		}
+		naming, ok := violation.(archunit.FileNamingViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a FileNamingViolation", rule, violation)
+		}
+		if naming.Mood != archunit.Should {
+			t.Errorf("the violation of %s was judged in mood %s, want %s", naming.File, naming.Mood, archunit.Should)
+		}
+		if source := naming.Required.Pattern().Source(); source != "regex_factory.go" {
+			t.Errorf("the violation quotes %q, want the pattern the rule was written with", source)
+		}
+		offenders = append(offenders, naming.File)
+	}
+
+	want := []string{"common/matching/filter.go", "common/matching/match_target.go"}
+	if !slices.Equal(offenders, want) {
+		t.Errorf("%s reports %v, want the folder's other files, %v", rule, offenders, want)
+	}
+}
+
+func TestTheTwoMoodsOfANamingRuleAreComplementaryOnThePublicSurface(t *testing.T) {
+	// One scope, one pattern, both moods: every selected file offends exactly one of the two rules, which is
+	// what it means for the negation to be a flag rather than a second implementation.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	base := archunit.ProjectFiles(nil).InFolder("common/**")
+	required := base.Should().BeInFolder("common/matching")
+	forbidden := base.ShouldNot().BeInFolder("common/matching")
+
+	elsewhere, err := required.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", required, err)
+	}
+	inside, err := forbidden.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", forbidden, err)
+	}
+
+	selected := selectFiles(t, base)
+	if len(elsewhere)+len(inside) != len(selected) {
+		t.Errorf("%s reports %d files and %s reports %d, want the %d selected files split between them",
+			required, len(elsewhere), forbidden, len(inside), len(selected))
+	}
+	if len(inside) == 0 || len(elsewhere) == 0 {
+		t.Errorf("%s reports %d and %s reports %d, want both moods to have something to say about this repository",
+			required, len(elsewhere), forbidden, len(inside))
 	}
 }
 
