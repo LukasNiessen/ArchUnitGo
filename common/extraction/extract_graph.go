@@ -75,7 +75,8 @@ const edgesPerNodeEstimate = 8
 //
 // Extracting a graph runs the Go toolchain once over the whole project and then parses the header of
 // every file. It is the expensive half of a check, and the reason every rule in a suite is meant to
-// share one graph — which is what CheckOptions.ClearCache is the escape hatch from.
+// share one graph: CachedGraph is the memo that makes them, this function is the extraction itself, and
+// ClearGraphCache and CheckOptions.ClearCache are the escape hatches from the memo.
 func ExtractGraph(root string, options *SourceOptions) (Graph, error) {
 	resolved := options.WithDefaults()
 

@@ -2,11 +2,15 @@ package fluentapi_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 
+	"github.com/LukasNiessen/ArchUnitGo/common/archerror"
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
@@ -245,6 +249,123 @@ func TestCheckOptionsSourceOptionsCarryTheGoSpecificKnobs(t *testing.T) {
 	// the user's own options — which a stored half-built rule shares.
 	if options.BuildTags[0] != "integration" {
 		t.Errorf("the user's build tags changed with the translated bag: %v", options.BuildTags)
+	}
+}
+
+func TestCheckOptionsExtractGraphSharesOneGraphBetweenChecks(t *testing.T) {
+	// What a terminal does with a rule, twice, the way a suite does it: locate the project, extract it,
+	// and the second rule onwards gets the graph the first one paid for. The fixture gains a file between
+	// the two checks, so a second extraction would be visible.
+	t.Cleanup(extraction.ClearGraphCache)
+	extraction.ClearGraphCache()
+	root := writeFixtureProject(t)
+	locator := &extraction.ProjectLocator{Directory: root}
+
+	first := extractGraph(t, &fluentapi.CheckOptions{}, locator)
+	writeFixtureFile(t, root, "later.go", "package fixture\n\nfunc later() {}\n")
+	second := extractGraph(t, &fluentapi.CheckOptions{}, locator)
+
+	if _, found := first.Find("fixture.go", "fixture.go"); !found {
+		t.Fatalf("graph =\n%s\n\nwant the project's own file as a node", first)
+	}
+	if !slices.Equal(second, first) {
+		t.Errorf("the second check extracted\n%s\n\nwant the graph the first one cached\n%s", second, first)
+	}
+}
+
+func TestCheckOptionsClearCacheMakesTheCheckReadTheSourceAgain(t *testing.T) {
+	// The escape hatch, on the flag a user sets: this test is itself the case it exists for — a fixture
+	// project written and then changed inside one process.
+	t.Cleanup(extraction.ClearGraphCache)
+	extraction.ClearGraphCache()
+	root := writeFixtureProject(t)
+	locator := &extraction.ProjectLocator{Directory: root}
+
+	extractGraph(t, &fluentapi.CheckOptions{}, locator)
+	writeFixtureFile(t, root, "later.go", "package fixture\n\nfunc later() {}\n")
+	cleared := extractGraph(t, &fluentapi.CheckOptions{ClearCache: true}, locator)
+
+	if _, found := cleared.Find("later.go", "later.go"); !found {
+		t.Errorf("graph =\n%s\n\nwant the file written since the last check", cleared)
+	}
+	// And the check that cleared the cache still filled it, so the rules after it in the suite share its
+	// graph rather than each extracting one of their own. The fixture gains a third file first, so that a
+	// check which cleared the cache *instead* of filling it — clearing after the extraction rather than
+	// before — is visible as that file arriving in the next check's graph.
+	writeFixtureFile(t, root, "latest.go", "package fixture\n\nfunc latest() {}\n")
+	reused := extractGraph(t, &fluentapi.CheckOptions{}, locator)
+	if !slices.Equal(reused, cleared) {
+		t.Errorf("the next check extracted\n%s\n\nwant the graph the cleared one cached\n%s", reused, cleared)
+	}
+	if _, found := reused.Find("latest.go", "latest.go"); found {
+		t.Errorf("graph =\n%s\n\nwant the memoised graph, which was extracted before latest.go existed", reused)
+	}
+}
+
+func TestCheckOptionsExtractGraphTellsTwoAnalysesOfOneProjectApart(t *testing.T) {
+	t.Cleanup(extraction.ClearGraphCache)
+	extraction.ClearGraphCache()
+	root := writeFixtureProject(t)
+	writeFixtureFile(t, root, "fixture_test.go", "package fixture\n\nimport \"testing\"\n\nfunc TestFixture(*testing.T) {}\n")
+	locator := &extraction.ProjectLocator{Directory: root}
+
+	production := extractGraph(t, &fluentapi.CheckOptions{}, locator)
+	withTests := extractGraph(t, &fluentapi.CheckOptions{IncludeTestFiles: true}, locator)
+
+	// The Go-specific knobs reach the cache key, not just the extractor: a rule that holds the tests to
+	// the same rules must not be answered with the graph of the production code alone.
+	if _, found := production.Find("fixture_test.go", "fixture_test.go"); found {
+		t.Errorf("graph =\n%s\n\nwant a rule about the production code to leave the test file out", production)
+	}
+	if _, found := withTests.Find("fixture_test.go", "fixture_test.go"); !found {
+		t.Errorf("graph =\n%s\n\nwant the test file the options asked for", withTests)
+	}
+}
+
+func TestCheckOptionsExtractGraphRejectsALocatorThatIsNotAProject(t *testing.T) {
+	// Not a rule failure and not a violation: the library was pointed at something that is not a Go
+	// project, and only the caller can say where the project really is.
+	notAProject := t.TempDir()
+
+	_, err := (&fluentapi.CheckOptions{}).ExtractGraph(&extraction.ProjectLocator{Directory: notAProject})
+
+	var user *archerror.UserError
+	if !errors.As(err, &user) {
+		t.Fatalf("ExtractGraph error = %v, want a *archerror.UserError", err)
+	}
+	if !errors.Is(err, extraction.ErrModuleFileNotFound) {
+		t.Errorf("ExtractGraph error = %v, want it to wrap ErrModuleFileNotFound", err)
+	}
+}
+
+// extractGraph is the SOURCE-and-EXTRACT half of a terminal: the one call a rule makes to get the graph
+// it is checked against.
+func extractGraph(t *testing.T, options *fluentapi.CheckOptions, locator *extraction.ProjectLocator) extraction.Graph {
+	t.Helper()
+
+	graph, err := options.ExtractGraph(locator)
+	if err != nil {
+		t.Fatalf("ExtractGraph failed: %v", err)
+	}
+	return graph
+}
+
+// writeFixtureProject writes the smallest project a check has anything to say about — a module and one
+// file that is a node of it — into a directory of this test's own.
+func writeFixtureProject(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	writeFixtureFile(t, root, "go.mod", "module example.com/fixture\n\ngo 1.26\n")
+	writeFixtureFile(t, root, "fixture.go", "package fixture\n\nfunc Fixture() {}\n")
+	return root
+}
+
+func writeFixtureFile(t *testing.T, root, name, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+		t.Fatalf("writing %q failed: %v", name, err)
 	}
 }
 

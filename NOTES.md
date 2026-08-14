@@ -416,3 +416,56 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   above, end to end), `TestExtractGraphMergesParallelImportsOfOneOfItsOwnPackages` (the internal half of the
   merge — two imports of a two-file package are four edges before it and two after) and
   `TestExtractGraphSplitsIntoOneNodePerFileAndTheDependenciesBetweenThem`.
+
+## Issue #11 — Extraction: graph cache and clear-graph-cache
+
+- WHY: the memo is a new function, `CachedGraph(root, options)`, in front of `ExtractGraph` rather than
+  caching inside `ExtractGraph` itself. `ExtractGraph` is documented and tested as "runs the Go toolchain
+  once over the whole project", and every existing test calls it; making that one function stateful would
+  have changed what a dozen passing tests mean. The two doors now read as what they are — the extraction,
+  and the memo a check goes through — and `ExtractGraph`'s doc points at the memo.
+- WHY: the cache key is built from the **resolved project root**, not from the `ProjectLocator` the issue
+  names. A locator is a starting point for an upward search, so `nil` (the working directory), the project
+  root and a directory three levels inside it are three spellings of one project; keying on the locator
+  would extract it three times and lose the point of the cache. `resolveProjectRoot` runs before the key is
+  built, which also makes a relative root and a symlinked one one entry — and it is the same resolution
+  `ExtractGraph` does internally, so the two cannot disagree.
+- WHY: `graphCacheKey` sorts the folder exclusions and the build tags before quoting them. Neither list's
+  order changes what is extracted — an exclusion list is a set and `-tags=a,b` is the same build as
+  `-tags=b,a` — so an order-sensitive key would only ever miss. It resolves the options first, so a nil bag,
+  the zero bag and one whose exclusions are nil are one key, while a caller who excluded nothing on purpose
+  keeps their own; every string is `%q`, so a folder named `a b` cannot forge a boundary between entries.
+- WHY: the "hard to forget" half of the issue is a test, not only a named function. `graph_cache_test.go`
+  reflects over `SourceOptions`, varies each field in turn and fails if the key does not move — so a field
+  added to that bag without reaching the key fails a test rather than passing review, and a field of a kind
+  the test cannot vary fails loudly instead of silently passing.
+- WHY: a failed extraction is not cached, and the graph handed out is a copy. An extraction fails because of
+  the environment, so the next rule deserves the same chance rather than a memoised error; and a `Graph` is
+  a slice, so handing out the cached one would let any reader write through into every later reader's graph.
+  Both are covered by tests that fail without them.
+- WHY: the lock is not held across the extraction. Two goroutines asking about one project at once extract
+  it twice and store the same answer, which costs one redundant run in a case a synchronous test suite does
+  not reach, while locking for the whole extraction would make one project's rules wait on another
+  project's toolchain run.
+- WHY: `CheckOptions.ClearCache` is honored in one new method, `CheckOptions.ExtractGraph(locator)`, which is
+  the same kind of translator as issue #7's `CheckOptions.SourceOptions()` and the only edit outside the
+  issue's package. Without it every terminal would locate, clear and extract in three steps of its own, and
+  the one that forgot the middle step would silently ignore the user's flag. It clears the whole cache rather
+  than this project's entry: the reason to clear is that the source moved, and one project is cached once per
+  set of options it was asked about. It clears *before* the lookup rather than instead of it, so the check
+  that cleared still fills the cache for the rules after it in the suite.
+- WHY: the public global is `extraction.ClearGraphCache()`, and there is no root-package re-export of it yet.
+  `archunit.go` is the public surface, it does not exist, and creating it for one function would be claiming a
+  deliverable another issue owns; `ClearGraphCache` is exported from a public package in the meantime, and
+  re-exporting it is one line when that surface lands.
+- WHY: file stem is `graph_cache.go`, one concept, as in issues #1, #4, #6, #7 and #9 — no sibling stem names
+  this step. The cache type is unexported (`graphCache`), with the two exported functions over one
+  package-level instance: a cache exists to be shared by every rule in a suite, and rules are built and
+  checked independently of each other, so there is nothing for it to hang from. That global carries the
+  `//nolint:gochecknoglobals` the harness sanctions, with its reason on it.
+- WHY: still no fluent-API integration test through a builder chain — none exists, as in issues #1 to #10.
+  The level above the unit tests is `common/fluentapi`'s four new tests, which do what a terminal will do
+  with a rule (`options.ExtractGraph(rule.locator)`) over a fixture project that gains a file between two
+  checks: the second check shares the first one's graph, `ClearCache` reads the source again,
+  `IncludeTestFiles` is a different analysis rather than a cache hit, and a locator naming no project is a
+  `UserError`.
