@@ -596,3 +596,61 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   included, which depends on nothing of the library's own) and
   `TestProjectCyclesFindsNoCycleAmongTheFoldersOfThisRepository`, which is this library dogfooding the
   rule the cycle projection exists to serve.
+
+## Issue #14 — Projection: the per-edge MapFunctions
+
+- WHY: `PerEdge` **changed meaning** and now drops the self-edges, which issue #13's version kept. The
+  issue names four factories and spells `per edge` out as "everything except self-edges", and that
+  parenthetical is what makes `identity` a fourth function rather than a second name for the same one —
+  the only difference available between the two is the self-edge. So `Identity` is what issue #13 shipped
+  as `PerEdge` (every edge, labels verbatim, self-edges and external edges included), and the three
+  `per <thing> edge` factories are strictly nested inside it. Nothing else here has two names for one
+  behaviour, and the issue that owns these factories is the place to reconcile that.
+- WHY: the family's one rule is therefore "every `per <thing> edge` factory is about *dependencies*, so
+  none of them keeps the edge that only names a node" — `PerExternalEdge` ⊆ `PerEdge` ⊆ `Identity`, and
+  `PerInternalEdge` ⊆ `PerEdge` too. The alternative was to have `PerInternalEdge` keep the self-edges
+  (a self-edge is internal by construction, so it partitions the whole graph with `PerExternalEdge`
+  rather than only its dependencies), and that is the trap: a reader who has been told `per edge` drops
+  self-edges will assume `per internal edge` is a subset of it. Nesting is statable in one sentence, so
+  nesting won.
+- WHY: the consequence, and it is the whole cost of the change: `ProjectToNodes` wants `Identity`, not
+  `PerEdge`. Node projection is the half written over the self-edges, so projected through any
+  `per <thing> edge` factory it loses every file that depends on nothing — for a rule about naming or
+  placement, most of the population. `project_nodes.go`'s doc says so in as many words and
+  `TestOnlyIdentityGivesAFileThatDependsOnNothingANode` fails if either half of the split is undone.
+  Seven `ProjectToNodes(…, PerEdge())` calls in the existing tests moved to `Identity()`; their
+  assertions are unchanged.
+- WHY: `Identity` therefore puts every external module in a node projection as well, so "the project's
+  own files as nodes" has no factory in `common` — it is `PerInternalEdge` plus the self-edges, which is
+  neither of the two, and inventing a fifth factory for a rule that has not landed would be the
+  speculative knob the earlier notes keep refusing. When the file-level node rules land, that mapper is
+  `files/projection`'s to write, which is what a module's own projection package is for.
+- WHY: `PerExternalEdge` exists now, reversing issue #13's note that said it would not. That note's
+  reasoning — `PerEdge` keeps the external edges and `extraction.Edge.External` is still on the raw ones,
+  so a second factory would be a second place deciding what external means — is answered by writing it
+  as the exact complement of `PerInternalEdge`: both read the one flag the extractor set, neither
+  re-decides anything, and `TestPerInternalEdgeAndPerExternalEdgePartitionWhatPerEdgeKeeps` is what
+  holds them to being two halves of one whole. Making a rule about third-party modules filter
+  `PerEdge`'s output by hand was the thing that would have spread the decision.
+- WHY: all four are factories returning a `MapFunction` rather than functions of the right signature
+  that a caller could pass directly. `PerEdge` as a plain `func(extraction.Edge) (MappedEdge, bool)`
+  would read better at a call site by one pair of parentheses, but a `slice by <thing>` factory has to
+  take arguments, so the family would then be spelled two ways; and the factory form is where a knob
+  lands if one of them ever needs one.
+- WHY: the tests for the factories moved out of `project_edges_test.go` into `map_function_test.go`,
+  beside the file they test, as `AGENTS.md` asks. The four are one table with the predicate each is
+  supposed to satisfy, so the family's rule above is checked in a loop rather than four times by hand —
+  and the table is a function returning the slice rather than a package-level `var`, which needs no
+  `//nolint:gochecknoglobals` (the linter is excluded in `_test.go` files, so the directive would itself
+  be a `nolintlint` finding).
+- WHY: `TestProjectEdgesDropsTheGraphsSelfEdges` now projects through `Identity`. It is a test about
+  `ProjectEdges` dropping an edge whose labels are equal, and `PerEdge` no longer hands it one to drop —
+  through `PerEdge` it would have passed without exercising anything.
+- WHY: no new file. The four factories join the hook in `map_function.go`, for the reason issue #13 gave
+  for putting the first two there: the hook and its factories are one concept.
+- WHY: still no fluent-API integration test — no builder chain exists, as in issues #1 to #13. The level
+  above the unit tests is `TestTheMapFunctionsSplitThisRepositoriesDependencies`, which extracts this
+  repository the way a check will and projects it through each factory in turn: the external half holds
+  `common/extraction/extract_graph.go -> golang.org/x/tools/go/packages` and nothing internal, the
+  internal half holds `common/projection/map_function.go -> common/extraction/edge.go` and nothing that
+  leaves the project, and the identity projection has a node for every file the graph gives a self-edge.

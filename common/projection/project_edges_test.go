@@ -93,7 +93,8 @@ func TestProjectEdgesDropsAnEdgeWhoseLabelsAreEqual(t *testing.T) {
 }
 
 func TestProjectEdgesDropsTheGraphsSelfEdges(t *testing.T) {
-	projected := ProjectEdges(fixtureGraph(), PerEdge())
+	// Identity, so that the drop is ProjectEdges' own doing: PerEdge never hands it a self-edge.
+	projected := ProjectEdges(fixtureGraph(), Identity())
 
 	want := []string{
 		"internal/api/handler.go -> internal/db/query.go",
@@ -205,35 +206,6 @@ func TestProjectEdgesWithoutAMapFunctionProjectsNothing(t *testing.T) {
 func TestProjectEdgesOfAnEmptyGraphIsEmpty(t *testing.T) {
 	if projected := ProjectEdges(nil, PerEdge()); len(projected) != 0 {
 		t.Errorf("ProjectEdges(nil, PerEdge()) = %v, want nothing", labelsOf(projected))
-	}
-}
-
-func TestPerEdgeKeepsEverySelfEdgeAndExternalEdge(t *testing.T) {
-	mapper := PerEdge()
-
-	for _, edge := range fixtureGraph() {
-		mapped, kept := mapper(edge)
-		if !kept {
-			t.Errorf("PerEdge() dropped %s, want every edge kept", edge)
-			continue
-		}
-		if mapped.SourceLabel != edge.Source || mapped.TargetLabel != edge.Target {
-			t.Errorf("PerEdge()(%s) = %+v, want the identifiers unchanged", edge, mapped)
-		}
-	}
-}
-
-func TestPerInternalEdgeDropsOnlyTheEdgesThatLeaveTheProject(t *testing.T) {
-	mapper := PerInternalEdge()
-
-	for _, edge := range fixtureGraph() {
-		mapped, kept := mapper(edge)
-		if kept == edge.External {
-			t.Errorf("PerInternalEdge()(%s) kept = %t, want %t", edge, kept, !edge.External)
-		}
-		if kept && (mapped.SourceLabel != edge.Source || mapped.TargetLabel != edge.Target) {
-			t.Errorf("PerInternalEdge()(%s) = %+v, want the identifiers unchanged", edge, mapped)
-		}
 	}
 }
 

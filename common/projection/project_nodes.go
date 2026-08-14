@@ -61,8 +61,12 @@ func (n ProjectedNode) String() string {
 // result is an edge ProjectEdges returned too.
 //
 // A node the projection only ever saw as a target is in the result as well, with no outgoing edges: for
-// PerEdge that is every external module the project depends on. A mapper that drops those — the usual
-// PerInternalEdge — leaves the projection with the project's own nodes only.
+// Identity that is every external module the project depends on, and a mapper that drops those leaves
+// the projection with the project's own nodes only.
+//
+// Identity, not PerEdge, is the file-level mapper this function wants. Every `per <thing> edge` factory
+// is about dependencies and so drops the self-edges, which here means dropping every file that depends
+// on nothing — for a rule about naming or placement, most of the population.
 //
 // The result is ordered by label, so a report built from it is reproducible, and every label appears
 // once. A nil mapper projects nothing, which the empty-test guard then reports rather than passing

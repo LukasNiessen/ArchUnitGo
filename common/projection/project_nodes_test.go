@@ -27,7 +27,7 @@ func findProjectedNode(t *testing.T, nodes []ProjectedNode, label string) Projec
 }
 
 func TestProjectToNodesGivesEveryFileANode(t *testing.T) {
-	nodes := ProjectToNodes(fixtureGraph(), PerEdge())
+	nodes := ProjectToNodes(fixtureGraph(), Identity())
 
 	want := []string{
 		"database/sql",
@@ -45,7 +45,8 @@ func TestProjectToNodesGivesEveryFileANode(t *testing.T) {
 func TestProjectToNodesKeepsAFileThatDependsOnNothing(t *testing.T) {
 	// The self-edge is the only thing in the graph about noop.go, and a rule about naming or placement
 	// is about every file — so losing it here would silently shrink the population that rule judges.
-	nodes := ProjectToNodes(fixtureGraph(), PerEdge())
+	// Identity is the mapper that keeps it; every `per <thing> edge` factory drops it.
+	nodes := ProjectToNodes(fixtureGraph(), Identity())
 
 	noop := findProjectedNode(t, nodes, "internal/util/noop.go")
 	if len(noop.Incoming()) != 0 || len(noop.Outgoing()) != 0 {
@@ -54,7 +55,7 @@ func TestProjectToNodesKeepsAFileThatDependsOnNothing(t *testing.T) {
 }
 
 func TestProjectToNodesWiresIncomingAndOutgoing(t *testing.T) {
-	nodes := ProjectToNodes(fixtureGraph(), PerEdge())
+	nodes := ProjectToNodes(fixtureGraph(), Identity())
 
 	handler := findProjectedNode(t, nodes, "internal/api/handler.go")
 	if got, want := labelsOf(handler.Outgoing()), []string{
@@ -92,7 +93,7 @@ func TestProjectToNodesLeavesEveryEdgeWhoseLabelsAreEqualOutOfBothLists(t *testi
 		name   string
 		mapper MapFunction
 	}{
-		{name: "PerEdge", mapper: PerEdge()},
+		{name: "Identity", mapper: Identity()},
 		{name: "sliceByFolder", mapper: sliceByFolder()},
 	} {
 		for _, node := range ProjectToNodes(fixtureGraph(), mapper.mapper) {
@@ -108,8 +109,8 @@ func TestProjectToNodesLeavesEveryEdgeWhoseLabelsAreEqualOutOfBothLists(t *testi
 func TestProjectToNodesCarriesTheSameEdgesAsProjectEdges(t *testing.T) {
 	graph := fixtureGraph()
 
-	projected := ProjectEdges(graph, PerEdge())
-	nodes := ProjectToNodes(graph, PerEdge())
+	projected := ProjectEdges(graph, Identity())
+	nodes := ProjectToNodes(graph, Identity())
 
 	outgoing := make([]ProjectedEdge, 0, len(projected))
 	incoming := make([]ProjectedEdge, 0, len(projected))
@@ -147,7 +148,7 @@ func TestProjectToNodesLeavesExternalNodesOutWhenTheMapFunctionDropsThem(t *test
 }
 
 func TestProjectToNodesHandsOutCopiesOfItsEdgeLists(t *testing.T) {
-	nodes := ProjectToNodes(fixtureGraph(), PerEdge())
+	nodes := ProjectToNodes(fixtureGraph(), Identity())
 	handler := findProjectedNode(t, nodes, "internal/api/handler.go")
 
 	outgoing := handler.Outgoing()
@@ -170,7 +171,7 @@ func TestProjectToNodesWithoutAMapFunctionProjectsNothing(t *testing.T) {
 }
 
 func TestProjectedNodeStringRendersItsLabelAndDegrees(t *testing.T) {
-	nodes := ProjectToNodes(fixtureGraph(), PerEdge())
+	nodes := ProjectToNodes(fixtureGraph(), Identity())
 	handler := findProjectedNode(t, nodes, "internal/api/handler.go")
 
 	if got, want := handler.String(), "internal/api/handler.go [1 in, 2 out]"; got != want {

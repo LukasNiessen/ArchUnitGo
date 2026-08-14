@@ -27,33 +27,73 @@ type MappedEdge struct {
 // also why the reshaping layer is not Go-specific in any way.
 //
 // A MapFunction is called once per edge of the graph, self-edges included, and must be pure: same
-// edge in, same answer out, with nothing remembered in between. Write one with the `per <thing>`
-// factories here, or with a module's own `slice by <thing>` factory.
+// edge in, same answer out, with nothing remembered in between. Write one with Identity or the
+// `per <thing> edge` factories here, or with a module's own `slice by <thing>` factory.
 type MapFunction func(edge extraction.Edge) (MappedEdge, bool)
 
-// PerEdge is the MapFunction that relabels nothing: every edge of the graph, under the identifiers it
-// already carries. It is the projection a file-level rule speaks, where a node is a file, and it is
-// the base the narrower ones are written as.
+// Identity is the MapFunction that relabels nothing and drops nothing: every edge of the graph, under
+// the identifiers it already carries. It is the projection of the whole graph into the vocabulary of
+// files, where a node is a file and an external target is the import path the file wrote, and it is the
+// base every other factory here is written as, so that the identity labeling is stated once.
 //
-// It keeps external edges, and it keeps self-edges: dropping a self-edge from the dependencies is
-// ProjectEdges' job, and ProjectToNodes needs the self-edge to know that a file depending on nothing
-// is a node at all.
-func PerEdge() MapFunction {
+// Alone among the factories here it keeps the self-edges, and that is what makes it the mapper a rule
+// about nodes rather than about dependencies is projected through: ProjectToNodes needs the self-edge
+// to know that a file depending on nothing is a node at all. For ProjectEdges it makes no difference,
+// because an edge whose two labels are equal is dropped there anyway.
+func Identity() MapFunction {
 	return func(edge extraction.Edge) (MappedEdge, bool) {
 		return MappedEdge{SourceLabel: edge.Source, TargetLabel: edge.Target}, true
 	}
 }
 
+// PerEdge is every dependency of the graph under the identifiers it already carries: Identity without
+// the self-edges. It is the projection a file-level rule about dependencies speaks, and it keeps the
+// dependencies that leave the project.
+//
+// Dropping the self-edge is what the whole `per <thing> edge` family means — each of them is about
+// dependencies, so none of them keeps the edge that exists only to name a node. It costs nothing for
+// ProjectEdges, which drops an edge whose two labels are equal in any case, and it is exactly the
+// difference that matters for ProjectToNodes: projected through PerEdge, a file that depends on nothing
+// is not a node. Identity is the mapper that keeps it.
+func PerEdge() MapFunction {
+	identity := Identity()
+	return func(edge extraction.Edge) (MappedEdge, bool) {
+		if edge.IsSelfEdge() {
+			return MappedEdge{}, false
+		}
+		return identity(edge)
+	}
+}
+
 // PerInternalEdge is PerEdge without the dependencies that leave the project: an edge to the standard
-// library or to a third-party module is dropped, and everything inside the project is kept as it is.
+// library or to a third-party module is dropped, and every dependency inside the project is kept as it
+// is.
 //
 // It is what a rule about the project's own structure is projected through — cycles, layering, slice
-// dependencies — because an external target is not code this project can restructure. A rule that is
-// about external modules wants PerEdge and the External flag the raw edges still carry.
+// dependencies — because an external target is not code this project can restructure.
 func PerInternalEdge() MapFunction {
 	perEdge := PerEdge()
 	return func(edge extraction.Edge) (MappedEdge, bool) {
 		if edge.External {
+			return MappedEdge{}, false
+		}
+		return perEdge(edge)
+	}
+}
+
+// PerExternalEdge is PerEdge with nothing but the dependencies that leave the project: every edge to
+// the standard library or to a third-party module, under the import path the file wrote, and nothing
+// inside the project.
+//
+// It is what a rule about third-party dependencies is projected through, and it is the exact complement
+// of PerInternalEdge — the two partition the dependencies PerEdge keeps, so no edge is in both and
+// every one of them is in one. Neither decides what external means: both read
+// extraction.Edge.External, which the extractor settled once, because it is the only layer that knows
+// which code is this project's own.
+func PerExternalEdge() MapFunction {
+	perEdge := PerEdge()
+	return func(edge extraction.Edge) (MappedEdge, bool) {
+		if !edge.External {
 			return MappedEdge{}, false
 		}
 		return perEdge(edge)
