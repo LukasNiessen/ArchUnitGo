@@ -7,7 +7,16 @@
 // An adapter to a test framework asks ResultFactory for a Result and prints it; it does not format, and
 // neither does a domain module.
 //
-// Two factories and the color utilities they use:
+// Two doors, and the one a test should reach for is the assert helper. It checks the rule and reports what it
+// found in one call, with nothing to register and nothing to configure — AssertPasses for one rule, in any
+// framework, and AssertAllPass for a suite of them, one named subtest per rule on the standard library's own
+// handle:
+//
+//	archtest.AssertPasses(t, rule, nil)
+//	archtest.AssertAllPass(t, rules, nil)
+//
+// The other door is the two factories the helpers are written over, for a caller assembling a report of its
+// own shape — a summary line, a file of its own, a framework this package has never heard of:
 //
 //	violation := archtest.NewViolationFactory(nil).Message(oneViolation)
 //	result := archtest.NewResultFactory(nil).Result(everyViolation)

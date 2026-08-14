@@ -2,8 +2,9 @@ package archtest
 
 import "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
 
-// AssertOptions is the one options bag the assert helper takes: how the rule is run, and how the failure is
-// written.
+// AssertOptions is the one options bag the assert helpers take: how the rule is run, and how the failure is
+// written. AssertAllPass takes the same bag for a whole suite of rules, which is why nothing in it is about
+// one rule in particular.
 //
 // AssertPasses spans both halves of the pipeline's tail — it checks and then it reports — so it needs the
 // knobs of both, and it holds the two existing bags rather than re-declaring their fields. A flat bag with

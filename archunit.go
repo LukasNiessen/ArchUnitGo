@@ -191,8 +191,13 @@ type MessageOptions = archtest.MessageOptions
 // what makes the assert helper work without registration or configuration.
 type TestingT = archtest.TestingT
 
-// AssertOptions is the one options bag AssertPasses takes: how the rule is run, and how a failure is written,
-// as the two bags each half already has. A nil *AssertOptions means the defaults.
+// TestingRunner is the standard library's own handle as AssertAllPass needs it: Error, Helper and Run, the
+// subtest. Only *testing.T satisfies it, deliberately — a suite is reported in the shape Go's testing package
+// gives a result, and a framework whose handle has no subtests still has AssertPasses.
+type TestingRunner = archtest.TestingRunner
+
+// AssertOptions is the one options bag the assert helpers take: how the rule is run, and how a failure is
+// written, as the two bags each half already has. A nil *AssertOptions means the defaults.
 type AssertOptions = archtest.AssertOptions
 
 // Palette is which color each part of a report is painted in, one field per role a piece of a message plays:
@@ -280,6 +285,37 @@ func AssertPasses(t TestingT, rule Checkable, options *AssertOptions) {
 		marked.Helper()
 	}
 	archtest.AssertPasses(t, rule, options)
+}
+
+// AssertAllPass asserts a whole suite of rules at once, each in its own named subtest. It is the path a suite
+// of more than one rule should reach for, and it needs no more setup than the one for a single rule does:
+//
+//	func TestTheArchitectureHolds(t *testing.T) {
+//		archunit.AssertAllPass(t, map[string]archunit.Checkable{
+//			"the api does not touch the database": archunit.ProjectFiles(nil).
+//				InFolder("internal/api/**").
+//				ShouldNot().
+//				DependOnFiles().
+//				InFolder("internal/db/**"),
+//			"no file depends on another in a circle": archunit.ProjectFiles(nil).Should().HaveNoCycles(),
+//		}, nil)
+//	}
+//
+// Every rule is asserted through AssertPasses inside its own t.Run, so a rule that does not hold fails the
+// subtest its author named it after and the rules around it are asserted all the same. The rules run in the
+// sorted order of their names, so a suite's output is the same on every run, and `go test -run` selects one
+// rule of it by that name. A suite with no rules in it is a failure rather than a pass, for the same reason a
+// rule that selected no file is.
+//
+// A nil *AssertOptions means the defaults, and the bag is the whole suite's — the one rule that needs knobs of
+// its own is asserted beside the suite with its own AssertPasses call.
+//
+// This frame marks itself as a helper too, for the reason the single-rule re-export does: the first unmarked
+// frame is the one a framework blames, and every frame between a subtest's failure and this call is marked, so
+// what a failing rule is filed against is the line of the caller's own AssertAllPass.
+func AssertAllPass(t TestingRunner, rules map[string]Checkable, options *AssertOptions) {
+	t.Helper()
+	archtest.AssertAllPass(t, rules, options)
 }
 
 // DefaultPalette is the palette a caller who wants a colored report and does not want to choose asks for: the

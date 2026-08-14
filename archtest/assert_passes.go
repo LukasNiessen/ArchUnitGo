@@ -17,8 +17,9 @@ const checkFailedPrefix = "the rule could not be checked: "
 // asserted nothing is the one outcome this library treats as worse than any noisy one.
 const nilRuleMessage = "there is no rule to check: AssertPasses was given a nil rule"
 
-// TestingT is the part of a test framework's handle the assert helper needs: one method, the one that
-// records a failure and lets the test carry on.
+// TestingT is the part of a test framework's handle AssertPasses needs: one method, the one that records a
+// failure and lets the test carry on. TestingRunner is this interface plus what a suite of rules asks for on
+// top, and nothing else in the library asks a framework for anything.
 //
 // It is the smallest interface that can report anything, and that is the whole point of it. *testing.T and
 // *testing.B satisfy it, so does stdlib testing.TB, and so does every third-party framework's handle that
@@ -45,7 +46,8 @@ type helper interface {
 }
 
 // AssertPasses checks the rule and fails the test with the formatted violations when it does not hold. It is
-// the library's whole test-framework glue, and the call a user's architecture test ends in:
+// the library's test-framework glue, and the call an architecture test about one rule ends in — AssertAllPass
+// is the same assertion over a suite of them, and is written over this one:
 //
 //	func TestTheApiDoesNotTouchTheDatabase(t *testing.T) {
 //		rule := archunit.ProjectFiles(nil).
