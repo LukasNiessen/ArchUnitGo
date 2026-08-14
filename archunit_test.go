@@ -8,6 +8,14 @@ import (
 	archunit "github.com/LukasNiessen/ArchUnitGo"
 )
 
+// The public surface names both mood stages by the type the chain actually returns, so that a
+// half-built rule of either mood can be stored in a struct field or passed to a helper. Checked at
+// compile time, because a type alias that named the wrong thing would fail nowhere else.
+var (
+	_ archunit.FilesShouldBuilder    = archunit.ProjectFiles(nil).Should()
+	_ archunit.FilesShouldNotBuilder = archunit.ProjectFiles(nil).ShouldNot()
+)
+
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
 	// The whole chain through the public surface, dogfooding on this library: no locator, so the project
 	// is the one this test is in, and the scope is a folder of it.
@@ -145,6 +153,70 @@ func TestARuleThatNamesAFolderNoFileIsInSelectsNothing(t *testing.T) {
 
 	if selected := selectFiles(t, rule); len(selected) != 0 {
 		t.Errorf("%s selects %v, want nothing", rule, selected)
+	}
+}
+
+func TestBothMoodsAreReachableThroughThePublicSurface(t *testing.T) {
+	// The mood stage on the surface a user types, dogfooding on this library: one scope, both moods, and
+	// the two of them differing by the flag and by nothing else.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	base := archunit.ProjectFiles(nil).InFolder("common/matching")
+	positive := base.Should()
+	negated := base.ShouldNot()
+
+	if mood := positive.Mood(); mood != archunit.Should {
+		t.Errorf("`should`.Mood() = %s, want %s", mood, archunit.Should)
+	}
+	if mood := negated.Mood(); mood != archunit.ShouldNot {
+		t.Errorf("`should not`.Mood() = %s, want %s", mood, archunit.ShouldNot)
+	}
+	if !negated.Mood().Negated() {
+		t.Error("`should not` is not the negated mood, want the flag the assertions read")
+	}
+	if positive.Mood().Negated() {
+		t.Error("`should` is the negated mood, want the positive one")
+	}
+
+	// Which files the rule is about is the scope's answer, whichever mood was taken.
+	selected, err := negated.SelectFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectFiles failed: %v", err)
+	}
+	if want := selectFiles(t, base); !slices.Equal(selected, want) {
+		t.Errorf("`%s` is about %v, want the files its scope is about, %v", negated, selected, want)
+	}
+	if !slices.Contains(selected, "common/matching/filter.go") {
+		t.Errorf("`%s` is about %v, want the files of that folder among them", negated, selected)
+	}
+	if rendered := negated.String(); !strings.HasSuffix(rendered, ", should not") {
+		t.Errorf("String() = %q, want the sentence to end in the mood", rendered)
+	}
+}
+
+func TestAMoodIsTakenFromAStoredRuleWithoutChangingIt(t *testing.T) {
+	// The AGENTS.md example one stage further on: the base rule is stored, one branch takes each mood,
+	// and the base is still the scope it was — so a suite can build a rule per mood from one scope.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	base := archunit.ProjectFiles(nil).InFolder("common/projection/**")
+	cycles := base.InFolder("common/projection/cycles").ShouldNot()
+
+	if rendered := base.String(); strings.Contains(rendered, "should") {
+		t.Errorf("the stored scope renders as %q, want a scope with no mood on it", rendered)
+	}
+	selected, err := cycles.SelectFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectFiles failed: %v", err)
+	}
+	if !slices.Contains(selected, "common/projection/cycles/tarjan_scc.go") {
+		t.Errorf("`%s` is about %v, want the branch's own folder", cycles, selected)
+	}
+	if slices.Contains(selected, "common/projection/project_edges.go") {
+		t.Errorf("`%s` is about %v, want only the folder the branch narrowed to", cycles, selected)
+	}
+	if base := selectFiles(t, base); !slices.Contains(base, "common/projection/project_edges.go") {
+		t.Errorf("the stored scope is about %v, want it unchanged by the branch that took a mood", base)
 	}
 }
 

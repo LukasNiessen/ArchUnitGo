@@ -11,8 +11,11 @@
 //
 // The scope verbs are `with name`, `in folder`, `in path` and `in file`, they are chainable, and they
 // are combined with AND: each one narrows the selection, so their order never matters. What that
-// selection means, given a graph, is files/projection.SelectFiles; the mood, the predicate and the
-// terminal are the stages that come after it.
+// selection means, given a graph, is files/projection.SelectFiles.
+//
+// After the scope comes the mood, and there are exactly two of it — Should and ShouldNot, with no
+// synonyms — returning the two thin builders in mood.go. The predicate and the terminal are the stages
+// after that.
 package fluentapi
 
 import (
@@ -153,18 +156,32 @@ func (b FilesBuilder) SelectFiles(options *kernel.CheckOptions) ([]string, error
 // reader needs in order to see which part of an identifier a pattern was matched against; user-facing
 // violation messages are built in the testing layer, not here.
 func (b FilesBuilder) String() string {
-	stages := make([]string, 0, len(b.selectors)+1)
+	return strings.Join(b.stages(), ", ") + b.rejected()
+}
+
+// stages are the parts of the sentence this scope has been built from, in the order the user typed
+// them: the entry point, then one per scope verb, ready to be joined with ", ".
+//
+// It is a fresh slice, because the stages that come after the scope append their own word to it — the
+// mood does, in filesRule.String — and that is also why the rejection below is rendered separately
+// instead of being the last stage.
+func (b FilesBuilder) stages() []string {
+	stages := make([]string, 0, len(b.selectors)+2)
 	stages = append(stages, "project files")
 	for _, selector := range b.selectors {
 		stages = append(stages, selector.String())
 	}
-	sentence := strings.Join(stages, ", ")
-	if b.err != nil {
-		// A rejected pattern narrowed nothing, so without this a builder would render as the rule the
-		// user thought they wrote.
-		sentence += " (rejected: " + b.err.Error() + ")"
+	return stages
+}
+
+// rejected renders the pattern a scope verb refused as a parenthesis closing the sentence, and the
+// empty string when every pattern compiled. A rejected pattern narrowed nothing, so without it a
+// builder would render as the rule the user thought they wrote.
+func (b FilesBuilder) rejected() string {
+	if b.err == nil {
+		return ""
 	}
-	return sentence
+	return " (rejected: " + b.err.Error() + ")"
 }
 
 // selecting is every scope verb: compile the string the user typed with this builder's factory, and
