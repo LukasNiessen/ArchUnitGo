@@ -3,9 +3,10 @@
 // that is Go-specific: everything downstream works on the Edge and Graph values defined here and
 // never sees an import declaration, a file path or the toolchain.
 //
-// A Graph built with NewGraph carries three invariants that downstream code relies on:
-// identifiers are normalised, parallel edges are merged with their import kinds unioned so that
-// (Source, Target) is unique, and edges are ordered so that reports are reproducible.
+// A Graph built with NewGraph carries four invariants that downstream code relies on: identifiers
+// are normalised, parallel edges are merged with their import kinds unioned so that
+// (Source, Target) is unique, an edge from a node to itself is the one self-edge shape SelfEdge
+// builds, and edges are ordered so that reports are reproducible.
 //
 // The stages run in order, and each one is a function of the last: LocateProject finds the project
 // root by walking up to a go.mod, ExtractSourceFiles enumerates the Go files under it, ExtractImports
@@ -26,32 +27,33 @@ import (
 //
 //   - identifiers are normalised;
 //   - parallel edges are merged, unioning their import kinds, so (Source, Target) is unique;
+//   - an edge from a node to itself is the self-edge SelfEdge builds, carrying no import kinds and
+//     not external, so SelfEdges and Dependencies partition a graph into the edges that carry a
+//     node and the edges that carry a dependency;
 //   - edges are ordered by source then target, so reports built from a graph are reproducible.
 //
 // Build one with NewGraph or extend one with Add. A hand-written Graph literal is fine in tests as
 // long as it already satisfies the invariants.
+//
+// Which nodes a graph is guaranteed to hold a self-edge for is the extractor's promise, not this
+// type's: ExtractGraph emits one per file of the project.
 type Graph []Edge
 
-// NewGraph normalises and merges edges into a graph. Edges without a source or without a target
+// NewGraph canonicalises and merges edges into a graph. Edges without a source or without a target
 // carry no identifier and are dropped.
 func NewGraph(edges ...Edge) Graph {
 	merged := make(map[edgeKey]Edge, len(edges))
 	for _, edge := range edges {
-		normalized := Edge{
-			Source:      NormalizeIdentifier(edge.Source),
-			Target:      NormalizeIdentifier(edge.Target),
-			External:    edge.External,
-			ImportKinds: edge.ImportKinds,
-		}
-		if normalized.Source == "" || normalized.Target == "" {
+		canonical := edge.canonical()
+		if canonical.Source == "" || canonical.Target == "" {
 			continue
 		}
-		key := normalized.key()
+		key := canonical.key()
 		if existing, found := merged[key]; found {
-			merged[key] = existing.merge(normalized)
+			merged[key] = existing.merge(canonical)
 			continue
 		}
-		merged[key] = normalized
+		merged[key] = canonical
 	}
 
 	graph := make(Graph, 0, len(merged))
@@ -88,6 +90,27 @@ func (g Graph) Nodes() []string {
 	return nodes
 }
 
+// SelfEdges returns the self-edge of every node that has one, keeping this graph's order. Together
+// with Dependencies it partitions the graph: every edge carries either a node or a dependency, and
+// IsSelfEdge is which.
+//
+// This is what a node projection is built from. A file with no dependencies has nothing else in the
+// graph, so reading the nodes off the dependencies alone would silently leave it out of a report —
+// which for a rule about naming or placement is the whole population.
+func (g Graph) SelfEdges() Graph {
+	return g.filter(Edge.IsSelfEdge)
+}
+
+// Dependencies returns every edge that is not a self-edge, keeping this graph's order. It is what a
+// projection reshapes by default: a node depending on itself is not a dependency any rule can be
+// broken by, so a self-edge is carried for its node and dropped for its edge.
+//
+// The result satisfies the invariants in this type's doc, except that it no longer holds a self-edge
+// per node — SelfEdges is where those went.
+func (g Graph) Dependencies() Graph {
+	return g.filter(func(edge Edge) bool { return !edge.IsSelfEdge() })
+}
+
 // Find returns the single edge between two nodes, if the graph has one.
 func (g Graph) Find(source, target string) (Edge, bool) {
 	wanted := edgeKey{source: NormalizeIdentifier(source), target: NormalizeIdentifier(target)}
@@ -106,6 +129,19 @@ func (g Graph) String() string {
 		lines = append(lines, edge.String())
 	}
 	return strings.Join(lines, "\n")
+}
+
+// filter selects the edges a predicate keeps. The receiver's order is inherited rather than
+// re-established, because a subsequence of a sorted graph is sorted and merging is already done: a
+// subset of a graph whose (Source, Target) is unique has unique (Source, Target) too.
+func (g Graph) filter(keep func(Edge) bool) Graph {
+	filtered := make(Graph, 0, len(g))
+	for _, edge := range g {
+		if keep(edge) {
+			filtered = append(filtered, edge)
+		}
+	}
+	return filtered
 }
 
 func compareEdges(left, right Edge) int {

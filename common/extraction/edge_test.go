@@ -68,6 +68,48 @@ func TestIsSelfEdge(t *testing.T) {
 	}
 }
 
+func TestEdgeCanonicalNormalizesBothIdentifiers(t *testing.T) {
+	canonical := Edge{
+		Source:      `internal\api\handler.go`,
+		Target:      "./internal/db/repo.go",
+		ImportKinds: NewImportKindSet(ImportKindPlain),
+	}.canonical()
+
+	want := NewEdge("internal/api/handler.go", "internal/db/repo.go", false, ImportKindPlain)
+	if canonical != want {
+		t.Errorf("canonical() = %v, want %v", canonical, want)
+	}
+}
+
+func TestEdgeCanonicalReducesAnEdgeFromANodeToItselfToASelfEdge(t *testing.T) {
+	// A file that imports its own package is the way this arrives: illegal Go, but a string a file can
+	// write, and the toolchain resolves it to every file of the package — that file among them.
+	//
+	// The literal bypasses NewEdge on purpose: normalisation, not the caller, is what turns these two
+	// identifiers into one node, so reducing before normalising would leave the edge unreduced.
+	canonical := Edge{
+		Source:      "internal/api/handler.go",
+		Target:      `internal\api\handler.go`,
+		External:    true,
+		ImportKinds: NewImportKindSet(ImportKindPlain),
+	}.canonical()
+
+	if want := SelfEdge("internal/api/handler.go"); canonical != want {
+		t.Errorf("canonical() = %#v, want the one self-edge shape %#v", canonical, want)
+	}
+	if !canonical.ImportKinds.Empty() || canonical.External {
+		t.Errorf("canonical() = %#v, want no import kinds and not external", canonical)
+	}
+}
+
+func TestEdgeCanonicalLeavesASelfEdgeAlone(t *testing.T) {
+	self := SelfEdge("a.go")
+
+	if canonical := self.canonical(); canonical != self {
+		t.Errorf("canonical() = %v, want %v unchanged", canonical, self)
+	}
+}
+
 func TestEdgeIsComparable(t *testing.T) {
 	left := NewEdge("a.go", "b.go", false, ImportKindPlain)
 	right := NewEdge(`.\a.go`, "b.go", false, ImportKindPlain)

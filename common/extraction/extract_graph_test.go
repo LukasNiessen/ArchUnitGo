@@ -175,6 +175,75 @@ func TestExtractGraphGivesEveryFileASelfEdge(t *testing.T) {
 	}
 }
 
+func TestExtractGraphGivesEveryNodeOfEveryEdgeASelfEdge(t *testing.T) {
+	root := writeSourceProject(t, fixtureSourceProject())
+
+	graph := extractGraph(t, root, nil)
+
+	// The invariant a node projection rests on: every node an edge mentions is in the self-edges, so
+	// the two halves of a graph name the same population. Only an external target is exempt — an import
+	// path is not a file of the project, and no self-edge carries one.
+	for _, edge := range graph {
+		if _, found := graph.Find(edge.Source, edge.Source); !found {
+			t.Errorf("edge %s has a source with no self-edge", edge)
+		}
+		if edge.External {
+			if _, found := graph.Find(edge.Target, edge.Target); found {
+				t.Errorf("edge %s has a self-edge for its external target", edge)
+			}
+			continue
+		}
+		if _, found := graph.Find(edge.Target, edge.Target); !found {
+			t.Errorf("edge %s points at a node with no self-edge", edge)
+		}
+	}
+}
+
+func TestExtractGraphMergesAFilesImportOfItsOwnPackageIntoItsSelfEdge(t *testing.T) {
+	// Importing your own package is illegal Go, but it is a string a file can write, and the toolchain
+	// resolves it to every file the package is built from — the importing file among them. The edge to
+	// itself is therefore emitted, and it must arrive as the one self-edge shape rather than as a
+	// self-edge claiming a plain import: projections drop self-edges without reading their kinds.
+	root := writeSourceProject(t, map[string]string{
+		"main.go": `package main
+
+import "example.com/fixture/internal/api"
+
+func main() { _ = api.Handle() }
+`,
+		"internal/api/handler.go": `package api
+
+import "example.com/fixture/internal/api"
+
+func Handle() string { return api.Route() }
+`,
+		"internal/api/router.go": `package api
+
+func Route() string { return "/" }
+`,
+	})
+
+	graph := extractGraph(t, root, nil)
+
+	want := NewGraph(
+		SelfEdge("main.go"),
+		SelfEdge("internal/api/handler.go"),
+		SelfEdge("internal/api/router.go"),
+		NewEdge("main.go", "internal/api/handler.go", false, ImportKindPlain),
+		NewEdge("main.go", "internal/api/router.go", false, ImportKindPlain),
+		// The other file of its own package is a dependency the file really has.
+		NewEdge("internal/api/handler.go", "internal/api/router.go", false, ImportKindPlain),
+	)
+	if !slices.Equal(graph, want) {
+		t.Errorf("graph =\n%s\n\nwant\n%s", graph, want)
+	}
+	for _, edge := range graph.SelfEdges() {
+		if !edge.ImportKinds.Empty() || edge.External {
+			t.Errorf("self-edge %+v, want no import kinds and not external", edge)
+		}
+	}
+}
+
 func TestExtractGraphMarksATargetOutsideTheProjectExternal(t *testing.T) {
 	root := writeSourceProject(t, fixtureSourceProject())
 
@@ -220,6 +289,77 @@ func main() { _ = strings.TrimSpace(quoted.ToUpper("")) }
 	want := NewImportKindSet(ImportKindPlain, ImportKindAliased)
 	if edge.ImportKinds != want {
 		t.Errorf("edge %s has ImportKinds %s, want %s", edge, edge.ImportKinds, want)
+	}
+}
+
+func TestExtractGraphMergesParallelImportsOfOneOfItsOwnPackages(t *testing.T) {
+	// The internal half of the same thing, and the one that really produces parallel edges: two imports
+	// of a package built from two files are four edges before the merge and two after it, each carrying
+	// both flavors.
+	root := writeSourceProject(t, map[string]string{
+		"main.go": `package main
+
+import (
+	"example.com/fixture/internal/db"
+	stored "example.com/fixture/internal/db"
+)
+
+func main() { _ = db.Query() + stored.Statement }
+`,
+		"internal/db/conn.go": `package db
+
+func Query() string { return "row" }
+`,
+		"internal/db/query.go": `package db
+
+const Statement = "select 1"
+`,
+	})
+
+	graph := extractGraph(t, root, nil)
+
+	want := NewImportKindSet(ImportKindPlain, ImportKindAliased)
+	for _, target := range []string{"internal/db/conn.go", "internal/db/query.go"} {
+		edge, found := graph.Find("main.go", target)
+		if !found {
+			t.Errorf("graph =\n%s\n\nwant an edge to %s", graph, target)
+			continue
+		}
+		if edge.ImportKinds != want {
+			t.Errorf("edge %s has ImportKinds %s, want %s", edge, edge.ImportKinds, want)
+		}
+	}
+	if dependencies := graph.Dependencies(); len(dependencies) != 2 {
+		t.Errorf("dependencies =\n%s\n\nwant the four resolved edges merged into two", dependencies)
+	}
+}
+
+func TestExtractGraphSplitsIntoOneNodePerFileAndTheDependenciesBetweenThem(t *testing.T) {
+	root := writeSourceProject(t, fixtureSourceProject())
+
+	graph := extractGraph(t, root, nil)
+
+	files, err := ExtractSourceFiles(root, nil)
+	if err != nil {
+		t.Fatalf("ExtractSourceFiles failed: %v", err)
+	}
+	nodes := make([]string, 0, len(files))
+	for _, file := range files {
+		nodes = append(nodes, file.Identifier)
+	}
+
+	// What a node projection sees: exactly the files of the project, each once, whether or not any
+	// import mentions it.
+	got := make([]string, 0, len(graph))
+	for _, edge := range graph.SelfEdges() {
+		got = append(got, edge.Source)
+	}
+	if !slices.Equal(got, nodes) {
+		t.Errorf("SelfEdges() name %v, want the %d files of the project %v", got, len(nodes), nodes)
+	}
+	// And what an edge projection sees: the dependencies, with none of the nodes' own edges among them.
+	if len(graph.Dependencies())+len(nodes) != len(graph) {
+		t.Errorf("graph =\n%s\n\ndoes not split into %d nodes and its dependencies", graph, len(nodes))
 	}
 }
 

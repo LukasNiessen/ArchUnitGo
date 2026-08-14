@@ -33,15 +33,39 @@ func NewEdge(source, target string, external bool, kinds ...ImportKind) Edge {
 
 // SelfEdge builds the edge every file gets from itself to itself. It is how a file with no
 // dependencies still appears as a node: projections drop self-edges by default, and node
-// projection is built out of them. It carries no import kinds, because no import produced it.
+// projection is built out of them. It carries no import kinds and is not external, because no
+// import produced it — and NewGraph reduces every edge from a node to itself to exactly this, so
+// that is true of a self-edge found in a graph and not only of one built here.
 func SelfEdge(identifier string) Edge {
 	normalized := NormalizeIdentifier(identifier)
 	return Edge{Source: normalized, Target: normalized}
 }
 
-// IsSelfEdge reports whether the edge is a node's edge to itself.
+// IsSelfEdge reports whether the edge is a node's edge to itself. It is how projections tell the
+// edge that carries a node from the edges that carry a dependency.
 func (e Edge) IsSelfEdge() bool {
 	return e.Source == e.Target
+}
+
+// canonical returns the edge in the form a Graph holds it: both identifiers normalised, and an edge
+// from a node to itself reduced to the self-edge SelfEdge would have built.
+//
+// The second half is what keeps one shape of self-edge in a graph rather than two. A file may import
+// its own package — illegal Go, but a string a file can write and one the toolchain resolves to that
+// file among the others, so extraction does emit the edge — and it would otherwise land as a
+// self-edge claiming a plain import. Downstream code drops self-edges without reading either field,
+// so the two shapes would differ only where a report looked closely enough to disagree with itself.
+func (e Edge) canonical() Edge {
+	normalized := Edge{
+		Source:      NormalizeIdentifier(e.Source),
+		Target:      NormalizeIdentifier(e.Target),
+		External:    e.External,
+		ImportKinds: e.ImportKinds,
+	}
+	if normalized.IsSelfEdge() {
+		return Edge{Source: normalized.Source, Target: normalized.Target}
+	}
+	return normalized
 }
 
 // key is the identity of an edge for merging purposes. Downstream code may assume that

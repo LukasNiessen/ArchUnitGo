@@ -371,3 +371,48 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   is not there and one holding a nested module, plus
   `TestExtractGraphClassifiesThisRepositoriesDependencies`, which extracts this repository and asserts that
   no external target is this library's own module path under another name.
+
+## Issue #10 — Extraction: self-edges and parallel-edge merging
+
+- WHY: both halves of the issue's literal ask already landed — `SelfEdge` and `NewGraph`'s merge with issue
+  #1, `ExtractGraph` emitting one self-edge per node with issue #8 — so this issue is the one that pins them,
+  the same way issue #9 pinned a classification issue #8 could not resolve an import without making. What it
+  found is that the *shape* of a self-edge was only guaranteed for edges built by `SelfEdge`: a file that
+  imports its own package resolves, via the package's own file list, to an edge to itself, so
+  `internal/api/handler.go -> itself [plain]` was landing in the graph beside self-edges carrying nothing.
+  Verified before the fix, and four of the new tests fail without it. Two shapes of self-edge is a real
+  hazard because downstream code drops a self-edge on `Source == Target` alone and never reads the other two
+  fields, so the difference would only ever surface as a report disagreeing with itself.
+- WHY: the fix is `Edge.canonical()`, called by `NewGraph` in place of the inline struct it used to build, so
+  the canonical form is established in the same one place the identifiers are normalised and the parallel
+  edges merged — not in `ExtractGraph`, which is only one of the ways edges reach a graph. An edge from a
+  node to itself becomes exactly `SelfEdge(node)`: no import kinds, not external. Importing your own package
+  is illegal Go, so nothing is lost; the file's edges to the *other* files of that package are real
+  dependencies and are kept.
+- WHY: `Edge.merge`'s union of `External` was deliberately left alone, though canonicalising the self-edge
+  before merging is now what stops a merge from re-externalising one. Issue #1 documented that union and
+  `TestEdgeMergeUnionsExternality` covers it; the only remaining way to reach it is an external import path
+  that spells a node identifier exactly, which is not worth reopening a passing decision for.
+- WHY: `Graph.SelfEdges()` and `Graph.Dependencies()` are the issue's second sentence — "projections filter
+  self-edges out by default; node projection depends on them" — given a name at the level that owns the
+  invariant. `common/projection` does not exist yet and inventing a `MapFunction` here would be issue #11's
+  work; these two are queries on `Graph`, not projections, and they are what a projection will be written
+  over. They are documented and tested as a partition, and `nodes.Add(dependencies...)` rebuilds the graph.
+- WHY: no `Graph.Files()` beside them. `Nodes()` already lists every identifier a graph mentions, external
+  import paths included, and the project's own files are `SelfEdges()` read for their `Source` — a third
+  overlapping way to list nodes is what the empty-test guard would then have to choose between.
+- WHY: both new methods inherit the receiver's order instead of going back through `NewGraph`. A subsequence
+  of a graph sorted by (source, target) is sorted, and a subset of a set with unique keys has unique keys, so
+  re-merging would be a map round-trip that can only reproduce its input — and `Dependencies()` deliberately
+  does *not* satisfy the self-edge-per-node property, which is `ExtractGraph`'s promise rather than
+  `Graph`'s. Both doc comments say so.
+- WHY: no new file. `canonical` sits in `edge.go` next to `SelfEdge` and `merge`, the two things it makes
+  honest, and the two views sit in `graph.go` next to `Nodes` and `Find`; no sibling stem names either, and
+  splitting one invariant across two files is how it stops being read as one.
+- WHY: still no fluent-API integration test — no builder chain exists yet, as in issues #1 to #9. The level
+  above the unit tests is four extractions of real projects:
+  `TestExtractGraphGivesEveryNodeOfEveryEdgeASelfEdge` (every node an edge mentions is in the self-edges,
+  and no external target is), `TestExtractGraphMergesAFilesImportOfItsOwnPackageIntoItsSelfEdge` (the case
+  above, end to end), `TestExtractGraphMergesParallelImportsOfOneOfItsOwnPackages` (the internal half of the
+  merge — two imports of a two-file package are four edges before it and two after) and
+  `TestExtractGraphSplitsIntoOneNodePerFileAndTheDependenciesBetweenThem`.
