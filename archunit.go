@@ -73,11 +73,19 @@ type FileCycleViolation = filesassertion.CycleViolation
 // twice on the way. It is what a FileCycleViolation carries, and it renders itself as a readable path.
 type Circuit = cycles.Circuit
 
+// FileNamingViolation says that one file is not named, or not placed, the way a rule requires. It is what
+// `should have name`, `should be in folder` and `should be in path` report, and their negations, one per
+// offending file — carrying the file, the requirement as a compiled pattern with the part of the identifier
+// it was matched against, and the mood the rule was written in.
+type FileNamingViolation = filesassertion.NamingViolation
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
 	// KindFileCycle is the kind of FileCycleViolation.
 	KindFileCycle = filesassertion.KindFileCycle
+	// KindFileNaming is the kind of FileNamingViolation.
+	KindFileNaming = filesassertion.KindFileNaming
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -100,6 +108,12 @@ type FilesShouldNotBuilder = filesapi.FilesShouldNotBuilder
 // FilesShouldBuilder.HaveNoCycles returns. It is a Checkable, so a built rule can be stored in a struct
 // field, passed to a helper or kept in a list of the suite's rules.
 type FilesCyclesCondition = filesapi.FilesCyclesCondition
+
+// FilesNamingCondition is the terminal of the three self-contained rules about how a project's files are
+// named and where they live — `have name`, `be in folder`, `be in path` — which HaveName, BeInFolder and
+// BeInPath return on either mood. It is a Checkable, so a built rule can be stored, passed to a helper or
+// kept in a list of the suite's rules.
+type FilesNamingCondition = filesapi.FilesNamingCondition
 
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.

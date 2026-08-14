@@ -972,3 +972,46 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   `testing`" — is skipped because that package does not exist yet; no issue has created it. The data the
   phrasing will need is all on the violation (`Kind`, `Files`, `Cycle.Edges`), so the step is additive when
   the layer lands, and nothing here has to be revisited but the message.
+
+## Issue #19 — Files API: have name, be in folder, be in path
+
+- WHY: the three predicates report **one** violation type, `files/assertion.NamingViolation` of kind
+  `file-naming`, and not one per predicate. The only thing that differs between `have name`, `be in folder`
+  and `be in path` is the part of an identifier that was looked at, and that already travels on the compiled
+  `matching.Filter` as its `MatchTarget` — so three kinds would be three keys over one shape of data, which
+  the testing layer would then have to keep in step. `String()` renders the filter, so `filename matches
+  "*.go"` versus `path without filename matches "internal/**"` still tells a reader which predicate failed.
+- WHY: the violation carries the `assertion.Mood` it was judged in, which no earlier violation type does.
+  The same file, pattern and match target describe both failures — "should, but does not match" and "should
+  not, but does" — so without the flag a report could not tell them apart. The alternative, storing
+  `Required.NotMatching()` for the negated mood, was rejected: it would make a second place in the library
+  invert something, and `Mood.Holds` is deliberately the only one. `String()` therefore renders the
+  requirement as the rule stated it, never inverted.
+- WHY: `filesRule.requiring` mirrors `FilesBuilder.selecting` — verb, pattern, and the compile function that
+  pairs a predicate with the part of an identifier it reads — so that pairing is stated once per predicate
+  and nowhere else. A pattern the predicate cannot compile is handed to `FilesBuilder.rejecting`, the scope's
+  own deferred `UserError`, rather than to a new error field on the terminal: that way the first rejection of
+  the whole chain still wins, the rule renders with `(rejected: ...)`, and `Check` returns it before the
+  project is read. No passing code was touched to get it.
+- WHY: no new projection. What a file is called and where it lives is on the file, so the population is
+  `files/projection.SelectFiles` — already there from issue #16 — and `Check` deliberately drops the graph
+  `resolve` returns. There is no `files/calculation` for this either: a predicate that is a single
+  `Filter.Matches` per selected file is not a calculation.
+- WHY: file stems are `files/assertion/naming_violation.go` and
+  `files/assertion/gather_naming_violations.go` (the `<Thing>Violation` / `gather <thing> violations` pair of
+  issue #10), plus four in `files/fluentapi`: `naming_condition.go` for the shared terminal and `requiring`,
+  and `have_name.go`, `be_in_folder.go`, `be_in_path.go` — one per predicate, spelled as the user types it,
+  the way `have_no_cycles.go` is. The terminal is not in any of the three, because it belongs to none of
+  them.
+- WHY: the predicate renders as the words the user typed — `should, have name "*.go"` — while the scope verbs
+  before it render as their filters' descriptions. After the mood the sentence has to read as English, and
+  `should, filename matches "*.go"` is not a predicate anybody typed. The pattern string is kept on the
+  terminal beside the compiled filter for that rendering, because a rejected pattern has no filter to read
+  it back from.
+- WHY: the public surface gains `FileNamingViolation` (aliasing `files/assertion.NamingViolation`, renamed
+  for the same reason `FileCycleViolation` was), `KindFileNaming` and `FilesNamingCondition`. Nothing was
+  added to `govet.unusedresult.funcs`: `HaveName`, `BeInFolder`, `BeInPath` and `Check` are methods, and that
+  flag cannot guard a method.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped again because that package still does not exist. Everything a phrasing needs is on
+  the violation (`Kind`, `File`, `Required` with its pattern and target, `Mood`), so the step stays additive.
