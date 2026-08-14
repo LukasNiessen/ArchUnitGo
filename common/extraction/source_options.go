@@ -9,9 +9,14 @@ import (
 // project's own source, and a fixture project inside it is a project of its own.
 const testDataFolder = "testdata"
 
-// SourceOptions are the knobs on enumerating a project's source files: which files count, and which
-// folders the walk does not go into. A nil *SourceOptions means the defaults — production code only,
-// with the default exclusions — which is what most callers pass.
+// SourceOptions are the knobs on reading a project's source: which files count, which folders the walk
+// does not go into, and which imports become edges. A nil *SourceOptions means the defaults —
+// production code only, with the default exclusions, under the host platform's build constraints and
+// with every import counted — which is what most callers pass.
+//
+// It is one bag for the whole EXTRACT stage rather than one per function, so that a caller resolves the
+// "nil means defaults" contract once and hands the same value to ExtractSourceFiles and ExtractGraph.
+// The first two fields bear on the walk, the last two only on the graph.
 type SourceOptions struct {
 	// IncludeTestFiles adds the project's _test.go files to the enumeration. It is the same knob as
 	// CheckOptions.IncludeTestFiles, which is where it comes from, and it is off by default: an
@@ -27,6 +32,21 @@ type SourceOptions struct {
 	// which are never walked whatever this says. Names are matched whole and without a path, so
 	// `vendor` skips a vendor folder anywhere in the project.
 	ExcludedFolders []string
+	// BuildTags are the build constraints to read the project under, and become build flags for the Go
+	// toolchain. Empty — the default — means the toolchain's own answer for the host platform.
+	//
+	// It is the same knob as CheckOptions.BuildTags, which is where it comes from. A file the
+	// constraints exclude is not in the build, so it is not a node in the graph and neither a
+	// dependency of it nor a dependency on it exists: a rule that selects nothing on one platform and
+	// everything on another is usually a tag missing from here.
+	BuildTags []string
+	// IgnoredImportKinds drops imports of these flavors before any edge is emitted, so that nothing
+	// downstream has to know they existed. It is the same knob as CheckOptions.IgnoredImportKinds.
+	//
+	// The usual member is ImportKindBlank: `import _ "github.com/lib/pq"` registers a driver and
+	// depends on no API of it. Empty by default, because dropping an edge is a decision that should be
+	// visible in the test that made it.
+	IgnoredImportKinds ImportKindSet
 }
 
 // DefaultExcludedFolders lists the folder names a walk skips unless a caller says otherwise: the ones
@@ -52,15 +72,16 @@ func DefaultExcludedFolders() []string {
 // starts with this, so that the "nil means defaults" contract is honored in one place instead of being
 // re-derived per field.
 //
-// ExcludedFolders is cloned, for the reason CheckOptions clones BuildTags: a struct copy shares the
+// Both slices are cloned, for the reason CheckOptions clones BuildTags: a struct copy shares the
 // slice's backing array, so writing through the resolved copy would reach into the caller's own
-// options. The clone is kept non-nil even when it is empty, because nil is how this bag spells "the
-// defaults" and a caller who excluded nothing on purpose must not be handed them back.
+// options. The ExcludedFolders clone is kept non-nil even when it is empty, because nil is how this bag
+// spells "the defaults" and a caller who excluded nothing on purpose must not be handed them back.
 func (o *SourceOptions) WithDefaults() SourceOptions {
 	if o == nil {
 		return SourceOptions{ExcludedFolders: DefaultExcludedFolders()}
 	}
 	resolved := *o
+	resolved.BuildTags = slices.Clone(o.BuildTags)
 	if o.ExcludedFolders == nil {
 		resolved.ExcludedFolders = DefaultExcludedFolders()
 		return resolved
@@ -83,6 +104,16 @@ func (o *SourceOptions) ExcludesFolder(name string) bool {
 		return true
 	}
 	return slices.Contains(o.excludedFolders(), name)
+}
+
+// IgnoresImportKind reports whether an import of this flavor should be left out of the graph. It is the
+// question the graph extractor asks of every import declaration, and the answer is no for a nil options
+// bag and for anything that is not a declared ImportKind.
+func (o *SourceOptions) IgnoresImportKind(kind ImportKind) bool {
+	if o == nil {
+		return false
+	}
+	return o.IgnoredImportKinds.Contains(kind)
 }
 
 // excludedFolders is the effective exclusion list, without the copy WithDefaults makes: the walk asks

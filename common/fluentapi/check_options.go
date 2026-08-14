@@ -125,13 +125,21 @@ func (o *CheckOptions) EmptyTestOptions(subject string, selectors ...matching.Fi
 	}
 }
 
-// SourceOptions translates these check options into the source enumeration's own options, the way
-// EmptyTestOptions translates them into the empty-test guard's. It is where IncludeTestFiles crosses
-// from the bag a user filled in to the walk that reads it, in one place, so that a terminal never
-// assembles a second one by hand and finds it disagreeing with the first.
+// SourceOptions translates these check options into the extraction stage's own options, the way
+// EmptyTestOptions translates them into the empty-test guard's. It is where the three Go-specific knobs
+// cross from the bag a user filled in to the walk and the toolchain that read it, in one place, so that
+// a terminal never assembles a second one by hand and finds it disagreeing with the first.
 //
 // Folder exclusions have no knob on the check options, so the enumeration's own defaults apply —
 // vendored dependencies and build output, plus everything the Go toolchain itself ignores.
+//
+// BuildTags arrives already cloned, from WithDefaults, so the extraction bag does not share an array
+// with the user's own options.
 func (o *CheckOptions) SourceOptions() *extraction.SourceOptions {
-	return &extraction.SourceOptions{IncludeTestFiles: o.WithDefaults().IncludeTestFiles}
+	resolved := o.WithDefaults()
+	return &extraction.SourceOptions{
+		IncludeTestFiles:   resolved.IncludeTestFiles,
+		BuildTags:          resolved.BuildTags,
+		IgnoredImportKinds: resolved.IgnoredImportKinds,
+	}
 }

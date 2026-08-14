@@ -8,9 +8,11 @@
 // (Source, Target) is unique, and edges are ordered so that reports are reproducible.
 //
 // The stages run in order, and each one is a function of the last: LocateProject finds the project
-// root by walking up to a go.mod, ExtractSourceFiles enumerates the Go files under it, and the graph
-// is built from those files. Everything before the graph deals in host paths; everything from the
-// graph onwards deals in the normalised identifiers of identifier.go, and nothing mixes the two.
+// root by walking up to a go.mod, ExtractSourceFiles enumerates the Go files under it, ExtractImports
+// reads the imports of one of them, and ExtractGraph resolves those imports against what the Go
+// toolchain says the project is made of. Everything before the graph deals in host paths; everything
+// from the graph onwards deals in the normalised identifiers of identifier.go, and nothing mixes the
+// two.
 package extraction
 
 import (

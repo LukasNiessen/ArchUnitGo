@@ -260,3 +260,66 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   is dogfooding on this repository — `TestLocateProjectFindsThisRepository` walks up out of
   `common/extraction` to the real root, and `TestExtractSourceFilesEnumeratesThisRepository` enumerates it and
   looks for this library's own files, with nothing hand-built about either step.
+
+## Issue #8 — Extraction: parse imports and resolve them to targets
+
+- WHY: **an import of one of the project's own packages becomes one edge per file that package is built
+  from.** A node is a file and an import names a package, so resolution has to bridge the two, and this is
+  the bridge that keeps the graph in one vocabulary — the alternative, a folder or a package as the target,
+  would put nodes of two kinds in one graph, give half of them no self-edge, and break every node
+  projection. It is also what the language means: a package is compiled as a whole, so a file importing it
+  does depend on every file in it. The cost is that `internal/api/handler.go` shows an edge to each of
+  `internal/db/conn.go` and `internal/db/query.go` where the source named neither — that is the honest
+  reading, and it is what makes `in folder "**/db/**"` and `in file "internal/db/conn.go"` both work.
+- WHY: an import is internal or external by whether its path is one of the package paths `go list` reported
+  for the project, rather than by stripping the module path off the import string. That is the "let the
+  toolchain resolve imports" rule of `AGENTS.md`: vendored copies, `replace` directives, nested modules and
+  the standard library all come out right without this library knowing any of those rules. `pkg.Imports` was
+  the other candidate and needs `NeedDeps`, which loads metadata for every transitive dependency — the whole
+  standard library included — to answer a question the initial packages already answer.
+- WHY: a file is a node only if the walk enumerates it **and** the toolchain puts it in the build. The
+  intersection is what makes both halves' knobs work: folder exclusions are the walk's and build constraints
+  are the toolchain's, and `CheckOptions.BuildTags` already promised that a file a constraint excludes is
+  absent from the graph. The consequence is deliberate: on a Mac, a `_windows.go` file is not a node.
+- WHY: `packages.Load` is asked for `NeedName | NeedFiles | NeedForTest` and nothing else — no types, no
+  syntax. Imports are read from the files this library enumerated, with `go/parser` in `ImportsOnly` mode,
+  rather than from `pkg.Syntax`: `Syntax` lines up with `CompiledGoFiles`, which for a cgo package is
+  toolchain-generated output in the build cache and for a test binary is a synthesized `_testmain.go`, so
+  parsing it would mean mapping generated files back onto project nodes. Parsing the enumerated files
+  instead means the set of files parsed is exactly the set of nodes, and it makes "a file that fails to
+  parse is skipped, not fatal" precise: `ExtractImports` returns the imports it reached alongside the error,
+  the extractor uses them, and the file keeps its self-edge.
+- WHY: `NeedForTest`, and a package with `ForTest` set contributes nodes but no targets. With
+  `IncludeTestFiles` on, the toolchain reports a package twice — once as everyone else sees it and once built
+  with its own test files — and without that distinction `main.go` importing `internal/api` would get an edge
+  to `internal/api/handler_test.go`, which no build outside that test binary contains.
+- WHY: an import of one of the project's own packages whose every file the walk excluded yields no edge at
+  all, rather than an external edge to its path. It is the project's own code, so calling it an external
+  module would fire every "should not depend on external modules" rule on `build/` and `vendor/`. The package
+  path is therefore recorded even when no file of it survives — that key's presence is what tells the
+  project's own code from somebody else's.
+- WHY: `BuildTags` and `IgnoredImportKinds` join `SourceOptions` rather than getting a `GraphOptions` bag of
+  their own. One bag for the whole EXTRACT stage means a caller resolves "nil means defaults" once and hands
+  the same value to `ExtractSourceFiles` and `ExtractGraph`, and `CheckOptions` keeps one translator method
+  instead of two overlapping ones. The struct doc says which fields bear on the walk and which on the graph.
+- WHY: `import "C"` is not special-cased; it becomes an external edge to `C`. It is a cgo directive rather
+  than a package, but a file that uses it does depend on C code, and a branch for it would be a hidden
+  matching rule of exactly the kind the glob-compiles-in-one-place rule exists to prevent.
+- WHY: `resolveProjectRoot` was lifted out of `ExtractSourceFiles` unchanged and is now called once, in
+  `ExtractGraph`, for both halves. The walk and the toolchain each turn the paths they get back into
+  identifiers relative to the root, and those two sets of identifiers are then matched against each other, so
+  resolving it twice would be two chances to disagree — on macOS a `t.TempDir` root under `/var` is one
+  `EvalSymlinks` away from `/private/var`, and either answer works as long as both halves have the same one.
+- WHY: file stems are `extract_graph.go` and `extract_imports.go`. This is the issue the sibling stem
+  `extract_graph` was being saved for since issue #1.
+- WHY: `golang.org/x/tools v0.49.0` is the library's first non-standard-library dependency, added for
+  `go/packages`. The issue asks for it by name and `.golangci.yml`'s depguard already allows exactly
+  `golang.org/x/tools/go/packages`, so the module boundary was drawn before the code was; `x/mod` and
+  `x/sync` come with it as indirect requirements. It is the only import of it in the library, and it lives
+  behind `loadProjectBuild` — nothing above extraction knows the toolchain exists.
+- WHY: still no fluent-API integration test — no builder chain exists yet, as in issues #1 to #7. The level
+  above the unit tests is `TestExtractGraphExtractsThisRepository`, which locates and extracts this
+  repository the way a check will and reads real edges out of the result — `common/fluentapi/check_options.go`
+  to two files of `common/extraction`, `common/extraction/extract_graph.go` to
+  `golang.org/x/tools/go/packages` as external — plus `TestExtractImportsReadsThisFilesOwnFile`, on a file of
+  this package.
