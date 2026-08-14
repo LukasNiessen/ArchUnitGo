@@ -53,6 +53,7 @@ func TestClassifyMarksAnImportOfSomebodyElsesCodeExternal(t *testing.T) {
 		"example.com/fixture-tools/api",        // the same trap with the other separator
 		"example.com/fixtur",                   // a prefix of the project's own module path
 		"example.com/fixture/../outside/thing", // an import path that tries to climb out of the project
+		"example.com/fixture//abs",             // an import path naming no folder the module could own
 	} {
 		targets, external := index.classify(importPath)
 
@@ -108,12 +109,21 @@ func TestClassifyMarksAModuleNestedInTheProjectExternal(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFile(t, root, moduleFileName, "module example.com/fixture\n\ngo 1.26\n")
 	writeProjectFile(t, root, "tools/"+moduleFileName, "module example.com/fixture/tools\n\ngo 1.26\n")
+	// A second nested module, deeper than the first element of the import path, because the search has to
+	// walk *down* the folders rather than test each of them against the root. With only the module at
+	// `tools` to find, a search that looked at `<root>/<element>` for each element separately gave the same
+	// answer for every case here and nothing noticed. Its folder name appears nowhere else in this fixture
+	// on purpose: naming it `internal/tools` would put a go.mod at `<root>/tools` for that same broken
+	// search to find, and it would go on passing.
+	writeProjectFile(t, root, "internal/plugins/"+moduleFileName, "module example.com/fixture/internal/plugins\n\ngo 1.26\n")
 
 	index := fixtureTargetIndex(root)
 
 	for _, importPath := range []string{
 		"example.com/fixture/tools",
 		"example.com/fixture/tools/internal/generate", // below the nested module, so the search walks down to it
+		"example.com/fixture/internal/plugins",        // a nested module that is not the first folder down
+		"example.com/fixture/internal/plugins/proxy",  // and a package below that one
 	} {
 		if _, external := index.classify(importPath); !external {
 			t.Errorf("classify(%q) reported a nested module as the project's own code", importPath)
