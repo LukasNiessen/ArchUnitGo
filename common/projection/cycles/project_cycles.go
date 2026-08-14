@@ -6,6 +6,14 @@
 // layers and packages alike: the projection has already decided what a node is, and a cycle is a cycle
 // whatever the nodes are called. Like the rest of projection it is pure, and it is deterministic — the
 // same edges give the same cycles in the same order, because a report has to be reproducible.
+//
+// There are two doors, and they answer the same question at two resolutions:
+//
+//   - ProjectCycles, for which parts of the graph are cyclic — one entry per strongly connected
+//     component, found with Tarjan. Linear, so always safe to ask for.
+//   - ProjectCircuits, for which cycles there are — one entry per elementary circuit, enumerated
+//     within each of those components with Johnson. Bounded by its options, because counting circuits
+//     is exponential in the worst case.
 package cycles
 
 import (
@@ -20,10 +28,13 @@ import (
 //
 // A group is a strongly connected component of two or more labels, and every edge returned inside one
 // is part of some cycle: for an edge `a -> b` inside a component there is a path from b back to a, which
-// closes it. That is why the component, rather than one path through it, is what a report names — a
+// closes it. That is why the component, rather than one path through it, is what this function names — a
 // component of five labels can hold dozens of simple cycles, listing them is exponential, and fixing
 // any one edge of the component is what breaks it. The labels of a cycle are the source labels of its
 // edges: inside a component every label has an outgoing edge that stays in it, so none is missed.
+//
+// ProjectCircuits is where those simple cycles are listed, one by one and under a limit, for the report
+// that wants to name them rather than the region they are in.
 //
 // A projected self-edge is ignored, which is the same convention as everywhere else in the PROJECT
 // stage: a node depending on itself is not a dependency, so it is not a cycle either. ProjectEdges has
@@ -36,6 +47,21 @@ import (
 func ProjectCycles(edges []projection.ProjectedEdge) [][]projection.ProjectedEdge {
 	labels, successors := adjacency(edges)
 
+	cyclic := cyclicComponents(labels, successors)
+	projected := make([][]projection.ProjectedEdge, 0, len(cyclic))
+	for _, component := range cyclic {
+		projected = append(projected, edgesWithin(component, edges))
+	}
+	return projected
+}
+
+// cyclicComponents is the strongly connected components that are cycles: the ones of two or more labels,
+// in a reproducible order. A component of one label is a label that is in no cycle, because a projection
+// has no self-edges by the time it gets here.
+//
+// It is the step both doors of this package share — the component is what ProjectCycles reports and it is
+// the region ProjectCircuits enumerates inside — so the "two or more" rule is stated once.
+func cyclicComponents(labels []string, successors map[string][]string) [][]string {
 	components := tarjanSCC(labels, successors)
 	cyclic := make([][]string, 0, len(components))
 	for _, component := range components {
@@ -48,12 +74,7 @@ func ProjectCycles(edges []projection.ProjectedEdge) [][]projection.ProjectedEdg
 	// than about the report. Each component's labels are sorted and the components are disjoint, so the
 	// first label orders them totally.
 	slices.SortFunc(cyclic, slices.Compare)
-
-	projected := make([][]projection.ProjectedEdge, 0, len(cyclic))
-	for _, component := range cyclic {
-		projected = append(projected, edgesWithin(component, edges))
-	}
-	return projected
+	return cyclic
 }
 
 // adjacency reads a projection as a plain directed graph of labels: the labels it mentions, sorted, and

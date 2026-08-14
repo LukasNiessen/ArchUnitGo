@@ -654,3 +654,86 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   `common/extraction/extract_graph.go -> golang.org/x/tools/go/packages` and nothing internal, the
   internal half holds `common/projection/map_function.go -> common/extraction/edge.go` and nothing that
   leaves the project, and the identity projection has a node for every file the graph gives a self-edge.
+
+## Issue #15 — Projection: cycle detection — Tarjan and Johnson
+
+- WHY: the Tarjan half already landed with issue #13 (`tarjan_scc.go`, and `ProjectCycles` over it), so
+  this issue is the Johnson half — and it **reverses** issue #13's note, which said the elementary
+  circuits would not be listed because listing them is exponential. That reasoning is sound and it is
+  answered rather than overruled: the enumeration is bounded (see below), so the exponential case ends in
+  a truncated answer that says it is truncated instead of in a test suite that never finishes.
+- WHY: `ProjectCircuits` is therefore a **second door beside `ProjectCycles`, not a replacement for it**.
+  They answer one question at two resolutions — which parts of the graph are cyclic, and which cycles
+  there are — and both are wanted: the component is linear and so always safe to ask for, while the
+  circuits are what a report names (`api -> db -> api` is the sentence; the component is a haystack of
+  every edge around it). Replacing `ProjectCycles` would also have rewritten the meaning of a dozen
+  passing tests, which the scope rule forbids. The package doc now names both doors and each function's
+  doc points at the other.
+- WHY: the vocabulary splits on Johnson's own word. A `Circuit` is one elementary circuit and a "cycle"
+  stays the strongly connected component `ProjectCycles` returns, so the two are nameable in one sentence
+  and neither name has to grow an adjective. The fluent API's `should have no cycles` is unaffected —
+  that is a mood plus a predicate, and it will read whichever of the two it wants.
+- WHY: `ProjectCircuits` returns `([]Circuit, bool)` and is **bounded by default** —
+  `CircuitOptions.MaxCircuits`, defaulting to `DefaultMaxCircuits` = 1000, negative meaning unbounded.
+  The count of elementary circuits is exponential in the size of a component (twenty labels that all
+  depend on each other hold more than 10^17 of them), so an unbounded enumeration is not something a
+  pure function called from a unit test can promise. The bool is `complete`, in the `(value, ok)` shape
+  `MapFunction` already chose: a silent cap would read as "these are all your cycles", which is the
+  quiet direction this library keeps refusing. A rule only needs to know that there is one, so `false`
+  costs it nothing; a report built from a truncated answer can say so.
+- WHY: `MaxCircuits` is the bag's only knob. A `MaxLength` beside it is the obvious second one and
+  nothing asks for it yet — that is the speculative knob the earlier notes keep declining.
+- WHY: Johnson is implemented with the per-starting-label restriction from the paper, which calls
+  `tarjanSCC` again on the shrinking subgraph (`strongComponentOf`). That is what makes the enumeration
+  report each circuit exactly once rather than once per rotation, and it is why `ProjectCircuits` can
+  hand `johnsonCircuits` a whole component and get the circuits *inside* it: the search restricts itself
+  further at every start. The outer decomposition into components is kept anyway — it is the issue's
+  structure, and it keeps each start's Tarjan run on a smaller graph.
+- WHY: `blockedOn` (Johnson's `B`) is a `map[string][]string` with an append-if-absent, not a set of
+  maps. The unblocking order decides which branches the search takes next and so which circuits come out
+  first — and *which ones a truncated enumeration keeps*. Go's map iteration order is deliberately
+  random, so a set would have made a truncated report unreproducible;
+  `TestJohnsonCircuitsIsAFunctionOfTheGraphAlone` runs a limited enumeration eight times for that reason.
+- WHY: `cyclicComponents` was lifted out of `ProjectCycles` unchanged, which is the only edit to code
+  that was already passing its tests. Both doors need "the components of two or more labels, in a
+  reproducible order", and stating that rule twice is how the two doors would drift apart. No behaviour
+  changed; `ProjectCycles`' own tests are untouched.
+- WHY: no `NewCircuit` constructor, though `NewProjectedEdge` beside it is exported. A circuit is not
+  three independent fields but a closed chain, and a hand-built one that is not closed would be a value
+  the type promises cannot exist. An assertion's fixture is a hand-built projection put through
+  `ProjectCircuits`, which is the shape a rule sees anyway.
+- WHY: file stems are `johnson_circuits.go` for the pure algorithm over labels and `project_circuits.go`
+  for the public `Circuit`/`CircuitOptions`/`ProjectCircuits` over projected edges — the same split as
+  `tarjan_scc.go` and `project_cycles.go`. No sibling stem names Johnson; `<algorithm>_<what>` is the
+  shape `AGENTS.md` gives for `tarjan_scc`, and Johnson's paper is titled "Finding all the elementary
+  circuits of a directed graph".
+- WHY: the unit tests check Johnson against `naiveCircuits`, a short exponential enumerator in the test
+  file, on six fixtures — rather than against hand-counted expectations only. The correctness claim
+  here ("every elementary circuit, exactly once, no rotations") is the kind that a hand-written
+  expectation can agree with while being wrong in the same way, and the naive walk is slow enough to be
+  obviously right. The hand-counted cases are kept beside it, including the complete graph on four
+  labels, whose 20 circuits are a closed form.
+- WHY: one fixture, `"a label blocked on twice"`, was found by brute-force enumerating every directed
+  graph on five labels and looking for the one that makes the search record a dead end against the same
+  blocked label twice. Nothing smaller reaches it, and without it the append-if-absent in `blockOn` was
+  the one line in the package no test executed.
+- WHY: the transitive half of the blocking rule has its own fixture, `releasedDeadEndPairs` (a <-> b,
+  b <-> d, a -> c -> d), because `deadEndAdjacency` does not reach it: there every release is `unblock`'s
+  own `s.blocked[label] = false`, so deleting `blockOn` or `unblock`'s recursion changed no answer. In the
+  new one, d is blocked on the root's first branch and the root's second branch needs it released, so both
+  deletions lose `a -> c -> d -> b -> a` — verified by making each mutation in turn.
+- WHY: `TestJohnsonCircuitsIsAFunctionOfTheGraphAlonePastADeadEnd` runs *both* dead-end fixtures rather
+  than moving to the new one. Only the new one has a `blockedOn` list whose contents reach the answer,
+  which is what the test is about — but the chain fixture is the case where a label is blocked and released
+  twice over, and dropping it would have traded one kind of coverage for the other.
+- WHY: `TestProjectCircuitsIsBoundedByDefault` runs on the complete projection over seven labels (2365
+  elementary circuits) through `ProjectCircuits(edges, nil)`, and `TestCircuitOptionsWithDefaults` spells
+  the default out as `1000` instead of naming `DefaultMaxCircuits`. Both are the same point: a test that
+  compares against the constant under test agrees with any value it is given, and a test that passes its
+  own limit never walks the default path. `completeProjection` is `completeAdjacency`'s twin one layer up,
+  over projected edges rather than an adjacency.
+- WHY: still no fluent-API integration test — no builder chain exists, as in issues #1 to #14. The level
+  above the unit tests is two extractions of this repository, projected the way a check will:
+  `TestProjectCircuitsFindsNoCycleAmongTheFoldersOfThisRepository` and
+  `TestProjectCircuitsFindsEveryFileLevelCycleOfThisRepository`, the second at the vocabulary a file-level
+  `should have no cycles` rule will use.
