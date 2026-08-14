@@ -524,3 +524,75 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   trailing this import, the line above holds code, a blank line ended the block. Rewritten numbering can
   shift or collide two segments, losing a directive or attaching one to an import the file never marked;
   `TestExtractImportsReadsDirectivesByPhysicalLine` is the file where the adjusted lines swap the two.
+
+## Issue #13 — Projection: project edges, nodes and cycles
+
+- WHY: `MapFunction` is `func(extraction.Edge) (MappedEdge, bool)`. The data model's "`Edge -> MappedEdge |
+  nothing`" has no union type in Go, and `(value, ok)` is how every optional answer in the language is
+  spelled — a `*MappedEdge` would put a pointer to a two-string struct on the heap for every edge of the
+  graph and make "nothing" a nil dereference away.
+- WHY: `ProjectEdges` drops an edge whose two **labels** are equal, not one whose raw `Source == Target`.
+  That is the data model's "projections filter self-edges out by default" applied after relabelling
+  rather than before, and the difference is the whole point of a slicing projection: two files of one
+  slice depending on each other is a real file-level dependency and no dependency at all between slices,
+  so the drop has to be by label. It subsumes the raw self-edge, because any label that is a function of
+  the identifier gives a self-edge two equal labels.
+- WHY: `ProjectToNodes(graph, mapper)` takes the graph and the hook, not the `[]ProjectedEdge` a reader
+  of the sibling ports might expect. Node projection is the half that "depends on the self-edges", and by
+  the time `ProjectEdges` has returned they are gone — so a signature over projected edges would silently
+  lose every file that depends on nothing, which for a rule about naming or placement is the entire
+  population. Both functions go through one unexported `projectAll`, so the `MapFunction` is called, and
+  the merge decided, in exactly one place.
+- WHY: a projected self-edge appears in neither `Incoming` nor `Outgoing`: it names the node and is not a
+  dependency, so every edge reachable from a `ProjectedNode` is an edge `ProjectEdges` returned too. The
+  edges *inside* a slice therefore have no public door yet — when a cohesion metric wants them,
+  `projectAll` is the door to open, and inventing an options bag for it before that issue lands would be
+  a knob nothing reads.
+- WHY: `ProjectCycles` returns one entry per **strongly connected component**, not one per simple cycle,
+  and each entry holds every projected edge between labels of that component. A component of five labels
+  can hold dozens of simple cycles and enumerating them is exponential, while every edge inside a
+  component provably lies on one — for `a -> b` inside it there is a path from `b` back to `a` — and
+  breaking any single one of them breaks the component. So the component is what a report names, and its
+  labels are the source labels of its edges — inside a component every label has an outgoing edge that
+  stays in it, so an assertion reading them off misses none.
+- WHY: a projected self-edge is not a cycle. `a -> a` is a strongly connected component of one label and
+  is skipped with every other single-label component, which keeps one convention across the whole PROJECT
+  stage: a node depending on itself is not a dependency, so it cannot be a cyclic one either.
+- WHY: `cycles` is a subpackage of `projection` (`AGENTS.md`'s `projection/ ... plus cycles/`) and
+  `tarjan_scc.go` is the sibling stem. Tarjan runs on labels and sorted successors, and `visit` recurses
+  by name off a `tarjanSearch` receiver rather than closing over eight locals; sorted input is what makes
+  the components a function of the projection alone, which a reproducible report needs. Recursion depth is
+  the longest path in the projection, well inside Go's growable stacks.
+- WHY: `ProjectedEdge` and `ProjectedNode` keep unexported fields behind accessors, unlike
+  `extraction.Edge`'s exported ones, and `CumulatedEdges`/`Incoming`/`Outgoing` clone on read. Both types
+  carry slices, so exported fields would let a reader write through into a value that has already been
+  reported — the same reason `matching.Filter` hides its exclusions and `graphCache` hands out copies.
+- WHY: `NewProjectedEdge` puts its raw edges through `extraction.NewGraph`. It copies them away from the
+  caller's slice, and it means the cumulated edges of a projection have the kernel's one edge order and
+  one self-edge shape rather than a second ordering invented here.
+- WHY: labels are used verbatim — no `NormalizeIdentifier`. A label is the vocabulary the rule speaks, and
+  a layer called `API` is not a path; identifier-shaped labels arrive already normalised from the
+  extractor. An empty label drops the edge, which is the same defence `NewGraph` applies to an edge
+  without an identifier.
+- WHY: a nil `MapFunction` projects nothing rather than defaulting to `PerEdge` or returning a
+  `UserError`. Projection is pure and has no `error` to travel in, and an empty projection is exactly what
+  `GatherEmptyTestViolations` was built to report — the loud direction, where guessing at `PerEdge` would
+  quietly judge a rule against a vocabulary nobody asked for.
+- WHY: two `per <thing>` factories, `PerEdge` and `PerInternalEdge`, and no `PerExternalEdge`. A rule
+  about third-party modules is a rule about which edges *leave* the project, and `PerEdge` keeps them with
+  `extraction.Edge.External` still on the raw edges the projection cumulates; a third factory would be a
+  second place deciding what external means. `PerInternalEdge` is written over `PerEdge` so the identity
+  labelling is stated once.
+- WHY: file stems are `project_edges.go` (the sibling stem, and where the package doc lives),
+  `map_function.go`, `project_nodes.go`, `cycles/project_cycles.go` and `cycles/tarjan_scc.go`. The hook
+  and its factories are one concept and share a file; `project_nodes.go` is the stem for a function the
+  issue names `project to nodes`, because `ProjectToNodes` is the English and `project_to_nodes.go` is not
+  a stem any sibling has.
+- WHY: still no fluent-API integration test — no builder chain exists, as in issues #1 to #12. The level
+  above the unit tests is three projections of this repository, extracted the way a check will do it:
+  `TestProjectEdgesProjectsThisRepositoryByFolder` (the `common/projection -> common/extraction` folder
+  dependency, and the raw edges under it naming the two files that make it),
+  `TestProjectToNodesGivesThisRepositoryOneNodePerFolder` (every folder is a node, `common/matching`
+  included, which depends on nothing of the library's own) and
+  `TestProjectCyclesFindsNoCycleAmongTheFoldersOfThisRepository`, which is this library dogfooding the
+  rule the cycle projection exists to serve.
