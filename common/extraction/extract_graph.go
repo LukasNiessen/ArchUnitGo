@@ -47,18 +47,22 @@ const edgesPerNodeEstimate = 8
 //   - an import of one of the project's own packages becomes one edge per file that package is built
 //     from. That is what the language means: a package is compiled as a whole, so a file importing it
 //     depends on every file in it.
-//   - an import of anything else — the standard library, a dependency module, a vendored copy, a nested
-//     module — becomes one edge to the import path itself, marked External. Rules about external
-//     dependencies match against that path.
+//   - an import of anything else — the standard library, a dependency module, a vendored copy, a module
+//     nested inside the project — becomes one edge to the import path itself, exactly as the source
+//     wrote it, marked External. Rules about external dependencies match against that path.
 //
-// Which of the two an import is is the toolchain's answer, not arithmetic on the import string: the
-// project's own package paths are the ones `go list` reported for it.
+// Which of the two an import is is the toolchain's answer rather than arithmetic on the import string:
+// the project's own package paths are the ones `go list` reported for it. The one import the toolchain
+// has nothing to say about is a package that is not there, and the project's own module path is what
+// settles that one — classify_target.go is where the whole decision lives.
 //
 // # What is left out, and none of it is an error
 //
 //   - imports of a flavor SourceOptions.IgnoredImportKinds names;
-//   - an import of one of the project's own packages whose every file the walk excluded — a package
-//     under `vendor` or `build` has no node for an edge to point at;
+//   - an import of the project's own code that has no node to point at: a package whose every file the
+//     walk excluded — one under `vendor` or `build` — one whose every file a build constraint excluded,
+//     or one that does not exist at all because it is half-written, renamed or deleted. None of the three
+//     is an external module, so none of them fires a rule about third-party dependencies;
 //   - a test file as the *target* of an import, even when SourceOptions.IncludeTestFiles put it in the
 //     graph. A package built with its test files is only visible inside its own test binary, so an
 //     import of that package points at the files it is built from everywhere else;
@@ -111,10 +115,9 @@ func ExtractGraph(root string, options *SourceOptions) (Graph, error) {
 type projectBuild struct {
 	// nodes are the enumerated files that are also in the build, in the enumeration's order.
 	nodes []FileInfo
-	// targets maps each package path the project's own source may import to the identifiers of the
-	// nodes that package is built from. A path present with no identifiers is a package of the
-	// project's whose files the walk excluded: it is not external, and it has nothing to point at.
-	targets map[string][]string
+	// targets is what an import path of this project resolves to, and the only place a dependency on the
+	// project's own code is told from a dependency on somebody else's.
+	targets targetIndex
 }
 
 // loadProjectBuild asks the Go toolchain what the project is made of, and keeps the half of the answer
@@ -131,9 +134,10 @@ func loadProjectBuild(directory string, files []FileInfo, options *SourceOptions
 	configuration := &packages.Config{
 		// NeedName for the package paths an import is resolved against, NeedFiles for the files each
 		// package is built from, NeedForTest to tell a package from the same package built with its
-		// test files. Nothing here needs a type, and asking for one would type-check the project and
-		// its dependencies to answer a question about its imports.
-		Mode:       packages.NeedName | packages.NeedFiles | packages.NeedForTest,
+		// test files, NeedModule for the project's own module path. Nothing here needs a type, and
+		// asking for one would type-check the project and its dependencies to answer a question about
+		// its imports.
+		Mode:       packages.NeedName | packages.NeedFiles | packages.NeedForTest | packages.NeedModule,
 		Dir:        directory,
 		Tests:      options.IncludeTestFiles,
 		BuildFlags: buildFlags(options.BuildTags),
@@ -145,17 +149,24 @@ func loadProjectBuild(directory string, files []FileInfo, options *SourceOptions
 
 	// A package that does not compile is reported in its own Errors and is deliberately not read here:
 	// architecture rules are about the shape of the source, and a project mid-refactor still has one.
-	build := projectBuild{targets: make(map[string][]string, len(loaded))}
+	targets := targetIndex{root: directory, packages: make(map[string][]string, len(loaded))}
 	inBuild := make(map[string]struct{}, len(files))
 	for _, pkg := range loaded {
+		if targets.modulePath == "" && pkg.Module != nil && pkg.Module.Main {
+			// Every package the project pattern matches belongs to the module under analysis, so the
+			// first one carrying module information carries the answer. Asking the toolchain rather than
+			// parsing go.mod keeps one source of truth about what the project is, whichever module file
+			// the toolchain was really pointed at.
+			targets.modulePath = pkg.Module.Path
+		}
 		// A package built with its own test files is a second reading of a package that is already
 		// here, so its files are nodes but they are not what an import of that package points at:
 		// nothing outside the test binary sees them. ForTest is what the toolchain calls that.
 		importable := pkg.ForTest == ""
-		if _, found := build.targets[pkg.PkgPath]; importable && !found {
+		if _, found := targets.packages[pkg.PkgPath]; importable && !found {
 			// The key goes in even when no file survives, because its presence is what tells an import
 			// of the project's own code from an import of somebody else's.
-			build.targets[pkg.PkgPath] = nil
+			targets.packages[pkg.PkgPath] = nil
 		}
 		for _, path := range pkg.GoFiles {
 			identifier, inside := RelativeIdentifier(directory, path)
@@ -168,16 +179,18 @@ func loadProjectBuild(directory string, files []FileInfo, options *SourceOptions
 			}
 			inBuild[identifier] = struct{}{}
 			if importable {
-				build.targets[pkg.PkgPath] = append(build.targets[pkg.PkgPath], identifier)
+				targets.packages[pkg.PkgPath] = append(targets.packages[pkg.PkgPath], identifier)
 			}
 		}
 	}
-	for path, identifiers := range build.targets {
+	for path, identifiers := range targets.packages {
 		// One file reaches a path through more than one package — a package and the same package built
 		// with its test files are both reported — and a target list is a set.
 		slices.Sort(identifiers)
-		build.targets[path] = slices.Compact(identifiers)
+		targets.packages[path] = slices.Compact(identifiers)
 	}
+
+	build := projectBuild{targets: targets}
 	// The enumeration is already ordered by identifier, so filtering it keeps that order rather than
 	// inheriting the order the toolchain happened to report packages in.
 	build.nodes = make([]FileInfo, 0, len(inBuild))
@@ -203,11 +216,14 @@ func (b projectBuild) importEdges(node FileInfo, options *SourceOptions) []Edge 
 		if options.IgnoresImportKind(imported.Kind) {
 			continue
 		}
-		targets, internal := b.targets[imported.Path]
-		if !internal {
+		targets, external := b.targets.classify(imported.Path)
+		if external {
+			// The import path itself, exactly as the file wrote it: an external target is a module this
+			// library knows nothing else about, and rules about external dependencies match against it.
 			edges = append(edges, NewEdge(node.Identifier, imported.Path, true, imported.Kind))
 			continue
 		}
+		// No target at all is the project's own code with no node to point at, and yields no edge.
 		for _, target := range targets {
 			edges = append(edges, NewEdge(node.Identifier, target, false, imported.Kind))
 		}

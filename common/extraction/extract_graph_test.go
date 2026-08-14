@@ -4,10 +4,16 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/LukasNiessen/ArchUnitGo/common/archerror"
 )
+
+// thisModulePath is the path of the module the tests dogfooding this repository are about. Nothing in the
+// library holds it — the toolchain reports it — so a test asserting how this repository is classified has
+// to write it out.
+const thisModulePath = "github.com/LukasNiessen/ArchUnitGo"
 
 // writeSourceProject writes a project whose files have the content the test gave them, which is what
 // resolving imports needs and what writeProject — every file a bare `package fixture` — cannot give.
@@ -359,6 +365,70 @@ func Run() {}
 	}
 }
 
+func TestExtractGraphDoesNotCallAMissingPackageOfTheProjectsOwnExternal(t *testing.T) {
+	root := writeSourceProject(t, map[string]string{
+		"main.go": `package main
+
+import (
+	"example.com/fixture/internal/nope"
+	"example.com/fixture/docs"
+)
+
+func main() { nope.Run(docs.Text) }
+`,
+		// A folder of the project holding no Go source is not a package either, so an import of it is the
+		// same case as one of a package that was never written.
+		"docs/README.md": "The toolchain reports no package for this folder.\n",
+	})
+
+	graph := extractGraph(t, root, nil)
+
+	// The project does not compile, and a project mid-refactor still has a shape. What must not happen is
+	// the project's own path turning up as an external module: every rule about third-party dependencies
+	// would fire on it.
+	if want := NewGraph(SelfEdge("main.go")); !slices.Equal(graph, want) {
+		t.Errorf("graph =\n%s\n\nwant\n%s", graph, want)
+	}
+}
+
+func TestExtractGraphMarksAModuleNestedInTheProjectExternal(t *testing.T) {
+	// A module inside the project is a module of its own however its path reads: separately versioned,
+	// resolved through the module graph, and none of its files in this project's build. So a dependency on
+	// it is external and keeps the import path as its target — the opposite answer from the missing
+	// package above, and a go.mod is the whole difference.
+	root := writeSourceProject(t, map[string]string{
+		moduleFileName: `module example.com/fixture
+
+go 1.26
+
+require example.com/fixture/tools v0.0.0
+
+replace example.com/fixture/tools => ./tools
+`,
+		"main.go": `package main
+
+import "example.com/fixture/tools/generate"
+
+func main() { generate.Run() }
+`,
+		"tools/" + moduleFileName: "module example.com/fixture/tools\n\ngo 1.26\n",
+		"tools/generate/generate.go": `package generate
+
+func Run() {}
+`,
+	})
+
+	graph := extractGraph(t, root, nil)
+
+	want := NewGraph(
+		SelfEdge("main.go"),
+		NewEdge("main.go", "example.com/fixture/tools/generate", true, ImportKindPlain),
+	)
+	if !slices.Equal(graph, want) {
+		t.Errorf("graph =\n%s\n\nwant\n%s", graph, want)
+	}
+}
+
 func TestExtractGraphIsReproducible(t *testing.T) {
 	root := writeSourceProject(t, fixtureSourceProject())
 
@@ -440,5 +510,32 @@ func TestExtractGraphExtractsThisRepository(t *testing.T) {
 				t.Errorf("edge %s has %q as a node, want a Go file of the project", edge, identifier)
 			}
 		}
+	}
+}
+
+func TestExtractGraphClassifiesThisRepositoriesDependencies(t *testing.T) {
+	root, err := LocateProject(nil)
+	if err != nil {
+		t.Fatalf("LocateProject(nil) failed: %v", err)
+	}
+
+	graph := extractGraph(t, root, nil)
+
+	externals := 0
+	for _, edge := range graph {
+		if !edge.External {
+			continue
+		}
+		externals++
+		// The target of an external edge is the import path as the file wrote it, so it is the standard
+		// library or a dependency module — never this library's own code under another name.
+		if strings.HasPrefix(edge.Target, thisModulePath) {
+			t.Errorf("edge %s calls this repository's own code an external module", edge)
+		}
+	}
+	if externals == 0 {
+		// This library imports the standard library everywhere, so nothing being external means the
+		// classification collapsed rather than that there was nothing to classify.
+		t.Errorf("graph =\n%s\n\nwant some external edges", graph)
 	}
 }
