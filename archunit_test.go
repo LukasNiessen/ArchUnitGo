@@ -35,16 +35,28 @@ var (
 	_ archunit.FilesNamingCondition = archunit.ProjectFiles(nil).ShouldNot().BeInPath("common/**/*.go")
 )
 
+// The relational rule, in both moods, is one type that is both the object stage and the terminal — so a
+// half-built rule whose object is still being narrowed can be stored too.
+var (
+	_ archunit.Checkable                = archunit.ProjectFiles(nil).ShouldNot().DependOnFiles().InFolder("files/**")
+	_ archunit.FilesDependencyCondition = archunit.ProjectFiles(nil).ShouldNot().DependOnFiles()
+	_ archunit.FilesDependencyCondition = archunit.ProjectFiles(nil).Should().DependOnFiles().WithName("*.go")
+	_ archunit.FilesDependencyCondition = archunit.ProjectFiles(nil).Should().DependOnFiles().InPath("common/**/*.go")
+)
+
 // The violation types a rule reports are on the surface too, because a user who wants more than a pass or
 // a fail reads the violation rather than its message.
 var (
 	_ archunit.Violation     = archunit.FileCycleViolation{}
 	_ archunit.Violation     = archunit.EmptyTestViolation{}
 	_ archunit.Violation     = archunit.FileNamingViolation{}
+	_ archunit.Violation     = archunit.FileDependencyViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
+	_ archunit.ViolationKind = archunit.KindFileDependency
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
+	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
 )
 
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
@@ -408,6 +420,90 @@ func TestTheTwoMoodsOfANamingRuleAreComplementaryOnThePublicSurface(t *testing.T
 	if len(inside) == 0 || len(elsewhere) == 0 {
 		t.Errorf("%s reports %d and %s reports %d, want both moods to have something to say about this repository",
 			required, len(elsewhere), forbidden, len(inside))
+	}
+}
+
+func TestThisRepositoryObeysItsOwnDependencyRules(t *testing.T) {
+	// The four dependency rules AGENTS.md states about this library, written in the library's own words and
+	// held against the library itself. This is the feature the whole project exists for, so a green run here
+	// is the one that means the most: the layering these rules describe is real, and any commit that broke it
+	// would fail this test rather than a reviewer's memory.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rules := []archunit.FilesDependencyCondition{
+		// The shared kernel is shared, so it cannot know about a domain module — which would make the module
+		// impossible to remove and the kernel impossible to reuse.
+		archunit.ProjectFiles(nil).InFolder("common/**").ShouldNot().DependOnFiles().InFolder("files/**"),
+		// Nothing inside the library depends on the public surface, because that package is re-exports and a
+		// dependency on it would be a cycle through the root of the module.
+		archunit.ProjectFiles(nil).ShouldNot().DependOnFiles().WithName("archunit.go"),
+		// The pure halves of a domain module are pure: they take data and return data, so they cannot reach
+		// back into the fluent API that calls them.
+		archunit.ProjectFiles(nil).InFolder("files/assertion").ShouldNot().DependOnFiles().InFolder("files/fluentapi"),
+		archunit.ProjectFiles(nil).InFolder("files/projection").ShouldNot().DependOnFiles().InFolder("files/fluentapi"),
+		// And the assertion half of a module and its projection half do not know about each other either: the
+		// fluent API is what puts a projection's answer into an assertion.
+		archunit.ProjectFiles(nil).InFolder("files/assertion").ShouldNot().DependOnFiles().InFolder("files/projection"),
+	}
+
+	for _, rule := range rules {
+		t.Run(rule.String(), func(t *testing.T) {
+			violations, err := rule.Check(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", rule, err)
+			}
+			for _, violation := range violations {
+				t.Errorf("%s: %s", rule, violation)
+			}
+		})
+	}
+}
+
+func TestADependencyRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.T) {
+	// The failing half, because a rule that cannot fail says nothing: the fluent API of the files module does
+	// depend on the shared pattern-matching package, and forbidding that reports the files that do it, each
+	// carrying the dependency it was broken by. That data is what a report phrases a failure from.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("files/fluentapi").ShouldNot().DependOnFiles().InFolder("common/matching")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	offenders := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindFileDependency {
+			t.Errorf("%s reports a %s violation, want a dependency one", rule, kind)
+			continue
+		}
+		dependency, ok := violation.(archunit.FileDependencyViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a FileDependencyViolation", rule, violation)
+		}
+		if dependency.Mood != archunit.ShouldNot {
+			t.Errorf("the violation of %s was judged in mood %s, want %s", dependency.File, dependency.Mood, archunit.ShouldNot)
+		}
+		if len(dependency.Required) != 1 || dependency.Required[0].Pattern().Source() != "common/matching" {
+			t.Errorf("the violation of %s quotes %v, want the object the rule was written with", dependency.File, dependency.Required)
+		}
+		if len(dependency.Dependencies) == 0 {
+			t.Errorf("the violation of %s carries no dependency, want the ones it was broken by", dependency.File)
+		}
+		for _, found := range dependency.Dependencies {
+			if !strings.HasPrefix(found, "common/matching/") {
+				t.Errorf("the violation of %s carries %q, want only files the object named", dependency.File, found)
+			}
+		}
+		offenders = append(offenders, dependency.File)
+	}
+
+	if !slices.Contains(offenders, "files/fluentapi/project_files.go") {
+		t.Errorf("%s reports %v, want the file that compiles the scope's patterns among them", rule, offenders)
+	}
+	if !slices.Contains(offenders, "files/fluentapi/depend_on_files.go") {
+		t.Errorf("%s reports %v, want the file that compiles the object's patterns among them", rule, offenders)
 	}
 }
 

@@ -2,7 +2,7 @@
 // into the files one rule is about, and drops every file, and every dependency, the rule's scope does
 // not name.
 //
-// Two exported functions, one for each of those halves:
+// Three exported functions, one for the first of those halves and two for the second:
 //
 //   - SelectFiles answers which files a rule is talking about. It is where `project files, in folder
 //     "internal/api/**", with name "*.go"` stops being a sentence and becomes a list of file
@@ -12,6 +12,10 @@
 //     Projected through common/projection.ProjectEdges it keeps exactly the edges both of whose ends
 //     that selection holds, which is what the scope means for a rule about dependencies rather than
 //     about files.
+//   - PerDependencyEdge is the MapFunction of a relational rule, whose two ends are described
+//     separately: the dependencies *from* the files a scope selected *to* the files its object named,
+//     which is what `should not depend on files in folder "internal/db/**"` is judged over.
+//     PerSelectedFileEdge is it with one population at both ends.
 //
 // Both are pure — a graph, and either compiled filters or the identifiers they selected, in — so the
 // meaning of a rule's scope can be tested against a hand-built graph before any project is extracted at

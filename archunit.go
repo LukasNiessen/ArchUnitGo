@@ -79,6 +79,12 @@ type Circuit = cycles.Circuit
 // it was matched against, and the mood the rule was written in.
 type FileNamingViolation = filesassertion.NamingViolation
 
+// FileDependencyViolation says that one file depends on the files a rule named where the rule forbids it, or
+// on none of them where the rule requires it. It is what `should depend on files` and `should not depend on
+// files` report, one per offending file — carrying the file, the object's selectors, the dependencies actually
+// found and the mood the rule was written in.
+type FileDependencyViolation = filesassertion.DependencyViolation
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -86,6 +92,8 @@ const (
 	KindFileCycle = filesassertion.KindFileCycle
 	// KindFileNaming is the kind of FileNamingViolation.
 	KindFileNaming = filesassertion.KindFileNaming
+	// KindFileDependency is the kind of FileDependencyViolation.
+	KindFileDependency = filesassertion.KindFileDependency
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -114,6 +122,12 @@ type FilesCyclesCondition = filesapi.FilesCyclesCondition
 // BeInPath return on either mood. It is a Checkable, so a built rule can be stored, passed to a helper or
 // kept in a list of the suite's rules.
 type FilesNamingCondition = filesapi.FilesNamingCondition
+
+// FilesDependencyCondition is the object stage and the terminal of `project files, ..., should not, depend on
+// files, in folder "internal/db/**"`, which DependOnFiles returns on either mood. Its object verbs — WithName,
+// InFolder, InPath — are chainable and combined with AND, and it is a Checkable, so a built rule can be
+// stored, passed to a helper or kept in a list of the suite's rules.
+type FilesDependencyCondition = filesapi.FilesDependencyCondition
 
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.

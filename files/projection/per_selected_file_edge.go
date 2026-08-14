@@ -1,7 +1,6 @@
 package projection
 
 import (
-	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/projection"
 )
 
@@ -30,20 +29,10 @@ import (
 //
 // An empty selection projects nothing at all, which is the loud direction — a projection with no edges
 // is what assertion.GatherEmptyTestViolations reports on, rather than a rule that quietly passes.
+//
+// It is PerDependencyEdge with one population at both ends, which is what "between these files" means:
+// a rule whose two ends are described separately — `should not depend on files in folder
+// "internal/db/**"` — is that function, and everything above is true of it too.
 func PerSelectedFileEdge(selected []string) kernel.MapFunction {
-	members := make(map[string]struct{}, len(selected))
-	for _, file := range selected {
-		members[file] = struct{}{}
-	}
-
-	perInternalEdge := kernel.PerInternalEdge()
-	return func(edge extraction.Edge) (kernel.MappedEdge, bool) {
-		if _, source := members[edge.Source]; !source {
-			return kernel.MappedEdge{}, false
-		}
-		if _, target := members[edge.Target]; !target {
-			return kernel.MappedEdge{}, false
-		}
-		return perInternalEdge(edge)
-	}
+	return PerDependencyEdge(selected, selected)
 }

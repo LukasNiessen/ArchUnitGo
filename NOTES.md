@@ -1015,3 +1015,56 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
   `testing`" — is skipped again because that package still does not exist. Everything a phrasing needs is on
   the violation (`Kind`, `File`, `Required` with its pattern and target, `Mood`), so the step stays additive.
+
+## Issue #20 — Files API: depend on files
+
+- WHY: `DependOnFiles` returns **one** type, `FilesDependencyCondition`, that is both the object stage and
+  the terminal — not an object builder that a second method turns into a `Checkable`. The grammar in
+  `AGENTS.md` says OBJECT is `1..n, chainable` and TERMINAL is `Check`, and a rule whose object nothing was
+  chained onto is still a rule (`should not depend on files` = depend on nothing of this project), so every
+  object stage is already checkable. Two types would have meant the three object verbs written twice.
+- WHY: the object stage offers exactly the three verbs the issue names — `WithName`, `InFolder`, `InPath` —
+  and not the scope's fourth, `InFile`. The scope has `InFile` because a rule is often written about one
+  named file; an object is a population, and `InPath` already spells the same match target. If a user asks
+  for it, it is one method, and adding it later is additive.
+- WHY: **one violation per offending file**, not one per offending import. The subject of the rule is a file,
+  and the predicate is existential over its dependencies — a file holds `should depend on files in folder X`
+  when it reaches at least one file of X — so the file is what the two moods agree to disagree about. It is
+  also what makes the positive mood reportable at all: there is no import to point at when the offense is
+  that there are none, and a violation carrying the empty list renders as `-> nothing`. Every dependency the
+  negated mood was broken by travels on the one violation, sorted, so a report loses nothing by grouping.
+- WHY: `DependencyViolation.Dependencies` is `[]string` — the identifiers of the files found — and not the
+  projected edges or their import kinds. It matches `NamingViolation`'s shape (data the rule was judged on,
+  nothing more), and a rule about files is written against exactly those strings. The import kinds are still
+  on the projection for a later `depend on files ... by import kind` predicate to read; nothing is lost, and
+  a violation type that carried edges would tie the assertion half to the projection half for no present
+  reader.
+- WHY: the empty-test guard runs over **both** populations of the relational rule — the scope's, with
+  `Subject` `"files"`, and the object's, with `Subject` `"files to depend on"`. An object naming a folder
+  that has been renamed forbids nothing, so `should not depend on files in folder "internal/database/**"` is
+  green forever: that is precisely the silent pass the guard exists for, and it is the more likely half to go
+  stale, because the scope is usually the code the author is looking at. Two subjects rather than one so a
+  report can say which half to go and fix; both halves are reported when both are empty. The object guard is
+  skipped when no object verb was chained, since a bare `depend on files` means every file of the project and
+  the subject guard already covers it.
+- WHY: `files/projection.PerDependencyEdge(from, to)` is new, and `PerSelectedFileEdge` from issue #18 now
+  delegates to it — the one line of passing code this issue touched. "The dependencies between these files"
+  is the relational projection with one population at both ends, so keeping both implementations would have
+  meant two membership tests over the same identifiers and two places to get external edges and self-edges
+  wrong. `select_files.go`'s package doc gained the third bullet that says so.
+- WHY: a bare `DependOnFiles()` with no object verb means every file of the project, which is the loud
+  reading: an object the user forgot to type makes the rule fail (`should not depend on files` becomes "be a
+  leaf") rather than pass over an empty forbidden set. It is the same choice the empty-test guard makes one
+  stage up.
+- WHY: file stems are `files/projection/per_dependency_edge.go` (the `per <thing> edge` family of issue #14),
+  `files/assertion/dependency_violation.go` and `files/assertion/gather_dependency_violations.go` (the
+  `<Thing>Violation` / `gather <thing> violations` pair of issue #10), and
+  `files/fluentapi/depend_on_files.go` — the predicate spelled as the user types it, holding the object stage
+  and the terminal together the way `have_no_cycles.go` holds its terminal.
+- WHY: the public surface gains `FileDependencyViolation` (aliasing `files/assertion.DependencyViolation`,
+  renamed the way `FileCycleViolation` and `FileNamingViolation` are), `KindFileDependency` and
+  `FilesDependencyCondition`. Nothing was added to `govet.unusedresult.funcs`: `DependOnFiles`, the three
+  object verbs and `Check` are methods, and that flag cannot guard a method.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped again because that package still does not exist. Everything a phrasing needs is on
+  the violation (`Kind`, `File`, `Required`, `Dependencies`, `Mood`).
