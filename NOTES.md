@@ -1389,3 +1389,78 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `DependOnExternalModules` and
   `Matching` are methods, and that flag cannot guard a method; the immutability tests are what hold them to
   returning a new builder.
+
+## Issue #26 — Testing: native integration with the standard `testing` package
+
+- WHY: there is no registration, no `init()` and no import side effect, because Go has no matcher-registration
+  hook to register on. AGENTS.md's own testing paragraph settles it — "Go has no matcher-registration hook, so
+  that helper *is* the integration; there is nothing to auto-register" — so the issue's "register on import
+  behind a silent detection check so there is zero setup" is honoured by there being nothing to set up: import
+  the package and call the helper. The one detection this port does have is a probe, not a registration:
+  `AssertPasses` asks the handle for `Helper()` at the call and stays silent when it is missing.
+- WHY: what the issue's "translates to the framework's result shape" asks for, in Go, is the subtest. So the
+  deliverable of this issue is `archtest.AssertAllPass` — the plural of `AssertPasses` — which asserts a whole
+  suite through one `t.Run` per rule, giving each rule its own pass/fail line, its own name in the output and
+  its own `go test -run` selector. It is the same assertion `AssertPasses` makes, one level up; #25 built the
+  framework-agnostic half, and this is the half only the standard library can have.
+- WHY: no rule logic was added. `AssertAllPass` calls `AssertPasses` per rule and nothing else, so the check
+  stays the rule's, the mapping through the shared factory stays `ResultFactory`'s, and there is exactly one
+  idea in the library of how a failure reads.
+- WHY: the suite is `map[string]Checkable` rather than a slice of name/rule pairs or a variadic builder. A map
+  is what keeps a name and the rule it belongs to together at the call site with no wrapper type, and what
+  makes two rules under one name impossible. Its rules are asserted in the sorted order of their names,
+  because Go randomizes map iteration on purpose and a suite whose output reorders itself on every run cannot
+  be diffed; a test runs the helper eight times to pin that.
+- WHY: `TestingRunner` is `TestingT` plus `Helper()` plus `Run(string, func(*testing.T)) bool`, so it is the
+  one interface in this layer that is deliberately not framework-agnostic — `Run`'s argument is a `*testing.T`,
+  so `*testing.B` cannot satisfy it and neither can a third-party handle that is not built on the stdlib's.
+  That is the trade the two helpers split: `AssertPasses` asks for the one method every framework has,
+  `AssertAllPass` asks for the standard library so it can hand back what only the standard library can do.
+- WHY: `Helper()` is required there rather than probed as `AssertPasses` probes it. A handle with
+  `Run(string, func(*testing.T))` is the stdlib's handle, and the stdlib's handle has `Helper` — an optional
+  interface for a method that cannot be missing would be a branch no test could reach.
+- WHY: the subtest closure calls `t.Helper()` on the subtest's own handle. Asked for the frame to blame inside
+  a subtest whose every frame is marked, the standard library walks out into the stack the subtest was created
+  from, where this helper's frames are marked too — so a failing rule of a suite is filed against the user's
+  own `AssertAllPass` line, the same as a single assertion. It is not asserted in a unit test: a `*testing.T`
+  does not expose the frame it filed a failure against, and `Run`'s argument has to be a real one, so it is
+  pinned by the doc comment's own worked example instead.
+- WHY: a suite with no rules in it is one failure — `there are no rules to check: ...` — and no subtests. It is
+  the empty-test guard one level up (a map that lost its entries to a refactor, or one filled by a loop over an
+  empty list), and it is reported for the same reason issue #23's guard reports a rule that selected nothing: a
+  green run that checked nothing is the worst outcome this library has. A nil rule under a name needs no branch
+  here, because `AssertPasses` already reports it inside that name's subtest.
+- WHY: the options bag is the whole suite's, and there is no per-rule bag. A suite is a policy, and a knob that
+  reached the first rule and not the third would be a policy with a hole in it; the one rule that needs knobs
+  of its own is asserted beside the suite with its own `AssertPasses` call.
+- WHY: "respect the framework's negation idiom" is answered by the rule's own mood, not by a second helper.
+  Go's idiom is one non-fatal `t.Error`, which `AssertPasses` already reports through, and the negation of an
+  architecture rule is written where the library already writes it — `ShouldNot()` — which is also the only
+  form that has data to report. An `AssertFails` would have to pass when there is nothing to say, which is
+  the reason issue #18 refused a negated predicate; a caller who wants that assertion has `Check`, which is
+  public for exactly this.
+- WHY: nothing was wired to `CheckOptions.Logging` and no `t.Log` progress output was added. Nothing in the
+  library writes to that field yet — issue #39 owns it — so a helper that piped it to the test log would be
+  piping an empty stream.
+- WHY: the unit test's `runner` drives each subtest body against a fresh zero-value `&testing.T{}` and reads
+  `Failed()` off it, which is how a test of this form observes per-subtest outcomes without failing this
+  repository's own suite. A recorder cannot stand in, because `Run`'s argument is a `*testing.T`. The
+  integration test's `runner` in `archunit_test.go` is the same handle for the same reason: a `Run` that only
+  recorded the name never ran a rule, so nothing the re-export forwards to `AssertPasses` — the options bag
+  above all — was observable through the public surface.
+- WHY: `TestTheOptionsOfASuiteReachItsRulesThroughThePublicSurface` reads the bag off the *outcome* of one rule
+  rather than off the rule's recorded options, as the unit test next door does: a `Checkable` written by the
+  test cannot reach the root package (`archtest` may not import `files/fluentapi`, issue #24), so the
+  observable is a rule whose answer the knob decides. The stale glob selects nothing, so it fails under the
+  defaults and holds under `AllowEmptyTests`; asserting both halves is what says the passing half is a subtest
+  that really ran rather than one that was never entered.
+- WHY: file stems are `assert_all_pass.go` and `assert_all_pass_test.go`, beside `assert_passes.go`, and the
+  re-export sits in `archunit.go` with the rest of the public surface. The root re-export marks itself as a
+  helper before delegating, for issue #25's reason.
+- WHY: the sentences this change made false were rewritten in the same diff — the package doc in
+  `archtest/violation_factory.go` ("Two factories and the color utilities they use" bounded a surface that has
+  since grown a second door), the `AssertPasses` and `TestingT` docs in `archtest/assert_passes.go`, the
+  opening sentence of `AssertOptions`, and the `AssertOptions` re-export doc — so that no doc claims the assert
+  surface is one helper.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AssertAllPass` returns nothing, so
+  there is no result to guard.

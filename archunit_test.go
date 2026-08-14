@@ -2,6 +2,7 @@ package archunit_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -105,12 +106,15 @@ var (
 	_ archunit.Color            = archunit.ColorNone
 )
 
-// And the assert helper's own two names, because the handle a framework hands a test is what a user passes to it
-// and the bag is what a suite fills in: the stdlib's handle satisfies the interface with no adapter, and so does
-// one written by hand.
+// And the assert helpers' own three names, because the handle a framework hands a test is what a user passes to
+// them and the bag is what a suite fills in: the stdlib's handle satisfies both interfaces with no adapter, one
+// written by hand satisfies the smaller of the two, and the suite form asks for the subtest only the stdlib's
+// has.
 var (
 	_ archunit.TestingT      = (*testing.T)(nil)
 	_ archunit.TestingT      = (*recorder)(nil)
+	_ archunit.TestingRunner = (*testing.T)(nil)
+	_ archunit.TestingRunner = (*runner)(nil)
 	_ archunit.AssertOptions = archunit.AssertOptions{
 		Check:   archunit.CheckOptions{AllowEmptyTests: true},
 		Message: archunit.MessageOptions{MaxViolations: 10},
@@ -979,6 +983,117 @@ func TestEveryFrameBetweenTheUserAndTheReportMarksItselfAsAHelper(t *testing.T) 
 	}
 }
 
+func TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests(t *testing.T) {
+	// The library used the way a real suite uses it, on itself: a map of named rules, the suite helper, the real
+	// *testing.T. Each rule runs as a subtest of this one — `go test -run` picks any of them out by name — and
+	// nothing is inspected on purpose, because a rule that holds reports nothing at all and a green run is the
+	// assertion. The day this repository breaks one of these, the subtest named after it is what says so.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	archunit.AssertAllPass(t, map[string]archunit.Checkable{
+		"the kernel does not depend on a domain module": archunit.ProjectFiles(nil).
+			InFolder("common/**").ShouldNot().DependOnFiles().InFolder("files/**"),
+		"the report layer does not depend on a module's fluent api": archunit.ProjectFiles(nil).
+			InFolder("archtest").ShouldNot().DependOnFiles().InFolder("files/fluentapi"),
+		"every file is named the way the layout asks for": archunit.ProjectFiles(nil).
+			Should().HaveName("[_a-z][_a-z0-9]*.go"),
+		"no file depends on another in a circle": archunit.ProjectFiles(nil).Should().HaveNoCycles(),
+	}, nil)
+}
+
+func TestTheSuiteHelperRunsOneSubtestPerRuleUnderTheNameItWasGiven(t *testing.T) {
+	// What the real handle above cannot show, because a subtest that ran is indistinguishable from a suite that
+	// quietly skipped it: the names, and that there is one per rule. They come back sorted rather than in map
+	// order, so that a suite's output is the same on every run and two runs of it can be diffed.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	framework := &runner{}
+	rules := map[string]archunit.Checkable{
+		"the report layer phrases violations and nothing else": archunit.ProjectFiles(nil).
+			InFolder("archtest").ShouldNot().DependOnFiles().InFolder("files/projection"),
+		"a pure assertion cannot reach back into the fluent api": archunit.ProjectFiles(nil).
+			InFolder("files/assertion").ShouldNot().DependOnFiles().InFolder("files/fluentapi"),
+		"nothing inside the library depends on the public surface": archunit.ProjectFiles(nil).
+			ShouldNot().DependOnFiles().WithName("archunit.go"),
+	}
+
+	archunit.AssertAllPass(framework, rules, nil)
+
+	want := slices.Sorted(maps.Keys(rules))
+	if names := framework.names(); !slices.Equal(names, want) {
+		t.Errorf("the suite ran the subtests %v, want one per rule, sorted by name: %v", names, want)
+	}
+	if len(framework.failures) != 0 {
+		t.Errorf("the suite reported %v against the test itself, want every failure inside its own subtest", framework.failures)
+	}
+	for _, ran := range framework.subtests {
+		if ran.failed {
+			t.Errorf("the subtest %q failed, want the pass a rule this repository keeps reports", ran.name)
+		}
+	}
+}
+
+func TestTheOptionsOfASuiteReachItsRulesThroughThePublicSurface(t *testing.T) {
+	// The suite's options bag through the public surface, read off the outcome of a rule the knob decides: the
+	// stale glob selects nothing, so it fails under the defaults and holds under AllowEmptyTests. A re-export
+	// that forwarded a nil bag would pass the second half's rule through the defaults instead, and the first
+	// half is what says the outcome is one a subtest that really ran reported.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rules := map[string]archunit.Checkable{
+		"a folder this repository no longer has": archunit.ProjectFiles(nil).
+			InFolder("common/renamed/**").Should().HaveNoCycles(),
+	}
+	strict, allowed := &runner{}, &runner{}
+
+	archunit.AssertAllPass(strict, rules, nil)
+	archunit.AssertAllPass(allowed, rules, &archunit.AssertOptions{
+		Check: archunit.CheckOptions{AllowEmptyTests: true},
+	})
+
+	for _, framework := range []struct {
+		bag    string
+		ran    *runner
+		failed bool
+	}{
+		{bag: "the default options", ran: strict, failed: true},
+		{bag: "AllowEmptyTests", ran: allowed, failed: false},
+	} {
+		if len(framework.ran.subtests) != 1 {
+			t.Fatalf("the suite under %s ran %d subtests, want the one its rule is named by: %v",
+				framework.bag, len(framework.ran.subtests), framework.ran.names())
+		}
+		if framework.ran.subtests[0].failed != framework.failed {
+			t.Errorf("the subtest of the suite under %s failed: %t, want %t",
+				framework.bag, framework.ran.subtests[0].failed, framework.failed)
+		}
+	}
+}
+
+func TestASuiteWithNoRulesInItFailsThroughThePublicSurface(t *testing.T) {
+	// A suite is a policy, so a policy with nothing in it is the empty test one level up — a map an editor
+	// emptied, or one filled in by a loop over a list that turned out to be empty. It is reported in its own
+	// words rather than passed over, and both frames between the user and the report step aside so that the
+	// failure lands on the AssertAllPass line the user wrote instead of on a line of this library.
+	framework := &runner{}
+
+	archunit.AssertAllPass(framework, nil, nil)
+
+	if len(framework.failures) != 1 {
+		t.Fatalf("a suite with no rules reported %d failures, want the one:\n%v", len(framework.failures), framework.failures)
+	}
+	if want := "there are no rules to check: AssertAllPass was given no rules"; framework.failures[0] != want {
+		t.Errorf("the failure reads %q, want %q", framework.failures[0], want)
+	}
+	if len(framework.subtests) != 0 {
+		t.Errorf("a suite with no rules ran the subtests %v, want none", framework.names())
+	}
+	if framework.helpers != 2 {
+		t.Errorf("the suite marked %d frames as helpers, want the re-export and the helper it delegates to",
+			framework.helpers)
+	}
+}
+
 // recorder is a test framework's handle that records what it was told instead of failing, which is the only way
 // to test what a user is shown when a rule does not hold. It is also the whole of what archunit.TestingT asks
 // of a framework — one method — so it doubles as the proof that a framework other than the stdlib's needs no
@@ -995,6 +1110,41 @@ func (r *recorder) Error(args ...any) {
 
 func (r *recorder) Helper() {
 	r.helpers++
+}
+
+// runner is the standard library's handle as the suite helper sees one: the recorder above, plus Run. It runs
+// each subtest's body against a fresh *testing.T of its own and records the name the suite gave it together
+// with whether the rule asserted inside it held — which is how a test reads a suite's per-rule outcomes
+// without failing this repository's own suite with them. A recorder cannot stand in for that handle, because
+// Run's argument is a *testing.T.
+type runner struct {
+	recorder
+	subtests []subtest
+}
+
+// subtest is one rule's outcome as a framework reports it: the name the suite ran it under, and whether the
+// rule asserted inside it held.
+type subtest struct {
+	name   string
+	failed bool
+}
+
+func (r *runner) Run(name string, f func(t *testing.T)) bool {
+	// A fresh *testing.T with no parent: the assert helper reports through Error, and Failed is what a
+	// framework reads that back off, so running the body here is what lets a test see a rule's own outcome.
+	handle := &testing.T{}
+	f(handle)
+	r.subtests = append(r.subtests, subtest{name: name, failed: handle.Failed()})
+	return !handle.Failed()
+}
+
+// names are the subtests the suite ran, in the order it ran them.
+func (r *runner) names() []string {
+	names := make([]string, 0, len(r.subtests))
+	for _, subtest := range r.subtests {
+		names = append(names, subtest.name)
+	}
+	return names
 }
 
 func selectFiles(t *testing.T, rule archunit.FilesBuilder) []string {
