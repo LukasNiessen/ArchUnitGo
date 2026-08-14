@@ -737,3 +737,89 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   `TestProjectCircuitsFindsNoCycleAmongTheFoldersOfThisRepository` and
   `TestProjectCircuitsFindsEveryFileLevelCycleOfThisRepository`, the second at the vocabulary a file-level
   `should have no cycles` rule will use.
+
+## Issue #16 — Files API: entry point and selectors
+
+- WHY: `archunit.go` exists now, which is another issue's deliverable in name. An entry point that cannot be
+  reached from the public surface is not an entry point: `AGENTS.md`'s own first example and
+  `common/extraction/locate_project.go`'s doc comment both say `archunit.ProjectFiles(...)`, and there is
+  nowhere else for the integration test to run through. It is kept to what this issue needs — the two files
+  entry points, the three type aliases a user needs to name a rule (`ProjectLocator`, `CheckOptions`,
+  `FilesBuilder`) and issue #11's parked one-line re-export of `ClearGraphCache`. Everything else the surface
+  will re-export still belongs to the issue that builds it.
+- WHY: the locator is one nilable parameter, `ProjectFiles(locator *extraction.ProjectLocator)`, not a
+  variadic and not two constructors. Go has no optional parameter, and this is the spelling
+  `locate_project.go` has documented since issue #7 (`archunit.ProjectFiles(nil)`); it is also the same
+  nil-means-defaults contract as `*CheckOptions` and `*SourceOptions`, so a reader learns it once.
+- WHY: the two `govet.unusedresult.funcs` entries the config parked for this moment are uncommented —
+  `…/ArchUnitGo.ProjectFiles` and `.Files`. Verified empirically that a bare `archunit.ProjectFiles(nil)`
+  statement is now reported; the entries are package-level functions, which is the only thing that flag can
+  guard, as the comment above them says. No chain method was added and no default was removed.
+- WHY: what the selectors *mean* lives in `files/projection.SelectFiles(graph, selectors...)`, not in the
+  builder. It is the module's half of the PROJECT stage, it is pure, and it is what lets the meaning of
+  `project files, in folder "internal/**", with name "*.go"` be tested against a hand-built graph. The AND
+  the issue asks for is stated there, once, so no coming predicate re-derives it.
+- WHY: `SelectFiles` reads `Graph.SelfEdges()` for the file population rather than `Graph.Nodes()`. Issue
+  #10's note already named this: the project's own files are the self-edges read for their `Source`. It is
+  what keeps an import path the project depends on unselectable — `in path "**"` cannot select `fmt` — and
+  what keeps a file that depends on nothing selectable. Three tests fail if the two are swapped.
+- WHY: `FilesBuilder.SelectFiles(options)` is a public method the fluent grammar has no stage for. Without
+  it the issue lands as a bag of compiled filters that nothing can resolve, and the SOURCE-and-EXTRACT-plus-
+  scope half it performs is what every predicate this module gains will be written over — better one door,
+  tested, than the same three steps assembled inside each terminal. It deliberately does *not* wire the
+  empty-test guard: selecting nothing is only a failure once a rule judges something, so the guard stays with
+  the terminal, which is what `Selectors()` is exported to report with.
+- WHY: a pattern a scope verb cannot compile is kept on the builder as a deferred `err` and returned by
+  `SelectFiles`, not panicked on and not returned from the verb. A fluent method has nowhere to put an error
+  and `.golangci.yml`'s `forbidigo` bans `panic`. This is the wrap point issue #6's note predicted:
+  `UserError.Operation` is the verb as the user typed it (`in folder`), `Subject` the pattern, and
+  `matching.ErrInvalidPattern` travels as the cause. The first rejection wins — it is the one to fix — and a
+  rejected pattern does not join the selectors, because a zero `Filter` matches nothing and the rule would
+  then report every file as unselected instead of reporting the typo. The error is returned before the
+  project is read.
+- WHY: `common/fluentapi` is imported as `kernel` inside `files/fluentapi`. Both packages are called
+  `fluentapi` — that is `AGENTS.md`'s per-module shape, and the unaliased import compiles and lints clean —
+  but `*fluentapi.CheckOptions` written inside package `fluentapi` reads as a self-reference. `kernel` is the
+  word `AGENTS.md` uses for `common/`, and every sibling module's fluent API will want the same alias.
+- WHY: `Selectors()` is exported and clones on read; there is no `Err()` beside it. The filters are what
+  `assertion.EmptyTestViolation` carries (issue #4 chose `[]matching.Filter` over the pattern strings for
+  exactly this reason) and the only way to observe a stored half-built rule; the deferred error has one
+  reader, the terminal, which is in this package.
+- WHY: `String()` renders the selectors by their own descriptions — `project files, path without filename
+  matches "internal/**"` — rather than replaying the verbs the user typed. Keeping the verb would mean a
+  parallel field beside every filter, and issue #4 already settled that a `Filter` is the reporting unit
+  because it carries both the pattern as typed and the part of an identifier it looks at. A rejected pattern
+  is rendered too, so a builder cannot print as the rule the user thought they wrote.
+- WHY: the four verbs are the four matchers issue #3 built, and none of them re-decides which part of an
+  identifier it looks at: `selecting(verb, pattern, compile)` takes the factory method, so `with name` →
+  `FilenameMatcher`, `in folder` → `FolderMatcher`, `in path` → `PathMatcher`, `in file` →
+  `ExactFileMatcher`. The `RegexFactory` is a field on the builder rather than one built per verb, so glob
+  syntax is chosen once per rule — which is also where `defined by regex`-style syntax choices will hang.
+- WHY: no mood, no predicate, no terminal, no `files/assertion`. This issue is the entry point and the
+  selectors; there is nothing to judge yet, and `Checkable` arrives with the first predicate.
+- WHY: file stems are `files/fluentapi/project_files.go` (the entry point the chain starts at) and
+  `files/projection/select_files.go`. No sibling stem names either; `project_files` is the sentence and
+  `select_files` is what the projection does, and naming the latter `project_files.go` too would put two
+  different concepts under one name in one module.
+- WHY: **the first fluent-API integration test in the repository**, which every note since issue #1 has said
+  was waiting for a builder chain. `archunit_test.go` dogfoods on this repository through the public surface:
+  a chain with no locator selects the files of `common/matching`, `Files` and `ProjectFiles` build the same
+  rule, a stored rule is branched from twice (the `AGENTS.md` example, verbatim), `IncludeTestFiles` reaches
+  the selection, and a folder no file is in selects nothing rather than everything. `files/fluentapi` has a
+  second one against a fixture project on disk, and the unit tests below both run against hand-built graphs.
+- WHY: `TestProjectFilesAndFilesAreOneEntryPoint` resolves both names against the fixture project *on disk*
+  rather than against `fixtureGraph()`, and `archunit_test.go` gained
+  `TestTheLocatorReachesTheProjectThroughEitherEntryPoint`. The locator is an argument nothing else observes
+  — `String()` does not render it and a hand-built graph never reads it — so an entry point that dropped it
+  would silently analyse the auto-detected project. Verified by making each entry point return
+  `ProjectFiles(nil)` in turn: both mutations now fail.
+- WHY: `TestABranchDoesNotWriteIntoTheRuleItGrewFrom` branches from a base of *three* verbs. A value receiver
+  alone does not make a builder immutable — the copy shares the selectors' backing array — but with one or two
+  selectors `append` has no spare capacity, so the aliasing bug is invisible; at three it is, and the test was
+  confirmed to fail with `slices.Clone` removed from `selecting`.
+- WHY: `ProjectFiles` copies the `*ProjectLocator` it is handed, because a builder that is immutable in
+  every stage but the argument it started from is the worse of the two contracts: a caller reusing one
+  locator struct to build a rule per directory would otherwise leave every stored rule, and every branch
+  of it, pointing at the last directory, with no error and no visible symptom.
+  `TestTheLocatorAnEntryPointWasGivenCannotBeChangedAfterwards` writes the locator after the rule is built
+  and both entry points still resolve the project they were given; it fails with the copy removed.
