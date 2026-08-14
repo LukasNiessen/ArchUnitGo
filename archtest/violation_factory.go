@@ -1,0 +1,266 @@
+// Package archtest is the REPORT stage of the pipeline: it turns the violations a rule reported into the
+// message a human reads, and a list of them into a pass flag and one report.
+//
+// It is the only place in the library where a message is built. A violation carries data — the offending
+// file, the pattern it broke, the cycle it sits in, the mood the rule was written in — and never a
+// sentence about it, so that phrasing, numbering and color are decided once, for every rule family, here.
+// An adapter to a test framework asks ResultFactory for a Result and prints it; it does not format, and
+// neither does a domain module.
+//
+// Two factories and the color utilities they use:
+//
+//	violation := archtest.NewViolationFactory(nil).Message(oneViolation)
+//	result := archtest.NewResultFactory(nil).Result(everyViolation)
+//	if !result.Passed {
+//		t.Error(result.Message)
+//	}
+//
+// Every message has one shape — the subject that disagreed with the rule, the requirement it broke in the
+// words the rule was written in, and what was found instead — because a reader who has learned to read
+// one rule family's failure has then learned all of them. Palette names the parts of that shape rather
+// than the rule families, for the same reason.
+//
+// A nil *MessageOptions means the defaults everywhere: plain text, every violation listed. Color is opted
+// into, because test output is read from a CI log as often as from a terminal.
+//
+// The package is named archtest and not testing, which is the name the layout table and the sibling ports
+// use. A package called testing shadows the stdlib testing in exactly the file that needs both — a test —
+// and forces every user to alias one of the two imports. It is the answer AGENTS.md's Go-specifics
+// section reaches for, and the same answer common/archerror already took for `error`.
+package archtest
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	kernel "github.com/LukasNiessen/ArchUnitGo/common/assertion"
+	"github.com/LukasNiessen/ArchUnitGo/common/matching"
+	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
+)
+
+// emptyTestHint is what a report adds to an empty-test violation, and the one message in this layer that
+// explains the library rather than the code under it: a rule that selected nothing is the highest-value
+// defensive check there is, and it is also the failure a reader is most likely to think is a bug in the
+// library. Naming the opt-out is what turns the report into an answer.
+const emptyTestHint = "an empty rule would hold forever, so selecting nothing is a violation rather " +
+	"than a pass (AllowEmptyTests opts out)"
+
+// cyclesRequirement is the sentence a cycle violation broke. It is spelled out rather than read off the
+// violation because `have no cycles` is the one predicate that exists in a single mood: its negation would
+// demand that the files be cyclic and could report nothing but the absence of a cycle, so the fluent API
+// offers it on `should` alone and there is no other rule this violation could have come from.
+const cyclesRequirement = "should, have no cycles"
+
+// ViolationFactory phrases one violation: the collection of constructors that turns the data a rule
+// reported into the sentence a reader gets.
+//
+// It knows the library's own violation types by sight, because a message is built from a violation's
+// fields — the file, the compiled pattern, the mood, the dependencies actually found — and each family
+// has its own. What it does not recognize is phrased from ViolationKind and whatever the violation can
+// say about itself, so a rule family in a module written later, or a Checkable of a user's own, still
+// reports something a human can read while step 8 of AGENTS.md's "Adding a new rule" is outstanding.
+//
+// It is immutable and cheap: a palette and nothing else. Build one per report, or keep one for a suite.
+type ViolationFactory struct {
+	palette Palette
+}
+
+// NewViolationFactory returns the factory that phrases violations under these options. A nil
+// *MessageOptions means the defaults, so NewViolationFactory(nil) is the ordinary call and gives plain
+// text.
+func NewViolationFactory(options *MessageOptions) ViolationFactory {
+	return ViolationFactory{palette: options.WithDefaults().Palette}
+}
+
+// Message is the sentence one violation reads as: what disagreed with the rule, the requirement it broke
+// in the words the rule was written in, and what was found instead.
+//
+//	common/matching/filter.go: should, filename matches "regex_factory.go"; it does not
+//	files/api/handler.go: should not, depend on files, path without filename matches "files/db"; it depends on files/db/conn.go
+//	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
+//	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
+//
+// The requirement is always rendered as the rule stated it, never as its negation — `should not, filename
+// matches "*_test.go"` and not "filename does not match" — which is what keeps assertion.Mood.Holds the
+// one place in the library that inverts anything. The mood is one word of the sentence, and what was
+// found follows from the violation existing at all: under `should` the requirement does not hold, under
+// `should not` it does.
+//
+// A violation of a kind this layer has not been taught is phrased from its kind and its own String, and a
+// nil violation reads as "(no violation)". Neither is a panic: this layer's whole job is to describe
+// somebody else's failing test, and taking their test process down while doing it is the one outcome
+// worse than a vague message.
+func (f ViolationFactory) Message(violation kernel.Violation) string {
+	if violation == nil {
+		// A nil in a []Violation is a bug in whatever built the list, and it is reported rather than
+		// skipped: a report with a numbered gap is how a reader finds out.
+		return "(no violation)"
+	}
+	switch reported := violation.(type) {
+	case kernel.EmptyTestViolation:
+		return f.emptyTest(reported)
+	case filesassertion.CycleViolation:
+		return f.cycle(reported)
+	case filesassertion.NamingViolation:
+		return f.naming(reported)
+	case filesassertion.DependencyViolation:
+		return f.dependency(reported)
+	case filesassertion.AdherenceViolation:
+		return f.adherence(reported)
+	default:
+		return f.unphrased(violation)
+	}
+}
+
+// Messages phrases every violation of a list, in the order they were reported, which is the order the
+// rule found them in. It is what ResultFactory numbers, and what a caller assembling a report of its own
+// shape asks for instead.
+//
+// A nil or empty list is no messages rather than one saying so: an empty result is the pass, and how a
+// pass reads is ResultFactory.Result's to say.
+func (f ViolationFactory) Messages(violations []kernel.Violation) []string {
+	messages := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		messages = append(messages, f.Message(violation))
+	}
+	return messages
+}
+
+// emptyTest phrases a rule that selected nothing: what it was selecting, the selectors that described the
+// empty set, and the note that this is a violation on purpose.
+//
+// The hint is painted in the palette's quietest color rather than left out, because the alternative is a
+// reader who believes the library is broken. The selectors are the whole diagnosis — one of those patterns
+// is the stale one — so a violation carrying none says only that nothing matched.
+func (f ViolationFactory) emptyTest(violation kernel.EmptyTestViolation) string {
+	matched := "nothing matched"
+	if violation.Subject != "" {
+		matched = "no " + violation.Subject + " matched"
+	}
+	message := f.palette.Subject.Paint(matched)
+	if len(violation.Selectors) > 0 {
+		message += ": " + f.palette.Requirement.Paint(clauses(violation.Selectors))
+	}
+	return message + "; " + f.palette.Hint.Paint(emptyTestHint)
+}
+
+// cycle phrases a circular dependency between files as the path that has to be broken, closing onto the
+// file it started from.
+//
+// The subject is the file the cycle closes onto rather than the set of them, because a reader has to open
+// one file to start unpicking it and the whole path follows in the finding. The path is assembled here
+// rather than taken from the circuit's own String, so that it is one piece a palette can paint and so that
+// how a cycle reads stays this layer's decision.
+func (f ViolationFactory) cycle(violation filesassertion.CycleViolation) string {
+	files := violation.Files()
+	if len(files) == 0 {
+		// The enumeration cannot produce a circuit of no files; a violation built by hand can, and a
+		// report of it says so rather than naming a file that is not there.
+		return f.sentence("a cycle through no files", cyclesRequirement, "")
+	}
+	path := strings.Join(files, " -> ") + " -> " + files[0]
+	return f.sentence(files[0], cyclesRequirement, "it depends on itself through "+path)
+}
+
+// naming phrases a file that is not named, or not placed, the way a rule requires. Which part of the
+// identifier was looked at is the filter's own, so `have name`, `be in folder` and `be in path` are one
+// phrasing here exactly as they are one violation type and one gather function.
+func (f ViolationFactory) naming(violation filesassertion.NamingViolation) string {
+	requirement := violation.Mood.String() + ", " + violation.Required.String()
+	return f.sentence(violation.File, requirement, broke(violation.Mood))
+}
+
+// adherence phrases a file that does not satisfy a predicate the user wrote themselves. The requirement is
+// the words they typed beside their function — this is the one rule whose requirement the library could not
+// have derived — and it is quoted so that a reader can see where their sentence begins and ends.
+func (f ViolationFactory) adherence(violation filesassertion.AdherenceViolation) string {
+	requirement := violation.Mood.String() + `, adhere to "` + violation.Requirement + `"`
+	return f.sentence(violation.File, requirement, broke(violation.Mood))
+}
+
+// dependency phrases a file that depends on the files a rule named where that was forbidden, or on none of
+// them where it was required.
+//
+// The finding is the dependencies the violation carries, which is what a reader has to go and unpick under
+// `should not`, and their absence — "it depends on none of them" — is the whole of the offense under
+// `should`. Nothing here branches on the mood to decide which: the list is empty exactly when the absence
+// is the offense.
+func (f ViolationFactory) dependency(violation filesassertion.DependencyViolation) string {
+	requirement := violation.Mood.String() + ", depend on files"
+	if len(violation.Required) > 0 {
+		requirement += ", " + clauses(violation.Required)
+	}
+	finding := "it depends on none of them"
+	if len(violation.Dependencies) > 0 {
+		finding = "it depends on " + strings.Join(violation.Dependencies, ", ")
+	}
+	return f.sentence(violation.File, requirement, finding)
+}
+
+// unphrased phrases a violation this layer has not been taught: its kind, and whatever it can say about
+// itself.
+//
+// Every violation type in the library renders itself for a log line, so a family whose phrasing is
+// outstanding reports its own String and a reader loses the wording rather than the information. A
+// violation that cannot even do that says so, and names what has to be taught — which is step 8 of
+// AGENTS.md's "Adding a new rule", and the only reminder a report can give.
+func (f ViolationFactory) unphrased(violation kernel.Violation) string {
+	kind := string(violation.Kind())
+	if kind == "" {
+		kind = "unknown"
+	}
+	if described, ok := violation.(fmt.Stringer); ok {
+		return f.sentence(kind, described.String(), "")
+	}
+	return f.sentence(kind, "archtest.ViolationFactory has not been taught to phrase this kind", "")
+}
+
+// sentence assembles the one shape every message in this layer has: the subject that disagreed with the
+// rule, the requirement it broke, and what was found instead when there is anything to add.
+//
+// It is the reason Palette names roles instead of rule families. A reader learns the shape once — cyan is
+// the thing to open, yellow is the rule, red is what it actually does — and then reads every family of
+// violation the library will ever grow.
+func (f ViolationFactory) sentence(subject, requirement, finding string) string {
+	message := f.palette.Subject.Paint(subject) + ": " + f.palette.Requirement.Paint(requirement)
+	if finding == "" {
+		return message
+	}
+	return message + "; " + f.palette.Finding.Paint(finding)
+}
+
+// broke is what a violation of this mood found, given that it exists: the requirement does not hold where
+// `should` demanded it, and does hold where `should not` forbade it.
+//
+// The mood picks a word here; it does not invert a requirement. That is Mood.Holds's job, one layer down,
+// and the reason a report says `should not, filename matches "*_test.go"; it does` rather than claiming
+// the rule asked for a name that does not match.
+func broke(mood kernel.Mood) string {
+	if mood.Negated() {
+		return "it does"
+	}
+	return "it does not"
+}
+
+// clauses renders the selectors that described a population, in the order the user chained them onto the
+// rule. They are combined with AND, and the comma is how the library's own types already spell that, from
+// matching.Filter.String up through a violation's own rendering.
+func clauses(selectors []matching.Filter) string {
+	rendered := make([]string, 0, len(selectors))
+	for _, selector := range selectors {
+		rendered = append(rendered, selector.String())
+	}
+	return strings.Join(rendered, ", ")
+}
+
+// plural counts a noun the way a report needs it — `1 violation`, `3 violations` — because a heading that
+// says "1 violations" is the first thing a reader distrusts. Every noun this layer counts takes a plain
+// `s`, and one that does not would be a phrasing decision belonging in this package anyway.
+func plural(count int, noun string) string {
+	counted := strconv.Itoa(count) + " " + noun
+	if count == 1 {
+		return counted
+	}
+	return counted + "s"
+}

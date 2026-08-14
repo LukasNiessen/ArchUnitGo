@@ -1229,3 +1229,73 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — the phrasing in `testing` — is skipped again because that
   package still does not exist. `EmptyTestViolation` already carries the subject and the selectors, which is
   the data such a phrasing would read.
+
+## Issue #24 — Testing: violation formatting, result shaping and colour
+
+- WHY: the layer lives in `archtest/` and not the `testing/` of `AGENTS.md`'s layout table. A package named
+  `testing` shadows the stdlib `testing` in exactly the file that needs both — a test — and would force every
+  user of the library to alias one of the two imports at the one call site the layer exists for. It is the
+  same answer `common/archerror` already took for the layout's `error`, and the one `AGENTS.md`'s Go-specifics
+  section reaches for. The layout table's *contents* are unchanged: `ViolationFactory`, `ResultFactory` and
+  the colour utilities, and nothing else.
+- WHY: "colour" is spelled `color` in every identifier, comment and doc in the new code. `.golangci.yml` runs
+  `misspell` with `locale: US`, so the issue's spelling is a lint failure in source; the concept is the
+  issue's, the spelling is the linter's.
+- WHY: `.golangci.yml` changed twice, both times to keep a dependency rule mechanically enforced rather than
+  to make room for this code. The `common-imports-no-domain` deny listed `…/testing`, a path that never
+  existed and now never will, so it denies `…/archtest` instead — rule 1 was unenforced until this commit.
+  And a new `testing-layer` depguard block states rule 3 (`archtest` may see `common` and the domain modules'
+  violation types, nothing else) in `list-mode: strict`, so a module added later is denied by default instead
+  of needing a new deny line nobody remembers to write. It excludes `!$test` because the layer's own tests
+  read the surface they describe.
+- WHY: `Palette` names roles — `Failure`, `Pass`, `Subject`, `Requirement`, `Finding`, `Hint` — and not rule
+  families. Every message this layer builds has one shape, so a reader who has learned that cyan is the file
+  to open and yellow is the rule has learned every family the library will grow. A palette per family would
+  have to be extended by whoever adds a family, and would teach a reader nothing transferable.
+- WHY: `DefaultPalette()` is a function, not a package-level `var`. A var would let one caller repaint the
+  library's idea of a default report underneath another one, and `gochecknoglobals` would be right to say so.
+- WHY: messages are built from a violation's fields rather than delegated to its `String()`. `String()` is one
+  opaque piece and a report has to paint its parts separately; building here is also what keeps phrasing this
+  layer's decision, which is the whole point of the issue. The cost is a type switch in `Message`, and an
+  `unphrased` fallback keyed on `ViolationKind` plus the violation's own `String` catches a family whose
+  phrasing is outstanding and a `Checkable` of a user's own — so step 8 of "Adding a new rule" being late
+  loses the wording, not the information.
+- WHY: a requirement is rendered as the rule stated it — `should not, filename matches "*_test.go"; it does`
+  — and never inverted into "does not match". `matching.Filter`'s inverted and excluding state is only
+  visible through its `String()`, and `assertion.Mood.Holds` is meant to be the library's only inversion; the
+  mood contributes one word of the sentence and the finding follows from the violation existing at all.
+- WHY: `cyclesRequirement` is a constant sentence rather than something read off `CycleViolation`. `have no
+  cycles` exists in one mood only — its negation would demand that files be cyclic — so there is no other
+  rule the violation could have come from, and nothing to read.
+- WHY: a nil `Violation` inside a list reads as `(no violation)` at its number instead of being skipped or
+  panicking. It is a bug in whatever built the list, a numbered gap is how a reader finds out, and this layer
+  describes somebody else's failing test — taking their test process down while doing it would be worse than
+  any message. `forbidigo` bans `panic` besides.
+- WHY: `MaxViolations` truncation is never silent. The heading carries the whole count and a cut report adds
+  `... and N violations not listed, because MaxViolations is X`, naming the knob, because a short list that
+  looks complete is worse than a long one.
+- WHY: `Result` carries `Passed` and `Message` and not the violations or the rule's own sentence. The data is
+  what `Check` already returned, and which framework prints it — and how a rule's description reaches the top
+  of a report — is the adapter issue's, not this one's.
+- WHY: the package doc lives in `violation_factory.go`, the file the layer's own name is about, because
+  `archtest/` has no `archtest.go` and inventing a doc-only file to hold four paragraphs would break the
+  sibling-stem convention for no reader's benefit.
+- WHY: `ResultFactory.listed` is a method on the factory rather than on `MessageOptions`, where the limit
+  lives. `MessageOptions` already needs a pointer receiver for `WithDefaults`'s nil contract, and `recvcheck`
+  rejects a type with both receiver kinds.
+- WHY: the public surface gains `Result`, `ResultFactory`, `ViolationFactory`, `MessageOptions`, `Palette`,
+  `Color` with its eight constants, `NewResultFactory`, `NewViolationFactory` and `DefaultPalette` now rather
+  than with the adapter. Turning `Check`'s violations into a message is what a user does today, by hand, in
+  the test they already wrote — the layer is usable without an adapter and reaching into a subdirectory for
+  it would contradict "nothing depends on the public surface, the public surface depends on everything".
+- WHY: the fluent-API integration tests for this layer are in `archunit_test.go`, at the root, and not in
+  `archtest/`. Driving a real rule end to end needs `files/fluentapi`, which rule 3 and the new depguard
+  block forbid `archtest` from importing; the root package is where everything is already visible, and it is
+  the surface a user reads a report through anyway.
+- WHY: `TestThisRepositoryObeysItsOwnDependencyRules` gains three rules — `common/**` must not depend on
+  `archtest`, and `archtest` must not depend on `files/fluentapi` or `files/projection`. depguard states the
+  same rules for the linter; the dogfood rules state them for anyone running `go test`, and they are the
+  first check of the new layer that the library performs on itself.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing was removed from it. `Message`, `Messages`
+  and `Result` are methods, and that flag cannot guard a method; their results are consumed by construction
+  in every test that calls them.

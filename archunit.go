@@ -16,6 +16,7 @@
 package archunit
 
 import (
+	"github.com/LukasNiessen/ArchUnitGo/archtest"
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
@@ -152,6 +153,52 @@ type FilesDependencyCondition = filesapi.FilesDependencyCondition
 // passed to a helper or kept in a list of the suite's rules.
 type FilesAdherenceCondition = filesapi.FilesAdherenceCondition
 
+// Result is a whole rule's outcome as a test needs it: whether the rule holds, and the one message to print
+// when it does not. It is what ResultFactory shapes a rule's violations into, and the two fields an adapter
+// to a test framework reads — an adapter prints a report, it never builds one.
+type Result = archtest.Result
+
+// ResultFactory turns the violations a rule reported into a Result: the count, the numbered list and the
+// pass flag. It is where a suite goes to print a failure, and NewResultFactory is how one is built.
+type ResultFactory = archtest.ResultFactory
+
+// ViolationFactory phrases one violation — the file that disagreed with the rule, the requirement it broke
+// and what was found instead — for a caller assembling a report of its own shape rather than the library's.
+// NewViolationFactory is how one is built.
+type ViolationFactory = archtest.ViolationFactory
+
+// MessageOptions is the options bag a report is written with: which colors it is painted in and how many
+// violations it lists. A nil *MessageOptions means the defaults — plain text, every violation.
+type MessageOptions = archtest.MessageOptions
+
+// Palette is which color each part of a report is painted in, one field per role a piece of a message plays:
+// the offender, the rule it broke, what was found instead. The zero Palette paints nothing, so color is
+// something a caller opts into.
+type Palette = archtest.Palette
+
+// Color is a terminal color a report paints one part of a message in. It is a closed set of names rather
+// than an escape sequence, so that nothing but the library ever writes one.
+type Color = archtest.Color
+
+const (
+	// ColorNone paints nothing: the text is left exactly as it is. It is the zero value of a Color.
+	ColorNone = archtest.ColorNone
+	// ColorRed is the failure color of the default palette.
+	ColorRed = archtest.ColorRed
+	// ColorGreen is the pass color of the default palette.
+	ColorGreen = archtest.ColorGreen
+	// ColorYellow is the requirement color of the default palette.
+	ColorYellow = archtest.ColorYellow
+	// ColorBlue is for a palette of a caller's own; the default palette does not use it.
+	ColorBlue = archtest.ColorBlue
+	// ColorMagenta is for a palette of a caller's own; the default palette does not use it.
+	ColorMagenta = archtest.ColorMagenta
+	// ColorCyan is the subject color of the default palette.
+	ColorCyan = archtest.ColorCyan
+	// ColorGray is the hint color of the default palette.
+	ColorGray = archtest.ColorGray
+)
+
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.
 func ProjectFiles(locator *ProjectLocator) FilesBuilder {
@@ -161,6 +208,31 @@ func ProjectFiles(locator *ProjectLocator) FilesBuilder {
 // Files is ProjectFiles under the shorter name the family also gives it. The two are one entry point.
 func Files(locator *ProjectLocator) FilesBuilder {
 	return filesapi.Files(locator)
+}
+
+// NewResultFactory returns the factory that shapes a rule's violations into a Result. A nil *MessageOptions
+// means the defaults, so NewResultFactory(nil) is the ordinary call:
+//
+//	violations, err := rule.Check(nil)
+//	...
+//	if result := archunit.NewResultFactory(nil).Result(violations); !result.Passed {
+//		t.Error(result.Message)
+//	}
+func NewResultFactory(options *MessageOptions) ResultFactory {
+	return archtest.NewResultFactory(options)
+}
+
+// NewViolationFactory returns the factory that phrases one violation at a time, for a caller writing a report
+// of its own shape. A nil *MessageOptions means the defaults.
+func NewViolationFactory(options *MessageOptions) ViolationFactory {
+	return archtest.NewViolationFactory(options)
+}
+
+// DefaultPalette is the palette a caller who wants a colored report and does not want to choose asks for: the
+// failing count and what was found in red, a rule that holds in green, the offending file in cyan, the rule it
+// broke in yellow and the explanatory notes in gray.
+func DefaultPalette() Palette {
+	return archtest.DefaultPalette()
 }
 
 // ClearGraphCache forgets every dependency graph a check extracted earlier in this process, so the next
