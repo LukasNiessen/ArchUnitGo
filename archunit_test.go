@@ -2,6 +2,7 @@ package archunit_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,6 +76,17 @@ var (
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
+)
+
+// The report layer is on the surface too, because a user who has a rule's violations still needs the message
+// they read as — and a palette can be filled in without reaching for the package it comes from.
+var (
+	_ archunit.Result           = archunit.NewResultFactory(nil).Result(nil)
+	_ archunit.ResultFactory    = archunit.NewResultFactory(&archunit.MessageOptions{MaxViolations: 10})
+	_ archunit.ViolationFactory = archunit.NewViolationFactory(nil)
+	_ archunit.Palette          = archunit.DefaultPalette()
+	_ archunit.Palette          = archunit.Palette{Subject: archunit.ColorCyan, Requirement: archunit.ColorYellow}
+	_ archunit.Color            = archunit.ColorNone
 )
 
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
@@ -482,6 +494,13 @@ func TestThisRepositoryObeysItsOwnDependencyRules(t *testing.T) {
 		// The shared kernel is shared, so it cannot know about a domain module — which would make the module
 		// impossible to remove and the kernel impossible to reuse.
 		archunit.ProjectFiles(nil).InFolder("common/**").ShouldNot().DependOnFiles().InFolder("files/**"),
+		// The kernel does not know about the report layer either, for the same reason and the other way round:
+		// a violation carries data, and the words for it are added afterwards by something the kernel cannot see.
+		archunit.ProjectFiles(nil).InFolder("common/**").ShouldNot().DependOnFiles().InFolder("archtest"),
+		// And the report layer reads what a rule reported and nothing else: a dependency on a module's fluent
+		// API or on its projection would mean it was phrasing something other than a violation.
+		archunit.ProjectFiles(nil).InFolder("archtest").ShouldNot().DependOnFiles().InFolder("files/fluentapi"),
+		archunit.ProjectFiles(nil).InFolder("archtest").ShouldNot().DependOnFiles().InFolder("files/projection"),
 		// Nothing inside the library depends on the public surface, because that package is re-exports and a
 		// dependency on it would be a cycle through the root of the module.
 		archunit.ProjectFiles(nil).ShouldNot().DependOnFiles().WithName("archunit.go"),
@@ -624,6 +643,128 @@ func TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 		if !strings.HasPrefix(adherence.File, "files/assertion/") {
 			t.Errorf("%s reports %q, want only files the scope selected", rule, adherence.File)
 		}
+	}
+}
+
+func TestTheReportOfARuleThisRepositoryBreaksNamesEveryOffender(t *testing.T) {
+	// The last stage of the pipeline through the public surface: a rule this repository breaks, its
+	// violations shaped into the report a test failure prints. The rule is the naming one above, so the
+	// violations are known to be there; what is tested here is that the report counts them, numbers them and
+	// names each offending file — and that it is plain text, because a report is read from a CI log as often
+	// as from a terminal.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("common/matching").Should().HaveName("regex_factory.go")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(violations) == 0 {
+		t.Fatalf("%s reports nothing, want the files of that folder that are named otherwise", rule)
+	}
+
+	result := archunit.NewResultFactory(nil).Result(violations)
+
+	if result.Passed {
+		t.Errorf("the report of %s passed, want the failure its %d violations are", rule, len(violations))
+	}
+	lines := strings.Split(result.Message, "\n")
+	if want := strconv.Itoa(len(violations)) + " violations:"; lines[0] != want {
+		t.Errorf("the report begins %q, want %q", lines[0], want)
+	}
+	if len(lines) != len(violations)+1 {
+		t.Errorf("the report has %d lines, want the count and one per violation:\n%s", len(lines), result.Message)
+	}
+	for number, violation := range violations {
+		naming, ok := violation.(archunit.FileNamingViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a FileNamingViolation", rule, violation)
+		}
+		want := "  " + strconv.Itoa(number+1) + ". " + naming.File +
+			`: should, filename matches "regex_factory.go"; it does not`
+		if lines[number+1] != want {
+			t.Errorf("the report reads\n\t%s\nwant\n\t%s", lines[number+1], want)
+		}
+	}
+	if strings.Contains(result.Message, "\x1b") {
+		t.Errorf("the report carries an escape sequence by default, want plain text:\n%q", result.Message)
+	}
+
+	// And the same report painted, which is the one thing the options bag is for.
+	colored := archunit.NewResultFactory(&archunit.MessageOptions{Palette: archunit.DefaultPalette()}).Result(violations)
+	if !strings.HasPrefix(colored.Message, "\x1b[31m") {
+		t.Errorf("the colored report begins %q, want the count painted in the failure color", colored.Message)
+	}
+	if colored.Passed != result.Passed {
+		t.Error("the colored report and the plain one disagree about the pass, want color to be decoration only")
+	}
+
+	// And one of the same violations phrased on its own, through the other re-exported factory, which is
+	// what a caller writing a report of its own shape goes to. The options reach it or the sentence comes
+	// out plain.
+	offender, ok := violations[0].(archunit.FileNamingViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want a FileNamingViolation", rule, violations[0])
+	}
+	painted := archunit.NewViolationFactory(&archunit.MessageOptions{Palette: archunit.DefaultPalette()}).
+		Message(violations[0])
+	want := "\x1b[36m" + offender.File + "\x1b[0m: \x1b[33mshould, filename matches \"regex_factory.go\"\x1b[0m; " +
+		"\x1b[31mit does not\x1b[0m"
+	if painted != want {
+		t.Errorf("the painted violation reads\n\t%s\nwant\n\t%s", painted, want)
+	}
+}
+
+func TestTheReportOfARuleThisRepositoryKeepsIsThePass(t *testing.T) {
+	// The passing direction, which is the report a green suite produces and therefore the one nobody reads:
+	// one line, no violations, and the pass flag read off the empty list rather than tracked beside it.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).Should().HaveName("[_a-z][_a-z0-9]*.go")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, violation)
+	}
+
+	result := archunit.NewResultFactory(nil).Result(violations)
+
+	if !result.Passed {
+		t.Errorf("the report of %s failed, want the pass", rule)
+	}
+	if result.Message != "no violations" {
+		t.Errorf("the report of %s reads %q, want %q", rule, result.Message, "no violations")
+	}
+}
+
+func TestTheReportOfAnEmptyRuleExplainsWhyThatIsAFailure(t *testing.T) {
+	// The failure a reader is most likely to think is a bug in the library: a stale glob selected nothing, so
+	// the rule had nothing to judge. The report names the pattern that matched nothing and the knob that
+	// makes it a pass, because those are the two things they are about to go looking for.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).InFolder("common/renamed/**").Should().HaveNoCycles()
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	result := archunit.NewResultFactory(nil).Result(violations)
+
+	if result.Passed {
+		t.Errorf("the report of %s passed, want the empty rule reported as the failure it is", rule)
+	}
+	want := "1 violation:\n" +
+		`  1. no files matched: path without filename matches "common/renamed/**"; ` +
+		"an empty rule would hold forever, so selecting nothing is a violation rather than a pass " +
+		"(AllowEmptyTests opts out)"
+	if result.Message != want {
+		t.Errorf("the report of %s reads\n%s\nwant\n%s", rule, result.Message, want)
 	}
 }
 
