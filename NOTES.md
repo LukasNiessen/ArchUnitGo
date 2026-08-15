@@ -2392,3 +2392,41 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   the rule the day it lands. `TestThePublicSurfaceIsTheOneFileTheSuiteForbidsDependingOn` pins that the
   pattern names `archunit.go` and nothing else, since a pattern that named the wrong file would leave the rule
   green rather than empty.
+
+## Issue #43 — CI: build, test and lint on every push
+
+- WHY: the issue names three things to run and the workflow has five jobs. `build` (with `go vet` and
+  `go mod tidy -diff`) and `cross-build` are the two extra, and they are there because the gate this
+  repository is held to has commands the three do not cover: a tidy check, and `GOOS=windows GOARCH=amd64`
+  plus `GOOS=linux GOARCH=386` builds. Leaving those out of CI would mean the gate a change is judged by
+  and the gate CI runs were two different lists.
+- WHY: the dogfooding job runs the whole root package (`go test -race -shuffle=on -count=1 .`) rather
+  than a `-run` filter naming the architecture suite. `go test -run` that matches nothing exits 0, so a
+  renamed test would leave that job green having checked no rule at all — the silent pass `AGENTS.md`
+  forbids the library itself ("zero matches is a violation, not a pass"). The cost is seventeen seconds
+  of test time the `test` job already spent; the job exists for the signal, so that "the library broke
+  its own architecture" is a line a reader sees rather than one failure among twenty-six packages.
+- WHY: no OS matrix for the tests — every job runs on `ubuntu-latest`, and Windows and 386 are compiled
+  only. Extraction is the one stage that touches the filesystem and identifiers are normalised paths, so
+  running the suite on Windows is worth having; but nothing here could run it before landing it, and a
+  workflow whose first run is red says less about the code than about the workflow. The cross-build job
+  names both platforms and its comment says what running the tests there would add.
+- WHY: `golangci-lint` is installed with `install-only: true` and then invoked in three plain steps
+  rather than run by `golangci-lint-action` itself. The action's own run would leave `config verify` and
+  `fmt --diff` looking like extras beside it, when `.golangci.yml`'s header names all three as the gate;
+  as plain commands they are also what `ci_test.go` can read and pin. The version is pinned to `v2.12.2`,
+  the release the checks were run against, for the reason the file says: a linter release changes what
+  this repository considers correct, so it should arrive in a commit of its own.
+- WHY: there is a test for a YAML file. `ci_test.go` reads `.github/workflows/ci.yml` as text and pins
+  that every command of the gate is a step of it, that both cross-build platforms are named, that the
+  trigger is every push, and that nothing in it is switched off with `continue-on-error`, `if: false` or a
+  floating linter version. It is the argument `architecture_test.go` makes about the architecture applied
+  to the checks: dropping `-race` or `-shuffle=on` makes CI faster and greener and nothing else fails.
+  The file is searched as text with whitespace collapsed, not parsed, because a YAML parser is a
+  dependency this module does not have and should not take for a test.
+- WHY: the workflow's YAML was reviewed by hand and not machine-validated. No YAML parser is installed
+  on the machine this was written on (`python3` has no `yaml`, and there is no `ruby`, `node` or `yq`),
+  and the only way to get one was a dependency — in the module, or outside the repository. The file's
+  first run on GitHub is therefore also the first parse of it.
+- WHY: the README gained a CI badge. Not asked for by the issue, one line, and it is where a reader
+  looks to find out whether the checks this issue adds are passing.
