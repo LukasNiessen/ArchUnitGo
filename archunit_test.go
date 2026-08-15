@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	archunit "github.com/LukasNiessen/ArchUnitGo"
 )
@@ -107,6 +108,10 @@ var (
 // that judges one by a comparison they write, and the two function types and the class those functions are
 // handed — so that a metric and a predicate can be declared as variables, stored beside the rules they are used
 // by or shared between two of them.
+//
+// The family's report is named beside its rules: `export as html` on each of the two groups, because a report of
+// a group is a terminal of the surface like a check is, and the exporter with the data and the options it writes
+// a page from, because numbers a caller measured themselves are reported through that and not through a chain.
 var (
 	_ archunit.MetricsBuilder = archunit.Metrics(nil).
 		WithName("*.go").
@@ -168,6 +173,19 @@ var (
 	_ func(archunit.MetricsSatisfaction, string) archunit.MetricsSatisfactionCondition = archunit.Metrics(nil).
 		Count().MethodCount().ShouldSatisfy
 	_ archunit.MetricsSatisfaction = isNarrow
+
+	_ func(string, *archunit.CheckOptions) error = archunit.Metrics(nil).Count().ExportAsHTML
+	_ func(string, *archunit.CheckOptions) error = archunit.Metrics(nil).Distance().ExportAsHTML
+
+	_ archunit.MetricsExporter = archunit.NewMetricsExporter(&archunit.MetricsReportOptions{
+		Title: "the numbers of this project",
+		Style: "h1 { color: #b00; }",
+	})
+	_ func(*archunit.MetricsReportOptions) archunit.MetricsExporter = archunit.NewMetricsExporter
+	_ func(archunit.MetricsReportData, string) error                = archunit.NewMetricsExporter(nil).ExportAsHTML
+	_ archunit.MetricsReportData                                    = archunit.MetricsReportData{
+		"lines of code": {{Metric: "lines of code", Subject: "archunit.go", Value: 1}},
+	}
 )
 
 // publicSurface is a metric written the way a user would write one: one number about one
@@ -2143,6 +2161,96 @@ func TestTheSixOutputFormatsRenderAndExportThisRepositoryThroughThePublicSurface
 			}
 		})
 	}
+}
+
+func TestTheMetricsReportOfThisRepositoryIsExportedThroughThePublicSurface(t *testing.T) {
+	// The metrics module's REPORT stage end to end through the public surface, dogfooding on this library: a group
+	// exports a page holding every number it names, and the exporter writes the same page from measurements a
+	// caller took themselves — with the title, the stamp and the stylesheet only that way in.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	scope := archunit.Metrics(nil).InFolder("metrics/rendering")
+	folder := t.TempDir()
+
+	counts := filepath.Join(folder, "reports", "counts.html")
+	if err := scope.Count().ExportAsHTML(counts, nil); err != nil {
+		t.Fatalf("exporting %s as html failed: %v", scope.Count(), err)
+	}
+	distance := filepath.Join(folder, "reports", "distance.html")
+	if err := scope.Distance().ExportAsHTML(distance, nil); err != nil {
+		t.Fatalf("exporting %s as html failed: %v", scope.Distance(), err)
+	}
+
+	exported := readReport(t, counts)
+	// The eight counts of the group, each a heading of the one page, over this library's own files.
+	for _, heading := range []string{
+		"lines of code", "statements", "imports", "functions",
+		"classes", "interfaces", "method count", "field count",
+	} {
+		if !strings.Contains(exported, "<h2>"+heading+"</h2>") {
+			t.Errorf("the exported counts report does not hold the group %q:\n%s", heading, exported)
+		}
+	}
+	for _, subject := range []string{"metrics/rendering/render_html.go", "metrics/rendering.ReportOptions"} {
+		if !strings.Contains(exported, subject) {
+			t.Errorf("the exported counts report does not name %q:\n%s", subject, exported)
+		}
+	}
+	if want := "<h1>" + escapedForReport(scope.Count().String()) + "</h1>"; !strings.Contains(exported, want) {
+		t.Errorf("the exported counts report is not titled %q:\n%s", want, exported)
+	}
+	if measured := readReport(t, distance); !strings.Contains(measured, "<h2>abstractness</h2>") {
+		t.Errorf("the exported distance report does not hold the numbers of a package:\n%s", measured)
+	}
+
+	measurements, err := scope.Count().LinesOfCode().Measure(nil)
+	if err != nil {
+		t.Fatalf("%s failed to measure: %v", scope.Count().LinesOfCode(), err)
+	}
+	own := filepath.Join(folder, "reports", "own.html")
+	exporter := archunit.NewMetricsExporter(&archunit.MetricsReportOptions{
+		Title:     "the size of the metrics reports",
+		Timestamp: time.Date(2026, time.August, 15, 9, 30, 0, 0, time.UTC),
+		Style:     "h1 { color: #b00; }",
+	})
+	if err := exporter.ExportAsHTML(archunit.MetricsReportData{"lines of code": measurements}, own); err != nil {
+		t.Fatalf("exporting the measurements as html failed: %v", err)
+	}
+
+	page := readReport(t, own)
+	for _, want := range []string{
+		"<h1>the size of the metrics reports</h1>",
+		`<p class="taken">taken 2026-08-15T09:30:00Z</p>`,
+		"h1 { color: #b00; }",
+		"<h2>lines of code</h2>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the exported report does not hold %q:\n%s", want, page)
+		}
+	}
+	// One file needs nothing beside it, which is what makes a report the thing to attach to a build's output.
+	for _, forbidden := range []string{"<script", "http://", "https://", "<link"} {
+		if strings.Contains(page, forbidden) {
+			t.Errorf("the exported report holds %q, want a self-contained page:\n%s", forbidden, page)
+		}
+	}
+}
+
+// readReport is an exported report read back as the text a user would open it as.
+func readReport(t *testing.T, path string) string {
+	t.Helper()
+
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the exported report failed: %v", err)
+	}
+	return string(document)
+}
+
+// escapedForReport is a piece of a page's text as the page holds it, escaped by the assertion rather than by the
+// renderer, so that a test proving a report is titled with its rule does not ask the library what escaping means.
+func escapedForReport(text string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", "'", "&#39;").Replace(text)
 }
 
 // nodeLabelsOf are the labels a report's nodes are drawn under, in order, for a message about what came out.

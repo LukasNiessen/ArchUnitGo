@@ -12,7 +12,8 @@ import (
 const countGroup = "count"
 
 // MetricsCountBuilder is the stage between a metrics rule's scope and its number: `metrics, in folder
-// "internal/**", count`, waiting for which of the eight counts the rule is about.
+// "internal/**", count`, waiting for which of the eight counts the rule is about — or for `export as html`,
+// which is the report over all eight of them and the one thing this group closes with on its own.
 //
 // It exists so that the eight verbs below are a group rather than eight more methods on the scope. `count`
 // is what the family calls this group, and the families beside it — the distance metrics of
@@ -21,7 +22,8 @@ const countGroup = "count"
 // the stage about *where* the rule looks.
 //
 // A MetricsCountBuilder is immutable and carries the scope it was asked of unchanged. Every verb hands back
-// a MetricBuilder, which is the stage that can be resolved.
+// a MetricBuilder, which is the stage that can be resolved; ExportAsHTML resolves the scope itself, because a
+// report of the whole group names no single number.
 type MetricsCountBuilder struct {
 	// scope is the rule as it was described before the metric was chosen.
 	scope MetricsBuilder

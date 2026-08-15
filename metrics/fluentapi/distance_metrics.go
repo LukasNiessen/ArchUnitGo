@@ -12,7 +12,8 @@ const distanceGroup = "distance"
 
 // MetricsDistanceBuilder is the stage between a metrics rule's scope and a number about a package: `metrics,
 // in folder "internal/**", distance`, waiting for which of the five the rule is about — or for one of the two
-// zone checks, which are the rules this group can close with on its own.
+// zone checks, which are the rules this group can close with on its own, or for `export as html`, which is the
+// report over all five of them.
 //
 // It is the group of Robert C. Martin's package metrics: `abstractness` and `instability`, which are the two
 // axes of a plane, `distance from the main sequence` and `normalized distance`, which say how far from the
@@ -27,7 +28,8 @@ const distanceGroup = "distance"
 //
 // A MetricsDistanceBuilder is immutable and carries the scope it was asked of unchanged. Every metric verb
 // hands back a MetricBuilder, which is the stage that can be resolved; the two zone checks hand back a
-// MetricsZoneCondition, which is a rule that can be checked.
+// MetricsZoneCondition, which is a rule that can be checked; ExportAsHTML resolves the scope itself and writes
+// a report of every number in the group.
 type MetricsDistanceBuilder struct {
 	// scope is the rule as it was described before the group was opened.
 	scope MetricsBuilder
