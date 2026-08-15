@@ -16,7 +16,8 @@ import "github.com/LukasNiessen/ArchUnitGo/metrics/projection"
 // population an answer this package gives rather than a question the caller has to ask.
 //
 // Implementations are immutable values: get one from a factory in this package and read it through its
-// methods. CountMetric and DistanceMetric are the two the library ships.
+// methods. CountMetric, DistanceMetric and CustomMetric are the three the library ships — the last of them
+// being how a number the library never named is still a Metric like the rest.
 type Metric interface {
 	// Name is what the metric is called in a report, spelled as the family spells it — `lines of code`,
 	// `abstractness`. It is the word the fluent sentence renders and a violation quotes.

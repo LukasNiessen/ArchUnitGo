@@ -236,6 +236,36 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 			message: `component "internal/api": should, be in zone of pain; ` +
 				"it is not, at abstractness 0.5 and instability 0.3333333333333333",
 		},
+		{
+			name: "a class whose number the user's own predicate rejects",
+			violation: metricsassertion.NewSatisfactionViolation(
+				"internal/api.Handler", "method count", 40, "be at most 10 methods wide", kernel.Should),
+			// The requirement is the user's prose, quoted so that a reader can see where their sentence begins
+			// and ends, as adherence does for the files module's escape hatch. The finding names the metric with
+			// the number, because a report that only said the rule was broken would leave a reader to measure
+			// the project again by hand.
+			message: `internal/api.Handler: should, satisfy "be at most 10 methods wide"; ` +
+				"it does not, at method count 40",
+		},
+		{
+			// The subject is whichever population the metric was about, and unquoted for that reason: the metric
+			// named in the finding is what says whether it was a file, a class or a folder.
+			name: "a file whose number the user's own predicate rejects",
+			violation: metricsassertion.NewSatisfactionViolation(
+				"internal/api/handler.go", "lines of code", 700, "be at most 400 lines long", kernel.Should),
+			message: `internal/api/handler.go: should, satisfy "be at most 400 lines long"; ` +
+				"it does not, at lines of code 700",
+		},
+		{
+			// Not something the fluent API can build, where `should satisfy` spells its own mood — and the
+			// finding still says what was actually the case rather than negating the requirement twice. The
+			// number is printed with as many digits as it takes to say which float64 it is.
+			name: "a package the negated mood forbade the predicate to hold for",
+			violation: metricsassertion.NewSatisfactionViolation(
+				"internal/api", "abstractness", 1.0/3.0, "be mostly concrete", kernel.ShouldNot),
+			message: `internal/api: should not, satisfy "be mostly concrete"; ` +
+				"it does, at abstractness 0.3333333333333333",
+		},
 	} {
 		t.Run(wanted.name, func(t *testing.T) {
 			message := archtest.NewViolationFactory(nil).Message(wanted.violation)
@@ -263,6 +293,8 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 			layersassertion.NewClause("api", []string{"domain"}, kernel.Should), "db"),
 		metricsassertion.KindMetricsZone: metricsassertion.NewZoneViolation(
 			"internal/db", "zone of pain", 0, 0, kernel.ShouldNot),
+		metricsassertion.KindMetricsSatisfaction: metricsassertion.NewSatisfactionViolation(
+			"internal/api.Handler", "method count", 40, "be at most 10 methods wide", kernel.Should),
 	}
 
 	for kind, violation := range phrased {

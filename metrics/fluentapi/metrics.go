@@ -20,13 +20,19 @@
 // After the scope comes the group the metric is chosen out of: `count` groups the eight counts this library
 // can take of a file or a class, and `distance` the five numbers it takes of a package. One verb of the
 // group closes it, and Measure is the resolution door of what that describes — the numbers themselves, one
-// per subject. The six threshold predicates that judge them against a number are the mood and the predicate
-// stages, and they land with them.
+// per subject. `custom metric` is the third thing a scope can be followed by and opens no group of its own,
+// because it is the one verb of a group: the number is the user's own function of one class, so it is the
+// family's escape hatch and the reason the two groups above do not have to be exhaustive.
+//
+// The six threshold predicates judge a metric's numbers against what they have to be, and they are the mood
+// and the predicate stages of this family in one verb each. `should satisfy` is the first of them here, and
+// the one whose comparison is itself a function the user wrote: it hands back a
+// MetricsSatisfactionCondition. The other five land with the figures they compare against.
 //
 // The `distance` group also closes two rules of its own: `should not be in zone of pain` and `should not be
 // in zone of uselessness` are predicates about the plane its first two metrics span rather than comparisons
-// against a figure, so they spell the mood themselves and hand back a MetricsZoneCondition — the family's
-// checkable rules, as opposed to its measurements.
+// against a figure, so they spell the mood themselves and hand back a MetricsZoneCondition. Those two and
+// the satisfaction condition are the family's checkable rules, as opposed to its measurements.
 package fluentapi
 
 import (
@@ -42,7 +48,8 @@ import (
 )
 
 // MetricsBuilder is the scope stage of a rule about numbers: `metrics`, plus every scope verb chained onto
-// it. It is what Metrics returns, what each scope verb returns, and what the metric is asked of.
+// it. It is what Metrics returns, what each scope verb returns, and what the metric is asked of — Count and
+// Distance for the groups of numbers the library names, CustomMetric for a number a user defines themselves.
 //
 // A MetricsBuilder is immutable. Every method takes a value receiver and hands back a new builder, so
 // storing one and branching from it is safe and is the point:

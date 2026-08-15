@@ -93,6 +93,7 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
 //	layer "db": may not depend on layers "api"; it depends on api through db/conn.go -> api/handler.go
 //	component "internal/db": should not, be in zone of pain; it is, at abstractness 0 and instability 0
+//	internal/api.Handler: should, satisfy "be at most 10 methods wide"; it does not, at method count 40
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
 // The requirement is always rendered as the rule stated it, never as its negation — `should not, filename
@@ -128,6 +129,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.layerDependency(reported)
 	case metricsassertion.ZoneViolation:
 		return f.metricsZone(reported)
+	case metricsassertion.SatisfactionViolation:
+		return f.metricsSatisfaction(reported)
 	default:
 		return f.unphrased(violation)
 	}
@@ -286,6 +289,27 @@ func (f ViolationFactory) metricsZone(violation metricsassertion.ZoneViolation) 
 	finding := found + ", at abstractness " + coordinate(violation.Abstractness) +
 		" and instability " + coordinate(violation.Instability)
 	return f.sentence(`component "`+violation.Component+`"`, requirement, finding)
+}
+
+// metricsSatisfaction phrases a number that does not satisfy a predicate the user wrote about it: the subject
+// it was measured off, the words they typed beside their function, and what the number actually came to.
+//
+// The requirement is their prose — this is the one threshold predicate whose comparison the library could not
+// have derived — and it is quoted so that a reader can see where their sentence begins and ends, exactly as
+// adherence does for the files module's escape hatch.
+//
+// The finding names the metric with the number, because a report saying only that a rule was broken leaves a
+// reader to measure the project again by hand. It is printed with as many digits as it takes to say exactly
+// which number it is, like every other number this library reports, so a figure compared against a threshold
+// is never shown rounded.
+//
+// The subject is unquoted, unlike a component's or a layer's: a measurement's subject is a file, a class or a
+// folder depending on which metric was read, so there is no one noun to put in front of it — and the metric
+// named in the finding is what says which of the three it is.
+func (f ViolationFactory) metricsSatisfaction(violation metricsassertion.SatisfactionViolation) string {
+	requirement := violation.Mood.String() + `, satisfy "` + violation.Requirement + `"`
+	finding := broke(violation.Mood) + ", at " + violation.Metric + " " + coordinate(violation.Value)
+	return f.sentence(violation.Subject, requirement, finding)
 }
 
 // unphrased phrases a violation this layer has not been taught: its kind, and whatever it can say about

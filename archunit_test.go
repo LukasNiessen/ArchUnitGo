@@ -97,10 +97,16 @@ var (
 
 // The metrics family's four stages, each named by the type the chain actually returns, and the eight count and
 // five distance verbs as method values, because which numbers this library can take of a project is part of the
-// surface. There is no mood stage to name for a number — the six threshold predicates land with the rules that
-// judge one — so what is named as a terminal there is the resolution door, and a Measurement with it, because a
-// suite that wants the numbers of its project rather than a pass or a fail reads them. The two zone checks are
-// the family's rules, and they spell their own mood, so they are named as Checkables beside it.
+// surface. There is no mood stage to name for a number — each of the six threshold predicates spells its own
+// mood, and they land with the rules that judge one — so the resolution door is named as a terminal too, and a
+// Measurement with it, because a suite that wants the numbers of its project rather than a pass or a fail reads
+// them. The two zone checks and `should satisfy` are the family's rules today, so they are named as Checkables
+// beside it.
+//
+// The escape hatch is named in full: the verb that takes a number a user computes themselves, the predicate
+// that judges one by a comparison they write, and the two function types and the class those functions are
+// handed — so that a metric and a predicate can be declared as variables, stored beside the rules they are used
+// by or shared between two of them.
 var (
 	_ archunit.MetricsBuilder = archunit.Metrics(nil).
 		WithName("*.go").
@@ -134,7 +140,48 @@ var (
 
 	_ func() archunit.MetricsZoneCondition = archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfPain
 	_ func() archunit.MetricsZoneCondition = archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfUselessness
+
+	_ archunit.MetricBuilder = archunit.Metrics(nil).
+		CustomMetric("public surface", "how many methods and fields a type exposes", publicSurface)
+	_ func(string, string, archunit.MetricsClassMeasure) archunit.MetricBuilder = archunit.Metrics(nil).CustomMetric
+	_ archunit.MetricsClassMeasure                                              = publicSurface
+
+	_ archunit.Checkable = archunit.Metrics(nil).Count().MethodCount().
+		ShouldSatisfy(isNarrow, "be at most 10 methods wide")
+	_ archunit.MetricsSatisfactionCondition = archunit.Metrics(nil).
+		CustomMetric("public surface", "how many methods and fields a type exposes", publicSurface).
+		ShouldSatisfy(isNarrow, "expose at most 20 methods and fields")
+	_ func(archunit.MetricsSatisfaction, string) archunit.MetricsSatisfactionCondition = archunit.Metrics(nil).
+		Count().MethodCount().ShouldSatisfy
+	_ archunit.MetricsSatisfaction = isNarrow
 )
+
+// publicSurface is a metric written the way a user would write one: one number about one
+// archunit.MetricsClassInfo, computed from the fields the public surface names on it.
+func publicSurface(class archunit.MetricsClassInfo) float64 {
+	return float64(class.MethodCount + class.FieldCount)
+}
+
+// isNarrow is a comparison written the way a user would write one: a question about one archunit.Measurement and
+// the class it was read off, answered from the fields the public surface names on both.
+func isNarrow(measurement archunit.Measurement, class archunit.MetricsClassInfo) bool {
+	return measurement.Value <= 10 || class.Interface || reaches(class.Fields, class.Methods) == 0
+}
+
+// reaches is the half of a user's own metric that reads what a class does with itself: how many of these fields
+// these methods touch. It exists to name archunit.MetricsFieldInfo and archunit.MetricsMethodInfo in a signature,
+// because a predicate that walks them has to be able to declare them without reaching for the module they come
+// from.
+func reaches(fields []archunit.MetricsFieldInfo, methods []archunit.MetricsMethodInfo) int {
+	reached := 0
+	for _, field := range fields {
+		reached += len(field.AccessedBy)
+	}
+	for _, method := range methods {
+		reached += len(method.AccessedFields)
+	}
+	return reached
+}
 
 // The report family, whose chain is one stage and whose terminals are not Checkables, because a report is not a
 // rule: the builder is named so that a described query can be stored and branched into as many focuses and
@@ -188,6 +235,7 @@ var (
 	_ archunit.Violation     = archunit.FileAdherenceViolation{}
 	_ archunit.Violation     = archunit.LayerDependencyViolation{}
 	_ archunit.Violation     = archunit.MetricsZoneViolation{}
+	_ archunit.Violation     = archunit.MetricsSatisfactionViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
@@ -196,12 +244,14 @@ var (
 	_ archunit.ViolationKind = archunit.KindFileAdherence
 	_ archunit.ViolationKind = archunit.KindLayerDependency
 	_ archunit.ViolationKind = archunit.KindMetricsZone
+	_ archunit.ViolationKind = archunit.KindMetricsSatisfaction
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileExternalDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
 	_ archunit.Mood          = archunit.LayerDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.MetricsZoneViolation{}.Mood
+	_ archunit.Mood          = archunit.MetricsSatisfactionViolation{}.Mood
 )
 
 // The report layer is on the surface too, because a user who has a rule's violations still needs the message
@@ -1416,10 +1466,218 @@ func TestAZoneCheckThatSelectedNoPackageIsAViolationThroughThePublicSurface(t *t
 	}
 }
 
+func TestACustomMetricMeasuresThisRepositoryThroughThePublicSurface(t *testing.T) {
+	// The escape hatch end to end through the public surface, dogfooding on this library: a number nothing in
+	// the metrics module names — how much of itself a type exposes — read off the fluent builders of this
+	// repository, and reported like every other metric about a class, per class identifier.
+	//
+	// What is asserted is the subject, the metric's name and a bound the number cannot leave rather than the
+	// number itself, because the shape of this library moves with every commit; the arithmetic is pinned in the
+	// metrics module's tests, against fixtures a commit cannot move.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).
+		InFolder("metrics/fluentapi").
+		ForClassesMatching("Metrics*Builder").
+		CustomMetric("public surface", "how many methods and fields a type exposes", publicSurface)
+
+	measurements, err := rule.Measure(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	subjects := make([]string, 0, len(measurements))
+	for _, measurement := range measurements {
+		if measurement.Metric != "public surface" {
+			t.Errorf("%s reports %q, want the name the user gave the number", rule, measurement.Metric)
+		}
+		if measurement.Value <= 0 {
+			t.Errorf("%s came to %s, want a builder of this library to expose something", rule, measurement)
+		}
+		subjects = append(subjects, measurement.Subject)
+	}
+	if !slices.Contains(subjects, "metrics/fluentapi.MetricsBuilder") {
+		t.Errorf("%s measures %v, want the builders the scope named among them", rule, subjects)
+	}
+	// The sentence a log line and the heading of a failure read as, which is the whole reason the verb insists
+	// on being given words for a number the library cannot describe.
+	if !strings.Contains(rule.String(), `public surface ("how many methods and fields a type exposes")`) {
+		t.Errorf("%s renders without the words the number was described with", rule)
+	}
+}
+
+func TestShouldSatisfyJudgesACustomMetricOfThisRepositoryThroughThePublicSurface(t *testing.T) {
+	// The two halves of the escape hatch in one chain through the public surface: a number the library never
+	// named, judged by a comparison it never named either. The rule is one this repository cannot keep on
+	// purpose — a builder that exposes nothing would be a builder with no verbs — so what it reports is what a
+	// user reads when their own predicate says no.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).
+		InFolder("metrics/fluentapi").
+		ForClassesMatching("Metrics*Builder").
+		CustomMetric("public surface", "how many methods and fields a type exposes", publicSurface).
+		ShouldSatisfy(func(measurement archunit.Measurement, class archunit.MetricsClassInfo) bool {
+			return measurement.Value == 0 || class.Interface
+		}, "expose nothing at all unless it is an interface")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) == 0 {
+		t.Fatalf("%s reports the pass, want the builders that carry verbs", rule)
+	}
+	reported := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindMetricsSatisfaction {
+			t.Errorf("%s reports a %q violation, want the kind of the rule that was written", rule, kind)
+		}
+		satisfaction, ok := violation.(archunit.MetricsSatisfactionViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a MetricsSatisfactionViolation", rule, violation)
+		}
+		if satisfaction.Metric != "public surface" {
+			t.Errorf("%s reports %q as the metric, want the name the user gave the number", rule, satisfaction.Metric)
+		}
+		if satisfaction.Requirement != "expose nothing at all unless it is an interface" {
+			t.Errorf("%s reports %q as the requirement, want the user's own words", rule, satisfaction.Requirement)
+		}
+		if satisfaction.Value <= 0 {
+			t.Errorf("%s reports %s, want the number that broke the predicate", rule, satisfaction)
+		}
+		if satisfaction.Mood.Negated() {
+			t.Errorf("%s reports the negated mood, want the `should` the verb spells", rule)
+		}
+		reported = append(reported, satisfaction.Subject)
+	}
+	if !slices.Contains(reported, "metrics/fluentapi.MetricsBuilder") {
+		t.Errorf("%s reports %v, want the builders the scope named among them", rule, reported)
+	}
+	// The report layer phrases it from the violation's own data, which is how a user actually reads this rule:
+	// the subject, their own sentence, and the number that broke it.
+	message := archunit.NewViolationFactory(nil).Message(violations[0])
+	if !strings.Contains(message, reported[0]) || !strings.Contains(message, "expose nothing at all") {
+		t.Errorf("the report reads %q, want the class and the requirement it broke", message)
+	}
+	if !strings.Contains(message, "at public surface ") {
+		t.Errorf("the report reads %q, want the number the metric came to", message)
+	}
+}
+
+func TestShouldSatisfyKeepsARuleThisRepositoryHoldsThroughThePublicSurface(t *testing.T) {
+	// The pass, over a number the library does name: no class of this repository's kernel reaches a field it
+	// does not declare, because a predicate is handed the class as this library extracted it and every accessed
+	// field is one of its own. A rule nothing breaks reports nothing at all.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).
+		InFolder("common/**").
+		Count().
+		FieldCount().
+		ShouldSatisfy(func(measurement archunit.Measurement, class archunit.MetricsClassInfo) bool {
+			return int(measurement.Value) == len(class.Fields) && reaches(class.Fields, class.Methods) >= 0
+		}, "declare exactly as many fields as it carries")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 0 {
+		t.Errorf("%s reports %v, want the pass", rule, violations)
+	}
+}
+
+func TestShouldSatisfyThatMeasuredNothingIsAViolationThroughThePublicSurface(t *testing.T) {
+	// The empty-test guard on the family's first threshold predicate: a scope no file of the project is in
+	// measures no number, so no number says no about it and the rule would hold forever — and AllowEmptyTests is
+	// the same opt-out every other rule in the library takes.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).
+		InFolder("no/such/folder/**").
+		Count().
+		LinesOfCode().
+		ShouldSatisfy(func(measurement archunit.Measurement, _ archunit.MetricsClassInfo) bool {
+			return measurement.Value <= 400
+		}, "be at most 400 lines long")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 1 || violations[0].Kind() != archunit.KindEmptyTest {
+		t.Fatalf("%s reports %v, want the one empty-test violation", rule, violations)
+	}
+	allowed, err := rule.Check(&archunit.CheckOptions{AllowEmptyTests: true})
+	if err != nil {
+		t.Fatalf("%s failed with AllowEmptyTests: %v", rule, err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
+	}
+}
+
+func TestTheEscapeHatchRejectsWhatTheUserLeftOutThroughThePublicSurface(t *testing.T) {
+	// The five things neither half of the escape hatch can run without, each reported as the user's own error
+	// before the project is read — because a rule that says nothing, or says it in a way nobody could read, is
+	// not a rule the code has broken.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	always := func(archunit.Measurement, archunit.MetricsClassInfo) bool { return true }
+	tests := []struct {
+		name string
+		rule archunit.MetricsSatisfactionCondition
+	}{
+		{
+			name: "a custom metric with no name",
+			rule: archunit.Metrics(nil).CustomMetric("", "how much a type exposes", publicSurface).
+				ShouldSatisfy(always, "be small"),
+		},
+		{
+			name: "a custom metric with no description",
+			rule: archunit.Metrics(nil).CustomMetric("public surface", "", publicSurface).
+				ShouldSatisfy(always, "be small"),
+		},
+		{
+			name: "a custom metric with no function",
+			rule: archunit.Metrics(nil).CustomMetric("public surface", "how much a type exposes", nil).
+				ShouldSatisfy(always, "be small"),
+		},
+		{
+			name: "a predicate that is not there",
+			rule: archunit.Metrics(nil).Count().LinesOfCode().ShouldSatisfy(nil, "be small"),
+		},
+		{
+			name: "a predicate nobody could read",
+			rule: archunit.Metrics(nil).Count().LinesOfCode().ShouldSatisfy(always, " "),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			violations, err := test.rule.Check(nil)
+
+			if err == nil {
+				t.Fatalf("%s reports %v, want an error naming what was left out", test.rule, violations)
+			}
+			if len(violations) != 0 {
+				t.Errorf("%s reports %v beside the error, want nothing", test.rule, violations)
+			}
+			if !strings.Contains(test.rule.String(), "rejected") {
+				t.Errorf("%s renders without the rejection, want it visible in a test failure", test.rule)
+			}
+		})
+	}
+}
+
 func TestMeasuringNothingIsNoErrorThroughThePublicSurface(t *testing.T) {
 	// A scope no file of the project is in: measuring nothing is an ordinary answer at this door, because
-	// whether that is a failure is a question only a rule that judges a number can ask — and the six threshold
-	// predicates are where the empty-test guard will be wired in.
+	// whether that is a failure is a question only a rule that judges a number can ask — which is why the
+	// empty-test guard is wired into `should satisfy` and the two zone checks rather than into this one.
 	t.Cleanup(archunit.ClearGraphCache)
 
 	rule := archunit.Metrics(nil).InFolder("no/such/folder/**").Count().LinesOfCode()
