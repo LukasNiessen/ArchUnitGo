@@ -135,6 +135,13 @@ type LayerDependencyViolation = layersassertion.DependencyViolation
 // coordinates it was judged by and the mood.
 type MetricsZoneViolation = metricsassertion.ZoneViolation
 
+// MetricsThresholdViolation says that one number a metric read is not on the side of the figure a rule held it
+// to, or is on it where the rule forbade that. It is what the five comparing predicates — `should be below`,
+// `should be above`, `should be`, `should be below or equal`, `should be above or equal` — report, one per
+// offending measurement, carrying the subject the number was read off, the metric's name, the number itself, the
+// comparison in the words the rule was written in, the figure and the mood.
+type MetricsThresholdViolation = metricsassertion.ThresholdViolation
+
 // MetricsSatisfactionViolation says that one number a metric read does not satisfy the predicate a rule was
 // given, or does satisfy it where the rule forbade it. It is what `should satisfy` reports, one per offending
 // measurement — carrying the subject the number was read off, the metric's name, the number itself, the
@@ -158,6 +165,8 @@ const (
 	KindLayerDependency = layersassertion.KindLayerDependency
 	// KindMetricsZone is the kind of MetricsZoneViolation.
 	KindMetricsZone = metricsassertion.KindMetricsZone
+	// KindMetricsThreshold is the kind of MetricsThresholdViolation.
+	KindMetricsThreshold = metricsassertion.KindMetricsThreshold
 	// KindMetricsSatisfaction is the kind of MetricsSatisfactionViolation.
 	KindMetricsSatisfaction = metricsassertion.KindMetricsSatisfaction
 )
@@ -250,9 +259,19 @@ type MetricsDistanceBuilder = metricsapi.MetricsDistanceBuilder
 // MetricBuilder is a metrics rule whose metric has been chosen — `metrics, ..., count, lines of code` — which
 // each counting verb, each distance verb and CustomMetric return. Measure is what it hands back the numbers
 // themselves with, one per file for a metric about a file, one per class for a metric about a class and one per
-// folder for a metric about a package, and ShouldSatisfy is the threshold predicate that judges them against a
-// comparison the user writes.
+// folder for a metric about a package, and the six threshold predicates are what judges them: ShouldBeBelow,
+// ShouldBeAbove, ShouldBe, ShouldBeBelowOrEqual and ShouldBeAboveOrEqual hold every number to a figure, and
+// ShouldSatisfy to a comparison the user writes. Those six are the whole of the family's grammar and no synonym
+// joins them.
 type MetricBuilder = metricsapi.MetricBuilder
+
+// MetricsThresholdCondition is the terminal of a metrics rule that holds its numbers to a figure — `metrics,
+// ..., count, lines of code, should be below 400` — which the five comparing predicates return: ShouldBeBelow,
+// ShouldBeAbove, ShouldBe, ShouldBeBelowOrEqual and ShouldBeAboveOrEqual. One terminal serves all five, because
+// what differs between them is the comparison and not the rule. There is no mood stage: each of the five spells
+// its own mood, as all six threshold predicates do. It is a Checkable, so a built rule can be stored, passed to a
+// helper or kept in a list of the suite's rules.
+type MetricsThresholdCondition = metricsapi.MetricsThresholdCondition
 
 // MetricsZoneCondition is the terminal of the two rules about where a package sits in the abstractness and
 // instability plane — `metrics, ..., distance, should not be in zone of pain`, and the same for the zone of
@@ -263,7 +282,8 @@ type MetricsZoneCondition = metricsapi.MetricsZoneCondition
 
 // MetricsSatisfactionCondition is the terminal of the metrics rule whose comparison the user writes themselves
 // — `metrics, ..., count, method count, should satisfy "be at most 10 methods wide"` — which
-// MetricBuilder.ShouldSatisfy returns. There is no mood stage: `should satisfy` spells its own mood, as all six
+// MetricBuilder.ShouldSatisfy returns, and it is the sixth of the six threshold predicates beside
+// MetricsThresholdCondition's five. There is no mood stage: `should satisfy` spells its own mood, as all six
 // threshold predicates do. It is a Checkable, so a built rule can be stored, passed to a helper or kept in a
 // list of the suite's rules.
 type MetricsSatisfactionCondition = metricsapi.MetricsSatisfactionCondition
@@ -429,6 +449,20 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 //		Count().
 //		LinesOfCode().
 //		Measure(nil)
+//
+//	violations, err := archunit.Metrics(nil).
+//		InFolder("internal/api/**").
+//		Count().
+//		LinesOfCode().
+//		ShouldBeBelow(400).
+//		Check(nil)
+//
+// There are exactly six threshold predicates, and each of them spells its own mood, so this family has no mood
+// stage. Five hold every number a rule measured to a figure — `should be below`, `should be above`, `should be`,
+// `should be below or equal`, `should be above or equal` — and the sixth, `should satisfy`, holds it to a
+// comparison the user writes. There is no seventh: `should equal`, `should be at most` and every other synonym of
+// one of the five are deliberately absent, because two spellings of one comparison mean every reader of a suite
+// has to learn which of them the author picked.
 //
 // The four scope verbs are chainable and combined with AND, three of them describing files and
 // ForClassesMatching describing declared types. The family's own name for this entry point is `metrics` alone,

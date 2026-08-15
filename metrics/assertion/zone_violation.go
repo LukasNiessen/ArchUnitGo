@@ -2,20 +2,22 @@
 // files, classes and packages come to and reports one violation per subject that disagrees with a rule about
 // them.
 //
-// ZoneViolation and SatisfactionViolation are its violation types, and GatherZoneViolations and
-// GatherSatisfactionViolations the two functions that make one, which is the shape every assertion package in
-// the library has: one type per rule family, one `gather <thing> violations` per predicate, and no other way
-// for a violation of that family to exist. Both halves are data. A violation says which component was where
-// in the abstractness/instability plane, or which number a subject came to and what was asked of it, and not
-// a word about it, because message construction belongs to the testing layer, where one place controls
+// ZoneViolation, SatisfactionViolation and ThresholdViolation are its violation types, and GatherZoneViolations,
+// GatherSatisfactionViolations and GatherThresholdViolations the three functions that make one, which is the
+// shape every assertion package in the library has: one type per rule family, one `gather <thing> violations`
+// per predicate, and no other way for a violation of that family to exist. The five threshold predicates that
+// compare a number against a figure are one type and one function between them, because the comparison is a
+// calculation.Threshold value rather than a code path. Every half is data. A violation says which component was
+// where in the abstractness/instability plane, or which number a subject came to and what was asked of it, and
+// not a word about it, because message construction belongs to the testing layer, where one place controls
 // phrasing, numbering and color.
 //
 // The mood travels here as it does everywhere, even though the metrics family spells it inside the predicate
-// — `should not be in zone of pain` and `should satisfy` are one verb each rather than a mood stage and a
-// predicate, for the reason AGENTS.md gives about the layer clauses. What the fluent API fuses, this package
-// still takes apart: both gather functions ask the positive question of every subject and hand the answer to
-// assertion.Mood.Holds, so there is no negative code path to keep in step with the positive one even though
-// only one of the two moods is offered.
+// — `should not be in zone of pain`, `should satisfy` and `should be below` are one verb each rather than a mood
+// stage and a predicate, for the reason AGENTS.md gives about the layer clauses. What the fluent API fuses, this
+// package still takes apart: every gather function asks the positive question of each subject and hands the
+// answer to assertion.Mood.Holds, so there is no negative code path to keep in step with the positive one even
+// though only one of the two moods is offered.
 //
 // The package is pure, like every assertion package in the library: no filesystem, no clock, no globals, and
 // nothing in it knows Go. It takes the subjects metrics/projection selected, the arithmetic

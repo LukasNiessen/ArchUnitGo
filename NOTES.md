@@ -1984,3 +1984,70 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   things neither half of the escape hatch can run without. They assert the subject, the metric's name and a
   bound rather than the numbers, because the shape of this library moves with every commit; the arithmetic
   is pinned in `metrics/calculation/custom_metric_test.go` against hand-built classes.
+
+## Issue #36 — Metrics: threshold verbs
+
+- WHY: the arithmetic of the five comparing verbs is one `calculation.Threshold` value rather than five code
+  paths, mirroring `calculation.Zone`: unexported fields, a factory per comparison, one question
+  (`Holds(value)`) and a zero value that admits nothing. What differs between `should be below` and
+  `should be above or equal` is which sides of a figure satisfy, so the five share one fluent terminal
+  (`MetricsThresholdCondition`), one violation type (`ThresholdViolation`) and one gather function
+  (`GatherThresholdViolations`). Five of each would have been five places for the mood, the empty-test guard
+  and the rendering to drift apart.
+- WHY: the factory for `should be` is named `calculation.Exactly` and not `EqualTo`. `should equal` is the
+  first synonym `AGENTS.md` forbids, so the word `equal` is never a bare comparison name in this codebase —
+  it appears only inside `below or equal` and `above or equal`, where it is half of a comparison rather than
+  one.
+- WHY: `Holds` is a single boolean expression over three flags (`below && <`, `equal && ==`, `above && >`)
+  and not a `switch` on the sign of the comparison. A `switch` with the equality in its default branch would
+  put a NaN measurement there — every comparison against NaN is false — and quietly pass `should be`. As
+  written, a number on no side of the figure satisfies nothing and is reported, which
+  `TestGatherThresholdViolationsReportsANumberOnNoSideOfItsFigure` pins.
+- WHY: a figure that is not a number is rejected, an infinite one is not. NaN is on no side of itself, so a
+  rule written with one would report every number it measured and never say why — that is not a rule the code
+  has broken, so it is a deferred `UserError` naming the verb the user typed (`ErrLimitNotANumber`), returned
+  by `Check` before the project is read, exactly as a rejected glob is. `should be below +Inf` is the rule
+  that a count is finite at all, and somebody could mean it.
+- WHY: `should be` carries the empty string as its comparison word, where the other four carry `below`,
+  `above`, `below or equal`, `above or equal`. The equality *is* the comparison, so the figure follows `be`
+  with no word between them — `should, be 1` — and the violation carries no word the user never typed rather
+  than a placeholder. Both `assertion.ThresholdViolation.String` and `archtest`'s `comparison` helper handle
+  the empty word as the one case.
+- WHY: the `be <comparison> <figure>` phrase is assembled twice — once in `metrics/assertion` for the
+  violation's own log line, once in `archtest` for the message a human reads. This is the existing precedent
+  (`ZoneViolation.String` builds `be in <zone>` and `archtest.metricsZone` builds it again), and it is what
+  keeps phrasing the testing layer's decision while leaving every violation able to describe itself.
+  `archtest.stands` — the `is`/`is not` auxiliary for the requirements whose verb is `be` — is now shared by
+  the zone phrasing and the threshold one instead of being inlined in the first.
+- WHY: the empty-test population is reported as `measurements`, as `should satisfy` reports it. Which
+  population a metric reads is the metric's own business, so what a reader has to be told is that the rule
+  ended up with no number to compare — a scope selecting files that declare no class is exactly that case,
+  and `TestAThresholdOverAScopeWithNoClassIsAnEmptyTestViolation` pins it.
+- WHY: `TestTheThresholdPredicatesAreExactlySixWithNoSynonyms` checks the issue mechanically rather than
+  leaving it to a reviewer's memory: it walks `MetricBuilder`'s method set with `reflect`, requires the
+  `Should*` methods to be exactly the six, and requires the stages before a metric is named to offer none of
+  them and none of nineteen named synonyms (`ShouldEqual`, `ShouldBeAtMost`, `ShouldBeLessThan`, …). A
+  seventh spelling is added by somebody who did not know the comparison was already there, which is what a
+  test can notice and a convention cannot.
+- WHY: file stems are `metrics/calculation/threshold.go`, `metrics/assertion/threshold_violation.go` and
+  `gather_threshold_violations.go` — the `<thing> violation` / `gather <thing> violations` pair every rule
+  family uses — and `metrics/fluentapi/should_be.go`, the sibling of `should_satisfy.go`, each with its test
+  file beside it.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. The five verbs are methods, which
+  that list cannot guard, and `Check` returns an error `errcheck` already guards. This follows #27, #28, #32,
+  #33, #34 and #35.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc
+  (which said comparing a number against a threshold was not this package's business), `metrics/assertion`'s
+  package doc (which counted two violation types and two gather functions), `metrics/fluentapi`'s package doc
+  and `MetricBuilder`'s doc (which said `ShouldSatisfy` was "the first of the six to land"), `archtest`'s
+  `Message` doc example block and its `coordinate` helper doc, `archunit.go`'s `MetricBuilder`,
+  `MetricsSatisfactionCondition` and `Metrics` docs, and two comments in `archunit_test.go` — the metrics
+  compile-time block and the note saying the empty-test guard was wired into `should satisfy` and the zone
+  checks alone.
+- WHY: the integration tests are `archunit_test.go`'s five new ones — a threshold rule this repository cannot
+  keep, reported through the report layer; each of the five verbs arriving at the public surface as the
+  comparison the user typed; a rule this repository keeps; the empty-test guard on the new terminal; and the
+  figure that is not a number rejected on each of the five. They are written against figures no line count of
+  a real Go file can satisfy — a file has at least one line and not a billion — rather than against numbers a
+  commit can move; the arithmetic is pinned in `metrics/calculation/threshold_test.go` against hand-built
+  figures.

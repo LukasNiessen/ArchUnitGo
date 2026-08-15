@@ -100,8 +100,8 @@ var (
 // surface. There is no mood stage to name for a number — each of the six threshold predicates spells its own
 // mood, and they land with the rules that judge one — so the resolution door is named as a terminal too, and a
 // Measurement with it, because a suite that wants the numbers of its project rather than a pass or a fail reads
-// them. The two zone checks and `should satisfy` are the family's rules today, so they are named as Checkables
-// beside it.
+// them. The two zone checks, the five predicates that hold a number to a figure and `should satisfy` are the
+// family's rules, so they are named as Checkables beside it.
 //
 // The escape hatch is named in full: the verb that takes a number a user computes themselves, the predicate
 // that judges one by a comparison they write, and the two function types and the class those functions are
@@ -145,6 +145,20 @@ var (
 		CustomMetric("public surface", "how many methods and fields a type exposes", publicSurface)
 	_ func(string, string, archunit.MetricsClassMeasure) archunit.MetricBuilder = archunit.Metrics(nil).CustomMetric
 	_ archunit.MetricsClassMeasure                                              = publicSurface
+
+	_ archunit.Checkable                 = archunit.Metrics(nil).Count().LinesOfCode().ShouldBeBelow(400)
+	_ archunit.Checkable                 = archunit.Metrics(nil).Distance().Instability().ShouldBeAboveOrEqual(0.2)
+	_ archunit.MetricsThresholdCondition = archunit.Metrics(nil).
+		CustomMetric("public surface", "how many methods and fields a type exposes", publicSurface).
+		ShouldBeBelowOrEqual(20)
+
+	_ func(float64) archunit.MetricsThresholdCondition = archunit.Metrics(nil).Count().LinesOfCode().ShouldBeBelow
+	_ func(float64) archunit.MetricsThresholdCondition = archunit.Metrics(nil).Count().LinesOfCode().ShouldBeAbove
+	_ func(float64) archunit.MetricsThresholdCondition = archunit.Metrics(nil).Count().LinesOfCode().ShouldBe
+	_ func(float64) archunit.MetricsThresholdCondition = archunit.Metrics(nil).Count().LinesOfCode().
+		ShouldBeBelowOrEqual
+	_ func(float64) archunit.MetricsThresholdCondition = archunit.Metrics(nil).Count().LinesOfCode().
+		ShouldBeAboveOrEqual
 
 	_ archunit.Checkable = archunit.Metrics(nil).Count().MethodCount().
 		ShouldSatisfy(isNarrow, "be at most 10 methods wide")
@@ -235,6 +249,7 @@ var (
 	_ archunit.Violation     = archunit.FileAdherenceViolation{}
 	_ archunit.Violation     = archunit.LayerDependencyViolation{}
 	_ archunit.Violation     = archunit.MetricsZoneViolation{}
+	_ archunit.Violation     = archunit.MetricsThresholdViolation{}
 	_ archunit.Violation     = archunit.MetricsSatisfactionViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
@@ -244,6 +259,7 @@ var (
 	_ archunit.ViolationKind = archunit.KindFileAdherence
 	_ archunit.ViolationKind = archunit.KindLayerDependency
 	_ archunit.ViolationKind = archunit.KindMetricsZone
+	_ archunit.ViolationKind = archunit.KindMetricsThreshold
 	_ archunit.ViolationKind = archunit.KindMetricsSatisfaction
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
@@ -251,6 +267,7 @@ var (
 	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
 	_ archunit.Mood          = archunit.LayerDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.MetricsZoneViolation{}.Mood
+	_ archunit.Mood          = archunit.MetricsThresholdViolation{}.Mood
 	_ archunit.Mood          = archunit.MetricsSatisfactionViolation{}.Mood
 )
 
@@ -1506,6 +1523,188 @@ func TestACustomMetricMeasuresThisRepositoryThroughThePublicSurface(t *testing.T
 	}
 }
 
+func TestAThresholdJudgesANumberOfThisRepositoryThroughThePublicSurface(t *testing.T) {
+	// The five comparing predicates end to end through the public surface, dogfooding on this library: no locator,
+	// so the project is the one this test is in. The rule is one this repository cannot keep — a Go file with no
+	// line in it is not a file — so what it reports is what a user reads when a number leaves its budget.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InFolder("common/**").Count().LinesOfCode().ShouldBeBelow(1)
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) == 0 {
+		t.Fatalf("%s reports the pass, want every file of the kernel: none of them is empty", rule)
+	}
+	reported := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindMetricsThreshold {
+			t.Errorf("%s reports a %q violation, want the kind of the rule that was written", rule, kind)
+		}
+		threshold, ok := violation.(archunit.MetricsThresholdViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a MetricsThresholdViolation", rule, violation)
+		}
+		if threshold.Metric != "lines of code" {
+			t.Errorf("%s reports %q as the metric, want the number the rule was about", rule, threshold.Metric)
+		}
+		if threshold.Comparison != "below" || threshold.Limit != 1 {
+			t.Errorf("%s reports `%s %g`, want the comparison and the figure it was written with",
+				rule, threshold.Comparison, threshold.Limit)
+		}
+		if threshold.Value < 1 {
+			t.Errorf("%s reports %s, want the number that left the figure", rule, threshold)
+		}
+		if threshold.Mood.Negated() {
+			t.Errorf("%s reports the negated mood, want the `should` the verb spells", rule)
+		}
+		reported = append(reported, threshold.Subject)
+	}
+	if !slices.Contains(reported, "common/assertion/mood.go") {
+		t.Errorf("%s reports %v, want the files the scope named among them", rule, reported)
+	}
+	// The report layer phrases it from the violation's own data, which is how a user actually reads this rule: the
+	// subject, the comparison it broke, and the number that broke it.
+	message := archunit.NewViolationFactory(nil).Message(violations[0])
+	if !strings.Contains(message, reported[0]) || !strings.Contains(message, "should, be below 1") {
+		t.Errorf("the report reads %q, want the file and the comparison it broke", message)
+	}
+	if !strings.Contains(message, "at lines of code ") {
+		t.Errorf("the report reads %q, want the number the metric came to", message)
+	}
+}
+
+func TestEachThresholdVerbReportsItsOwnComparisonThroughThePublicSurface(t *testing.T) {
+	// The five verbs are one terminal and one violation type, so this is the assertion that each of them still
+	// arrives at the public surface as the comparison the user typed. The figures are the ones no line count of a
+	// real Go file can satisfy — a file has at least one line and not a billion — so every verb has something to
+	// report whatever this repository grows into, and none of them is asserted against a number a commit can move.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	judged := archunit.Metrics(nil).InFolder("common/**").Count().LinesOfCode()
+	tests := []struct {
+		verb       string
+		rule       archunit.MetricsThresholdCondition
+		comparison string
+		limit      float64
+	}{
+		{verb: "should be below", rule: judged.ShouldBeBelow(1), comparison: "below", limit: 1},
+		{verb: "should be above", rule: judged.ShouldBeAbove(1e9), comparison: "above", limit: 1e9},
+		{verb: "should be", rule: judged.ShouldBe(0), comparison: "", limit: 0},
+		{
+			verb: "should be below or equal", rule: judged.ShouldBeBelowOrEqual(0),
+			comparison: "below or equal", limit: 0,
+		},
+		{
+			verb: "should be above or equal", rule: judged.ShouldBeAboveOrEqual(1e9),
+			comparison: "above or equal", limit: 1e9,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.verb, func(t *testing.T) {
+			violations, err := test.rule.Check(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", test.rule, err)
+			}
+
+			if len(violations) == 0 {
+				t.Fatalf("%s reports the pass, want the files no such figure holds for", test.rule)
+			}
+			for _, violation := range violations {
+				threshold, ok := violation.(archunit.MetricsThresholdViolation)
+				if !ok {
+					t.Fatalf("%s reports a %T, want a MetricsThresholdViolation", test.rule, violation)
+				}
+				if threshold.Comparison != test.comparison || threshold.Limit != test.limit {
+					t.Errorf("%s reports `%s %g`, want `%s %g`", test.rule,
+						threshold.Comparison, threshold.Limit, test.comparison, test.limit)
+				}
+			}
+			// The sentence the rule renders as is the heading a reader gets above those violations, and the verb
+			// they typed is what it has to end with.
+			if !strings.HasSuffix(test.rule.String(), test.verb+" "+strconv.FormatFloat(test.limit, 'g', -1, 64)) {
+				t.Errorf("%s renders without the verb and the figure it was written with", test.rule)
+			}
+		})
+	}
+}
+
+func TestAThresholdKeepsARuleThisRepositoryHoldsThroughThePublicSurface(t *testing.T) {
+	// The pass: every Go file of this repository's kernel has a line in it and none of them has a billion, so a
+	// rule nothing breaks reports nothing at all.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	for _, rule := range []archunit.MetricsThresholdCondition{
+		archunit.Metrics(nil).InFolder("common/**").Count().LinesOfCode().ShouldBeAbove(0),
+		archunit.Metrics(nil).InFolder("common/**").Count().LinesOfCode().ShouldBeBelow(1e9),
+		archunit.Metrics(nil).InFolder("common/**").Count().LinesOfCode().ShouldBeAboveOrEqual(1),
+	} {
+		violations, err := rule.Check(nil)
+		if err != nil {
+			t.Fatalf("%s failed: %v", rule, err)
+		}
+		if len(violations) != 0 {
+			t.Errorf("%s reports %v, want the pass", rule, violations)
+		}
+	}
+}
+
+func TestAThresholdThatMeasuredNothingIsAViolationThroughThePublicSurface(t *testing.T) {
+	// The empty-test guard on the five comparing predicates: a scope no file of the project is in measures no
+	// number, so no number is on the wrong side of the figure and the rule would hold forever — and AllowEmptyTests
+	// is the same opt-out every other rule in the library takes.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InFolder("no/such/folder/**").Count().LinesOfCode().ShouldBeBelow(400)
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 1 || violations[0].Kind() != archunit.KindEmptyTest {
+		t.Fatalf("%s reports %v, want the one empty-test violation", rule, violations)
+	}
+	allowed, err := rule.Check(&archunit.CheckOptions{AllowEmptyTests: true})
+	if err != nil {
+		t.Fatalf("%s failed with AllowEmptyTests: %v", rule, err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
+	}
+}
+
+func TestAThresholdRejectsAFigureThatIsNotANumberThroughThePublicSurface(t *testing.T) {
+	// A figure that is on no side of itself would report every number the rule measured and never say why, so it
+	// is the user's own error rather than a rule the code has broken — and it is returned before the project is
+	// read, which is why no rule here needs the graph cache cleared.
+	judged := archunit.Metrics(nil).Count().LinesOfCode()
+
+	for _, rule := range []archunit.MetricsThresholdCondition{
+		judged.ShouldBeBelow(math.NaN()),
+		judged.ShouldBeAbove(math.NaN()),
+		judged.ShouldBe(math.NaN()),
+		judged.ShouldBeBelowOrEqual(math.NaN()),
+		judged.ShouldBeAboveOrEqual(math.NaN()),
+	} {
+		violations, err := rule.Check(nil)
+
+		if err == nil {
+			t.Fatalf("%s reports %v, want an error naming the figure it cannot compare against", rule, violations)
+		}
+		if len(violations) != 0 {
+			t.Errorf("%s reports %v beside the error, want nothing", rule, violations)
+		}
+		if !strings.Contains(rule.String(), "rejected") {
+			t.Errorf("%s renders without the rejection, want it visible in a test failure", rule)
+		}
+	}
+}
+
 func TestShouldSatisfyJudgesACustomMetricOfThisRepositoryThroughThePublicSurface(t *testing.T) {
 	// The two halves of the escape hatch in one chain through the public surface: a number the library never
 	// named, judged by a comparison it never named either. The rule is one this repository cannot keep on
@@ -1591,8 +1790,8 @@ func TestShouldSatisfyKeepsARuleThisRepositoryHoldsThroughThePublicSurface(t *te
 }
 
 func TestShouldSatisfyThatMeasuredNothingIsAViolationThroughThePublicSurface(t *testing.T) {
-	// The empty-test guard on the family's first threshold predicate: a scope no file of the project is in
-	// measures no number, so no number says no about it and the rule would hold forever — and AllowEmptyTests is
+	// The empty-test guard on the predicate whose comparison is the user's own: a scope no file of the project is
+	// in measures no number, so no number says no about it and the rule would hold forever — and AllowEmptyTests is
 	// the same opt-out every other rule in the library takes.
 	t.Cleanup(archunit.ClearGraphCache)
 
@@ -1677,7 +1876,8 @@ func TestTheEscapeHatchRejectsWhatTheUserLeftOutThroughThePublicSurface(t *testi
 func TestMeasuringNothingIsNoErrorThroughThePublicSurface(t *testing.T) {
 	// A scope no file of the project is in: measuring nothing is an ordinary answer at this door, because
 	// whether that is a failure is a question only a rule that judges a number can ask — which is why the
-	// empty-test guard is wired into `should satisfy` and the two zone checks rather than into this one.
+	// empty-test guard is wired into the six threshold predicates and the two zone checks rather than into this
+	// one.
 	t.Cleanup(archunit.ClearGraphCache)
 
 	rule := archunit.Metrics(nil).InFolder("no/such/folder/**").Count().LinesOfCode()
