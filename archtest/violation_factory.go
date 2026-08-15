@@ -93,6 +93,7 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
 //	layer "db": may not depend on layers "api"; it depends on api through db/conn.go -> api/handler.go
 //	component "internal/db": should not, be in zone of pain; it is, at abstractness 0 and instability 0
+//	internal/api/handler.go: should, be below 400; it is not, at lines of code 900
 //	internal/api.Handler: should, satisfy "be at most 10 methods wide"; it does not, at method count 40
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
@@ -129,6 +130,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.layerDependency(reported)
 	case metricsassertion.ZoneViolation:
 		return f.metricsZone(reported)
+	case metricsassertion.ThresholdViolation:
+		return f.metricsThreshold(reported)
 	case metricsassertion.SatisfactionViolation:
 		return f.metricsSatisfaction(reported)
 	default:
@@ -282,13 +285,31 @@ func (f ViolationFactory) layerDependency(violation layersassertion.DependencyVi
 // inverted: under `should not` the component is in the zone, and under `should` it is not.
 func (f ViolationFactory) metricsZone(violation metricsassertion.ZoneViolation) string {
 	requirement := violation.Mood.String() + ", be in " + violation.Zone
-	found := "it is not"
-	if violation.Mood.Negated() {
-		found = "it is"
-	}
-	finding := found + ", at abstractness " + coordinate(violation.Abstractness) +
+	finding := stands(violation.Mood) + ", at abstractness " + coordinate(violation.Abstractness) +
 		" and instability " + coordinate(violation.Instability)
 	return f.sentence(`component "`+violation.Component+`"`, requirement, finding)
+}
+
+// metricsThreshold phrases a number that is not on the side of a figure its rule required: the subject it was
+// measured off, the comparison in the words the rule was written in, and what the number actually came to.
+//
+// One phrasing serves all five of the comparing predicates — `should be below`, `should be above`, `should be`,
+// `should be below or equal`, `should be above or equal` — exactly as they are one violation type and one gather
+// function, because what differs between them is two words of the requirement. The comparison that is the
+// equality itself has no words of its own, and the figure then follows `be` directly: `should, be 1`.
+//
+// The finding names the metric with the number, because a report saying only that a limit was broken leaves a
+// reader to measure the project again by hand — and it is the number the rule judged rather than one measured a
+// second time. It is printed with as many digits as it takes to say exactly which number it is, so a reader
+// comparing the finding against the figure beside it is never shown a rounded one.
+//
+// The auxiliary is `is` rather than broke's `does`, because the requirement's verb is `be`, and the subject is
+// unquoted for the reason metricsSatisfaction's is: which of a file, a class and a folder it names is the
+// metric's business rather than this sentence's.
+func (f ViolationFactory) metricsThreshold(violation metricsassertion.ThresholdViolation) string {
+	requirement := violation.Mood.String() + ", be " + comparison(violation.Comparison, violation.Limit)
+	finding := stands(violation.Mood) + ", at " + violation.Metric + " " + coordinate(violation.Value)
+	return f.sentence(violation.Subject, requirement, finding)
 }
 
 // metricsSatisfaction phrases a number that does not satisfy a predicate the user wrote about it: the subject
@@ -357,6 +378,29 @@ func broke(mood kernel.Mood) string {
 	return "it does not"
 }
 
+// stands is broke's counterpart for the requirements whose verb is `be` — a corner of a plane, a side of a
+// figure: what a violation of this mood found, given that it exists. The requirement does not hold where
+// `should` demanded it, and does hold where `should not` forbade it.
+//
+// The mood picks a word here as it does in broke, and inverts nothing.
+func stands(mood kernel.Mood) string {
+	if mood.Negated() {
+		return "it is"
+	}
+	return "it is not"
+}
+
+// comparison renders what a number had to be: the words of the comparison and the figure it was held to —
+// `below 400`, `above or equal 0.2` — or the figure alone for the comparison that is the equality itself, which
+// has no words of its own because the equality is the whole of it.
+func comparison(words string, limit float64) string {
+	figure := coordinate(limit)
+	if words == "" {
+		return figure
+	}
+	return words + " " + figure
+}
+
 // layerClause renders the requirement a layer policy's clause stated: the mood as its own verb, then the
 // layers it named, quoted and comma-separated — `may only depend on layers "domain", "db"` — or `may only
 // depend on no layers`, which is the sealed layer and the one reading of an empty list that is still English.
@@ -401,9 +445,10 @@ func alternatives(selectors []matching.Filter) string {
 	return strings.Join(rendered, " or ")
 }
 
-// coordinate renders one of the numbers a report states about a package the shortest way that still says
-// exactly which float64 it is, so that a whole number reads as `0` rather than as `0.000000` and a ratio is
-// never quietly rounded into a different number in a message somebody is comparing against a threshold rule.
+// coordinate renders one of the numbers a report states — a coordinate on the plane, a measurement, the figure
+// it was held to — the shortest way that still says exactly which float64 it is, so that a whole number reads as
+// `0` rather than as `0.000000` and a ratio is never quietly rounded into a different number in a message
+// somebody is comparing against a threshold rule.
 func coordinate(value float64) string {
 	return strconv.FormatFloat(value, 'g', -1, 64)
 }

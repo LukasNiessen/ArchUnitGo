@@ -237,6 +237,39 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 				"it is not, at abstractness 0.5 and instability 0.3333333333333333",
 		},
 		{
+			name: "a file over the figure its rule held it to",
+			violation: metricsassertion.NewThresholdViolation(
+				"internal/api/handler.go", "lines of code", 900, "below", 400, kernel.Should),
+			// The requirement is the comparison in the words the rule was written in, and the finding names the
+			// metric with the number, because a report that only said the limit was broken would leave a reader
+			// to measure the project again by hand. The auxiliary is `is` and not `does`, because the verb is
+			// `be`.
+			message: "internal/api/handler.go: should, be below 400; it is not, at lines of code 900",
+		},
+		{
+			name: "a class the maximum of its rule leaves out",
+			violation: metricsassertion.NewThresholdViolation(
+				"internal/api.Handler", "method count", 40, "below or equal", 10, kernel.Should),
+			message: "internal/api.Handler: should, be below or equal 10; it is not, at method count 40",
+		},
+		{
+			// The comparison that is the equality itself carries no word of its own, so the figure follows `be`
+			// directly rather than after a gap where a word would have been. Both numbers are printed with as
+			// many digits as it takes to say which float64 they are.
+			name: "a package that is not the one figure its rule allows",
+			violation: metricsassertion.NewThresholdViolation(
+				"internal/port", "abstractness", 1.0/3.0, "", 1, kernel.Should),
+			message: "internal/port: should, be 1; it is not, at abstractness 0.3333333333333333",
+		},
+		{
+			// Not something the fluent API can build, where each of the five verbs spells its own `should` — and
+			// the finding still says what was actually the case rather than negating the requirement twice.
+			name: "a class the negated mood forbade the comparison to hold for",
+			violation: metricsassertion.NewThresholdViolation(
+				"internal/api.Handler", "method count", 40, "above", 10, kernel.ShouldNot),
+			message: "internal/api.Handler: should not, be above 10; it is, at method count 40",
+		},
+		{
 			name: "a class whose number the user's own predicate rejects",
 			violation: metricsassertion.NewSatisfactionViolation(
 				"internal/api.Handler", "method count", 40, "be at most 10 methods wide", kernel.Should),
@@ -293,6 +326,8 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 			layersassertion.NewClause("api", []string{"domain"}, kernel.Should), "db"),
 		metricsassertion.KindMetricsZone: metricsassertion.NewZoneViolation(
 			"internal/db", "zone of pain", 0, 0, kernel.ShouldNot),
+		metricsassertion.KindMetricsThreshold: metricsassertion.NewThresholdViolation(
+			"internal/api/handler.go", "lines of code", 900, "below", 400, kernel.Should),
 		metricsassertion.KindMetricsSatisfaction: metricsassertion.NewSatisfactionViolation(
 			"internal/api.Handler", "method count", 40, "be at most 10 methods wide", kernel.Should),
 	}

@@ -26,9 +26,11 @@
 // because no fluent verb names them yet; the group that does is the one that has to decide what a rule about
 // a lack of cohesion is written like.
 //
-// Comparing any of these numbers against a threshold is the assertion stage's business rather than this
-// package's. Whether a component is inside a Zone is the one judgement this package does make, because a
-// zone is a region of the abstractness/instability plane and that is arithmetic rather than a rule.
+// The comparison a rule holds one of these numbers to is a Threshold value: the figure the user typed, and
+// which side of it satisfies. Whether a number is on that side, and whether a component is inside a Zone, are
+// the two judgements this package makes, because a comparison and a region are both arithmetic. Whether
+// failing one is a violation is not: that is the mood's business, in metrics/assertion, and the words a report
+// says about it are the testing layer's.
 package calculation
 
 import (

@@ -25,14 +25,19 @@
 // family's escape hatch and the reason the two groups above do not have to be exhaustive.
 //
 // The six threshold predicates judge a metric's numbers against what they have to be, and they are the mood
-// and the predicate stages of this family in one verb each. `should satisfy` is the first of them here, and
-// the one whose comparison is itself a function the user wrote: it hands back a
-// MetricsSatisfactionCondition. The other five land with the figures they compare against.
+// and the predicate stages of this family in one verb each. Five of them hold every number to a figure the
+// user typed — `should be below`, `should be above`, `should be`, `should be below or equal`, `should be above
+// or equal` — and hand back a MetricsThresholdCondition, because what differs between them is the comparison
+// and not the rule. The sixth, `should satisfy`, is the one whose comparison is itself a function the user
+// wrote, and it hands back a MetricsSatisfactionCondition. There is no seventh: `should equal`, `should be at
+// most`, `should be less than` and every other synonym are what AGENTS.md keeps out of the grammar, because
+// two spellings of one comparison mean every reader of a suite has to learn which the author picked.
 //
 // The `distance` group also closes two rules of its own: `should not be in zone of pain` and `should not be
 // in zone of uselessness` are predicates about the plane its first two metrics span rather than comparisons
-// against a figure, so they spell the mood themselves and hand back a MetricsZoneCondition. Those two and
-// the satisfaction condition are the family's checkable rules, as opposed to its measurements.
+// against a figure, so they spell the mood themselves and hand back a MetricsZoneCondition. Those two, the
+// threshold condition and the satisfaction condition are the family's checkable rules, as opposed to its
+// measurements.
 package fluentapi
 
 import (

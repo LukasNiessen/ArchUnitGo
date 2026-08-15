@@ -15,9 +15,9 @@ import (
 // It is what every metric verb of every group returns — the eight counts, the five distance metrics and the
 // custom metric a user defines themselves alike — and it is the stage the six threshold predicates —
 // `should be below`, `should be above`, `should be`, `should be below or equal`, `should be above or equal`,
-// `should satisfy` — are chained onto, so a rule about a number is this value plus a comparison.
-// ShouldSatisfy is the first of the six to land. Measure is what it can do on its own: hand back the numbers
-// themselves.
+// `should satisfy` — are chained onto, so a rule about a number is this value plus a comparison. Those six are
+// the whole of the family's grammar and no synonym joins them. Measure is what this stage can do on its own:
+// hand back the numbers themselves.
 //
 // One type serves every group because the group is a word of the sentence rather than a kind of rule: what
 // differs between `count, lines of code` and `distance, abstractness` is which population the metric reads
