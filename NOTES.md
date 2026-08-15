@@ -1540,3 +1540,81 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   method, and that list cannot guard methods; the entry points return a builder a caller must use, and the
   comment above the list already says why an unterminated chain is the idiom critic's catch rather than a
   linter's.
+
+## Issue #28 — Graph reports: the snapshot and its query options
+
+- WHY: the two `include ...` modifiers are named `IncludingExternalDependencies` and
+  `IncludingSelfDependencies` rather than the issue's `include external dependencies` / `include self
+  dependencies`. AGENTS.md's grammar names them: modifiers are present participles and its own list spells
+  this one `including ...`. The imperative would read as a command in a chain of noun phrases (`project graph,
+  include external dependencies, titled ...`), and the fields they set keep the issue's own words —
+  `SnapshotOptions.IncludeExternalDependencies`. The chain reads what the issue means.
+- WHY: `CollapseByPattern(label, pattern string)` takes a group name the issue does not mention. A collapsed
+  set of nodes *is* a node of the diagram and a node has to be drawn under something; deriving a label from
+  the pattern would put `internal/{api,web}/**` on a box. Naming it is also what lets a report's groups and a
+  layer policy's layers carry the same names, which is what makes the two describe one architecture. An empty
+  name is rejected (`ErrUnnamedGroup`) rather than drawn blank.
+- WHY: `CollapseToFolderDepth(depth)` rejects a depth below one (`ErrInvalidFolderDepth`), while
+  `SnapshotOptions.CollapseToFolderDepth` still reads zero as "collapse nothing". Zero path segments is not a
+  folder any file lives in, and a caller who does not want a collapse does not call the modifier — so on the
+  bag zero is the default and on the chain it is a typo, reported instead of quietly drawing four hundred
+  files. `FocusOn` is the opposite case and clamps rather than rejects: a negative depth narrows to the named
+  files, because a mistyped depth must never blow a report up into the whole graph.
+- WHY: the aggregation is `snapshotEdges` in this module and not `common/projection.ProjectEdges`. That
+  function drops an edge whose two labels are equal, which after a collapse is exactly the self-dependency
+  `include self dependencies` exists to draw, and it returns edges only — a report also needs the isolated
+  nodes, which is what `ProjectToNodes` is for. Reusing both and then re-deriving the count, the external flag
+  and the union of import kinds beside them would have been the second aggregation, not the first.
+- WHY: the query filters before it collapses, so every pattern a user types is matched against identifiers
+  and never against the labels a collapse draws. It is the only reading in which `focus on` and `collapse`
+  stay order-independent — one hop out from a folder forty files were merged into is a different and much
+  larger set — and both chain orders are asserted to render the same report.
+- WHY: the empty report is an error wrapping `ErrEmptySnapshot`, not an `EmptyTestViolation`. It is the same
+  failure the empty-test guard exists for — a renamed folder leaves a pattern naming nothing, and a blank
+  diagram looks exactly like a clean project — but a report has no violation list to put one in, and its
+  terminal returns an artifact. `CheckOptions.AllowEmptyTests` is the opt-out, so a caller learns the knob
+  once. A project whose files depend on nothing is *not* empty: the nodes are the report.
+- WHY: `Snapshot()` takes no argument, unlike every `Check(*CheckOptions)` in the library. `with check
+  options` is one of the issue's nine modifiers, so the bag travels on the chain — which is what a second
+  terminal (a rendered diagram, a file written to disk) needs it to do, since each of them would otherwise
+  take the same argument and a stored report would be described in two places.
+- WHY: the module has no `assertion` package, which is a departure from AGENTS.md's per-module shape. A report
+  is not a rule: no mood, no predicate, nothing to disagree with, so there is nothing to gather violations
+  from. The two packages it does have are the ones the issue's two steps need — `projection` for the snapshot,
+  `fluentapi` for the chain — and rendering, which is the second step, is a later issue's function over the
+  snapshot.
+- WHY: file stems are `graph/projection/snapshot.go`, `snapshot_node.go`, `snapshot_edge.go`,
+  `snapshot_summary.go`, `snapshot_options.go`, `project_snapshot.go` and `reach_nodes.go`, and
+  `graph/fluentapi/project_graph.go`, `include_dependencies.go`, `focus_on.go`, `collapse_nodes.go` and
+  `snapshot.go`. `project_snapshot` is the sibling `project_<thing>` stem, `reach_nodes` is the traversal the
+  three `which nodes` options share, and the two `include` modifiers and the two `collapse` ones are one
+  concept each rather than four files of one method.
+- WHY: `SnapshotOptions`' four unexported helpers take pointer receivers, like its `WithDefaults`.
+  `recvcheck` rejects a type with both kinds, and the nil-safe read the "nil means defaults" contract promises
+  has to be the pointer one. Nothing about it is nil-tolerant but `WithDefaults`; the helpers are only ever
+  called on a resolved query.
+- WHY: the public surface re-exports the builder, the snapshot and its three parts, and the two entry points —
+  not `SnapshotOptions`, not the three sentinels. A user describes a report by typing the modifiers rather
+  than by filling in a bag, which is the choice `files`' and `layers`' projection types and `ErrUndeclaredLayer`
+  already made; the snapshot's parts are re-exported because a caller writing a renderer of their own reads
+  them. `archunit.go`'s package doc gained the paragraph saying that not every chain of this library is a
+  rule, because the sentence naming `ProjectFiles` and `ProjectLayers` as the entry points was made false by
+  this issue.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed, as in issue #27: every modifier
+  and the terminal are methods, which that list cannot guard.
+- WHY: the integration tests are `archunit_test.go`'s four new ones, dogfooding this repository through the
+  public surface — its packages collapsed to folder depth 2, the one module it depends on drawn as an external
+  node, the two entry-point names, and a locator naming no project reaching the extraction through both of
+  them — plus `graph/fluentapi`'s own suite against fixture projects on disk. The unit tests under
+  `graph/projection` run against hand-built graphs, as the pure packages' always do.
+- WHY: `graph` joins the dogfood suites as the third domain module rather than being left out of them, which
+  was the hole a new module opens: a file in no declared layer is ignored by every clause, so
+  `theLayersOfThisRepository` without a `graph` layer left AGENTS.md's rule 2 unenforced for this module.
+  `Layer("graph").DefinedByFolder("graph/**")` and `WhereLayer("graph").MayOnlyDependOnLayers("kernel")` are
+  in both layer policies now — the standalone one and the suite entry named "the layers of this library only
+  depend inwards", which would otherwise have claimed a coverage it did not have — and `graph/**` joins the
+  third-party rules, with `layers/**` beside it for the same reason. `graph` is deliberately *not* in the
+  `report` layer's allowlist: `archtest` phrases violations and a report has none, so that clause forbidding
+  the dependency is the statement. Verified by mutation: an import of `files/projection` from
+  `graph/projection/project_snapshot.go` fails both layer policies, and one of
+  `golang.org/x/tools/go/packages` from `graph/fluentapi/snapshot.go` fails the third-party rule.

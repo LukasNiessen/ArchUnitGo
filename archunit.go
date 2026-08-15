@@ -11,9 +11,13 @@
 // layout — which is also why nothing inside the library is allowed to depend on it.
 //
 // A rule is a value, not an action: building one does no work, and only a terminal reads the project.
-// The chain starts at an entry point — ProjectFiles and ProjectLayers today, one per rule family as they
-// land — and every entry point takes an optional *ProjectLocator, where nil means the project the test
-// itself is in.
+// The chain starts at an entry point — ProjectFiles, ProjectLayers and ProjectGraph today, one per family
+// as they land — and every entry point takes an optional *ProjectLocator, where nil means the project the
+// test itself is in.
+//
+// Not every chain describes a rule. ProjectGraph describes a report, so it has no mood, no predicate and no
+// violations: its terminal hands back the diagram's data rather than a list of what the code disagreed with.
+// Everything else about it is the same — a value, chainable modifiers, the same optional locator.
 package archunit
 
 import (
@@ -25,6 +29,8 @@ import (
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	filesextraction "github.com/LukasNiessen/ArchUnitGo/files/extraction"
 	filesapi "github.com/LukasNiessen/ArchUnitGo/files/fluentapi"
+	graphapi "github.com/LukasNiessen/ArchUnitGo/graph/fluentapi"
+	graphprojection "github.com/LukasNiessen/ArchUnitGo/graph/projection"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 	layersapi "github.com/LukasNiessen/ArchUnitGo/layers/fluentapi"
 )
@@ -202,6 +208,33 @@ type LayerPolicyBuilder = layersapi.LayerPolicyBuilder
 // a whole N-layer policy can be stored, passed to a helper or kept in a list of the suite's rules as one rule.
 type LayersPolicyCondition = layersapi.LayersPolicyCondition
 
+// GraphBuilder is a dependency-graph report as far as it has been described — `project graph`, plus every
+// modifier chained onto it — which ProjectGraph returns and every modifier hands back a new one of. It is
+// named here because a query is the expensive half of a report to write: one described report can be stored
+// and branched into as many focuses, collapses and output formats as a suite wants. It is the whole chain and
+// the terminal in one type, because a report has no mood and no predicate to pass through.
+type GraphBuilder = graphapi.GraphBuilder
+
+// GraphSnapshot is what a described report hands back: the nodes that survived the query, the dependencies
+// between them, the title and the counts. It is the seam the graph module hangs from — rendering is two
+// steps, build a snapshot and then render it, so every output format is a function of this one value and a
+// query option nobody has written a renderer for is still in all of them.
+type GraphSnapshot = graphprojection.Snapshot
+
+// GraphNode is one box of a report: the label it is drawn under — a file, a folder or a named group,
+// whichever the query collapsed onto — and whether what it stands for is somebody else's code.
+type GraphNode = graphprojection.Node
+
+// GraphEdge is one arrow of a report: the two labels it runs between, how many of the project's dependencies
+// were aggregated into it, whether it leaves the project and the union of the kinds of import behind it. The
+// count is what keeps a collapsed diagram honest — merging arrows loses no dependency.
+type GraphEdge = graphprojection.Edge
+
+// GraphSummary is a report's counts, as the headline above a diagram states them: nodes, arrows, the
+// dependencies those arrows stand for, and how many of each leave the project. It is derived from the
+// snapshot it belongs to, so it cannot disagree with the diagram it is printed over.
+type GraphSummary = graphprojection.Summary
+
 // Result is a whole rule's outcome as a test needs it: whether the rule holds, and the one message to print
 // when it does not. It is what ResultFactory shapes a rule's violations into, and the two fields an adapter
 // to a test framework reads — an adapter prints a report, it never builds one.
@@ -294,6 +327,30 @@ func ProjectLayers(locator *ProjectLocator) LayersBuilder {
 // Layers is ProjectLayers under the shorter name the family also gives it. The two are one entry point.
 func Layers(locator *ProjectLocator) LayersBuilder {
 	return layersapi.Layers(locator)
+}
+
+// ProjectGraph is the entry point of every dependency-graph report: `project graph`. The locator is optional
+// and nil means auto-detect.
+//
+// A report is described the way a rule is, and then asked for its snapshot:
+//
+//	snapshot, err := archunit.ProjectGraph(nil).
+//		FocusOn("internal/api/**", 1).
+//		CollapseToFolderDepth(2).
+//		Titled("what the api layer touches").
+//		Snapshot()
+//
+// The nine modifiers are all optional, chainable and order-independent — `including external dependencies`,
+// `including self dependencies`, `focus on`, `reachable from`, `dependents of`, `collapse to folder depth`,
+// `collapse by pattern`, `titled` and `with check options` — and each of them narrows what the diagram draws
+// or says how it is labeled. The default report is one node per file of the project's own code.
+func ProjectGraph(locator *ProjectLocator) GraphBuilder {
+	return graphapi.ProjectGraph(locator)
+}
+
+// DependencyGraph is ProjectGraph under the other name the family also gives it. The two are one entry point.
+func DependencyGraph(locator *ProjectLocator) GraphBuilder {
+	return graphapi.DependencyGraph(locator)
 }
 
 // NewResultFactory returns the factory that shapes a rule's violations into a Result. A nil *MessageOptions
