@@ -3,6 +3,7 @@ package archunit_test
 import (
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -94,20 +95,22 @@ var (
 		WhereLayer("files").MayNotDependOnLayers("kernel")
 )
 
-// The metrics family's three stages, each named by the type the chain actually returns, and the eight count
-// verbs as method values, because which numbers this library can take of a project is part of the surface. There
-// is no mood stage to name yet — the six threshold predicates land with the rules that judge a number — so what
-// is named as a terminal is the resolution door, and a Measurement with it, because a suite that wants the
-// numbers of its project rather than a pass or a fail reads them.
+// The metrics family's four stages, each named by the type the chain actually returns, and the eight count and
+// five distance verbs as method values, because which numbers this library can take of a project is part of the
+// surface. There is no mood stage to name for a number — the six threshold predicates land with the rules that
+// judge one — so what is named as a terminal there is the resolution door, and a Measurement with it, because a
+// suite that wants the numbers of its project rather than a pass or a fail reads them. The two zone checks are
+// the family's rules, and they spell their own mood, so they are named as Checkables beside it.
 var (
 	_ archunit.MetricsBuilder = archunit.Metrics(nil).
 		WithName("*.go").
 		InFolder("common/**").
 		InPath("common/**/*.go").
 		ForClassesMatching("*Builder")
-	_ archunit.MetricsCountBuilder = archunit.Metrics(nil).Count()
-	_ archunit.MetricBuilder       = archunit.Metrics(nil).Count().LinesOfCode()
-	_ archunit.Measurement         = archunit.Measurement{Metric: "lines of code", Subject: "archunit.go", Value: 1}
+	_ archunit.MetricsCountBuilder    = archunit.Metrics(nil).Count()
+	_ archunit.MetricsDistanceBuilder = archunit.Metrics(nil).Distance()
+	_ archunit.MetricBuilder          = archunit.Metrics(nil).Count().LinesOfCode()
+	_ archunit.Measurement            = archunit.Measurement{Metric: "lines of code", Subject: "archunit.go", Value: 1}
 
 	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().LinesOfCode
 	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().Statements
@@ -118,7 +121,19 @@ var (
 	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().MethodCount
 	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().FieldCount
 
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Distance().Abstractness
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Distance().Instability
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Distance().DistanceFromMainSequence
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Distance().NormalizedDistance
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Distance().CouplingFactor
+
 	_ func(*archunit.CheckOptions) ([]archunit.Measurement, error) = archunit.Metrics(nil).Count().Imports().Measure
+
+	_ archunit.Checkable = archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfPain()
+	_ archunit.Checkable = archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfUselessness()
+
+	_ func() archunit.MetricsZoneCondition = archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfPain
+	_ func() archunit.MetricsZoneCondition = archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfUselessness
 )
 
 // The report family, whose chain is one stage and whose terminals are not Checkables, because a report is not a
@@ -172,6 +187,7 @@ var (
 	_ archunit.Violation     = archunit.FileExternalDependencyViolation{}
 	_ archunit.Violation     = archunit.FileAdherenceViolation{}
 	_ archunit.Violation     = archunit.LayerDependencyViolation{}
+	_ archunit.Violation     = archunit.MetricsZoneViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
@@ -179,11 +195,13 @@ var (
 	_ archunit.ViolationKind = archunit.KindFileExternalDependency
 	_ archunit.ViolationKind = archunit.KindFileAdherence
 	_ archunit.ViolationKind = archunit.KindLayerDependency
+	_ archunit.ViolationKind = archunit.KindMetricsZone
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileExternalDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
 	_ archunit.Mood          = archunit.LayerDependencyViolation{}.Mood
+	_ archunit.Mood          = archunit.MetricsZoneViolation{}.Mood
 )
 
 // The report layer is on the surface too, because a user who has a rule's violations still needs the message
@@ -1011,11 +1029,10 @@ func TestThisRepositoryObeysItsOwnLayerPolicy(t *testing.T) {
 		WhereLayer("layers").MayOnlyDependOnLayers("kernel").
 		WhereLayer("metrics").MayOnlyDependOnLayers("kernel").
 		WhereLayer("graph").MayOnlyDependOnLayers("kernel").
-		// And the report layer reads what a rule reported: the kernel and the two modules that report violations,
+		// And the report layer reads what a rule reported: the kernel and the three modules that report violations,
 		// whose pure assertion halves are the only part of them it is allowed to reach — which the file rules above
-		// say the rest of. The graph and metrics modules report none, so they are left out and this clause forbids
-		// the dependency.
-		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers").
+		// say the rest of. The graph module reports none, so it is left out and this clause forbids the dependency.
+		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers", "metrics").
 		// The same thing the other way round, as the blocklist a team tightening one edge would write.
 		WhereLayer("files").MayNotDependOnLayers("layers")
 
@@ -1262,6 +1279,140 @@ func TestAMetricAboutAClassIsMeasuredOverTheClassesTheScopeNamesThroughThePublic
 	}
 	if slices.Contains(subjects, "metrics/fluentapi.MetricBuilder") {
 		t.Errorf("%s measures %v, want a class the pattern does not describe left out", rule, subjects)
+	}
+}
+
+func TestEveryDistanceMetricOfThisLibraryReadsItsOwnPackagesThroughThePublicSurface(t *testing.T) {
+	// The five numbers the distance group names, each taken of this repository through the public surface. These
+	// are metrics about a package rather than about a file, so the subject of every measurement is a folder — the
+	// one difference from the count group a user has to know — and each of them is a ratio, so every number is in
+	// the range its definition allows however this library's own source changes.
+	//
+	// What is asserted is the subject, the metric and the range rather than the number, because the shape of this
+	// library moves with every commit; the numbers themselves are pinned in the metrics module's tests, against
+	// fixtures a commit cannot move.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	group := archunit.Metrics(nil).InFolder("common/**").Distance()
+	tests := []struct {
+		metric string
+		rule   archunit.MetricBuilder
+		most   float64
+	}{
+		{metric: "abstractness", rule: group.Abstractness(), most: 1},
+		{metric: "instability", rule: group.Instability(), most: 1},
+		{metric: "normalized distance", rule: group.NormalizedDistance(), most: 1},
+		// The one metric of the five that is not a ratio of the unit square but a length across it.
+		{metric: "distance from the main sequence", rule: group.DistanceFromMainSequence(), most: 1 / math.Sqrt(2)},
+		{metric: "coupling factor", rule: group.CouplingFactor(), most: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.metric, func(t *testing.T) {
+			measurements, err := test.rule.Measure(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", test.rule, err)
+			}
+
+			subjects := make([]string, 0, len(measurements))
+			for _, measurement := range measurements {
+				if measurement.Metric != test.metric {
+					t.Errorf("%s reports %q, want the metric it was asked for", test.rule, measurement.Metric)
+				}
+				if measurement.Value < 0 || measurement.Value > test.most {
+					t.Errorf("%s came to %s, want a number between 0 and %g", test.rule, measurement, test.most)
+				}
+				if strings.HasSuffix(measurement.Subject, ".go") {
+					t.Errorf("%s measures %q, want the folder a package is rather than a file of it",
+						test.rule, measurement.Subject)
+				}
+				subjects = append(subjects, measurement.Subject)
+			}
+			if !slices.Contains(subjects, "common/matching") {
+				t.Errorf("%s measures %v, want the packages of that folder among them", test.rule, subjects)
+			}
+		})
+	}
+}
+
+func TestTheZoneChecksJudgeThisRepositoryThroughThePublicSurface(t *testing.T) {
+	// The family's two rules end to end through the public surface, dogfooding on this library — and the honest
+	// answer, which is that its kernel is in the zone of pain: everything depends on common/ and common/ depends
+	// on nothing, which is exactly the concrete, depended-upon corner. That is the trade this repository made on
+	// purpose, and a rule reporting it is the rule working.
+	//
+	// What is asserted is which side of the plane a reported package is on rather than which packages are
+	// reported, because the shape of this library moves with every commit. The corner itself is pinned in the
+	// metrics module's tests, against fixtures a commit cannot move.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).Distance().ShouldNotBeInZoneOfPain()
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) == 0 {
+		t.Fatalf("%s reports the pass, want the kernel every other package depends on", rule)
+	}
+	reported := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindMetricsZone {
+			t.Errorf("%s reports a %q violation, want the kind of the rule that was written", rule, kind)
+		}
+		zone, ok := violation.(archunit.MetricsZoneViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a MetricsZoneViolation", rule, violation)
+		}
+		if zone.Zone != "zone of pain" {
+			t.Errorf("%s reports %q as the zone, want the corner the rule named", rule, zone.Zone)
+		}
+		if !zone.Mood.Negated() {
+			t.Errorf("%s reports the positive mood, want the one the verb spells", rule)
+		}
+		// A loose bound rather than the zone's own radius, which is the metrics module's to pin: what a report of
+		// this rule may never contain is a package out in the balanced middle of the plane.
+		if zone.Abstractness > 0.5 || zone.Instability > 0.5 {
+			t.Errorf("%s reports %s, want only packages near the concrete, depended-upon corner", rule, zone)
+		}
+		reported = append(reported, zone.Component)
+	}
+	// The top of a chain of dependencies is unstable by construction — nothing in the project depends on the
+	// fluent API — so a rule that mistook one axis for the other, or reported every package it read, would
+	// name it.
+	if slices.Contains(reported, "metrics/fluentapi") {
+		t.Errorf("%s reports %v, want the packages nothing depends on left out", rule, reported)
+	}
+	// The report layer phrases it from the violation's own data, which is how a user actually reads this rule.
+	message := archunit.NewViolationFactory(nil).Message(violations[0])
+	if !strings.Contains(message, `component "`+reported[0]+`"`) || !strings.Contains(message, "zone of pain") {
+		t.Errorf("the report reads %q, want the package and the corner it is in", message)
+	}
+}
+
+func TestAZoneCheckThatSelectedNoPackageIsAViolationThroughThePublicSurface(t *testing.T) {
+	// The empty-test guard on the family's first checkable terminal: a scope no package of the project is in
+	// would hold forever, so it is reported rather than passed — and AllowEmptyTests is the same opt-out every
+	// other rule in the library takes.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InFolder("no/such/folder/**").Distance().ShouldNotBeInZoneOfUselessness()
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 1 || violations[0].Kind() != archunit.KindEmptyTest {
+		t.Fatalf("%s reports %v, want the one empty-test violation", rule, violations)
+	}
+	allowed, err := rule.Check(&archunit.CheckOptions{AllowEmptyTests: true})
+	if err != nil {
+		t.Fatalf("%s failed with AllowEmptyTests: %v", rule, err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
 	}
 }
 
@@ -1792,7 +1943,7 @@ func TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests(t *testing.T) {
 			WhereLayer("files").MayOnlyDependOnLayers("kernel").
 			WhereLayer("layers").MayOnlyDependOnLayers("kernel").
 			WhereLayer("graph").MayOnlyDependOnLayers("kernel").
-			WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers"),
+			WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers", "metrics"),
 	}, nil)
 }
 

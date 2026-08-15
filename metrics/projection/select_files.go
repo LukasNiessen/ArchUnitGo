@@ -1,17 +1,20 @@
 // Package projection is the metrics module's half of the PROJECT stage: it says which of the project's
-// files a metrics rule is measured over, and which of the classes those files declare.
+// files a metrics rule is measured over, which of the classes those files declare, and which packages
+// they add up to.
 //
-// Two functions, one per side of the read that sits between them:
+// Three functions, split by the read that sits between them:
 //
 //   - SelectFiles answers which files a rule is talking about, out of the extracted graph. It is where
 //     `metrics, in folder "internal/api/**"` stops being a sentence and becomes a list of file
 //     identifiers for metrics/extraction to read.
-//   - SelectSubjects answers what is measured, out of what was read: the files a metric about a file is
-//     measured over, and the classes a metric about a class is measured over, from one set of selectors so
-//     the two cannot disagree about which classes the rule is about.
+//   - SelectSubjects answers what is measured, out of what was read: the three populations a metric can
+//     be about, from one set of selectors so they cannot disagree about which code the rule is about.
+//   - SelectComponents is the third of those populations on its own — one Component per folder, with the
+//     coupling between them read off the graph through PerComponentEdge — because a package is the
+//     subject of every metric that is a ratio no single file has an answer for.
 //
-// Both are pure, so the meaning of a metrics rule's scope can be tested against a hand-built graph and
-// hand-built file information before any project is extracted at all.
+// All three are pure, so the meaning of a metrics rule's scope can be tested against a hand-built graph
+// and hand-built file information before any project is extracted at all.
 package projection
 
 import (

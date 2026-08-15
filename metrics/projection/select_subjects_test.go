@@ -13,7 +13,7 @@ func TestSelectSubjectsWithNoClassSelectorMeasuresEverythingThatWasRead(t *testi
 	// class those files declare, because a metric about a class may still be asked for afterwards.
 	files := fixtureFiles()
 
-	subjects := projection.SelectSubjects(files)
+	subjects := projection.SelectSubjects(nil, files)
 
 	if len(subjects.Files) != len(files) {
 		t.Errorf("selected %d files, want the %d that were read", len(subjects.Files), len(files))
@@ -25,14 +25,14 @@ func TestSelectSubjectsWithNoClassSelectorMeasuresEverythingThatWasRead(t *testi
 func TestSelectSubjectsMatchesAClassSelectorAgainstTheBareName(t *testing.T) {
 	// `for classes matching "*Service"` is about the declared name, so the pattern is written without the
 	// package while the subject it selects still carries it.
-	subjects := projection.SelectSubjects(fixtureFiles(), classnameMatcher(t, "*er"))
+	subjects := projection.SelectSubjects(nil, fixtureFiles(), classnameMatcher(t, "*er"))
 
 	assertClasses(t, subjects, []string{"internal/api.Handler", "internal/api.Router"})
 }
 
 func TestSelectSubjectsCombinesItsClassSelectorsWithAnd(t *testing.T) {
-	both := projection.SelectSubjects(fixtureFiles(), classnameMatcher(t, "*er"), classnameMatcher(t, "H*"))
-	reversed := projection.SelectSubjects(fixtureFiles(), classnameMatcher(t, "H*"), classnameMatcher(t, "*er"))
+	both := projection.SelectSubjects(nil, fixtureFiles(), classnameMatcher(t, "*er"), classnameMatcher(t, "H*"))
+	reversed := projection.SelectSubjects(nil, fixtureFiles(), classnameMatcher(t, "H*"), classnameMatcher(t, "*er"))
 
 	assertClasses(t, both, []string{"internal/api.Handler"})
 	assertClasses(t, reversed, []string{"internal/api.Handler"})
@@ -42,7 +42,7 @@ func TestSelectSubjectsNarrowsTheFilesToTheOnesDeclaringAKeptClass(t *testing.T)
 	// A selector the user typed has to change what the rule is about, whichever metric is chosen after it:
 	// `for classes matching "Connection"` and then `lines of code` measures the file that declares it, not
 	// every file the folder verbs kept.
-	subjects := projection.SelectSubjects(fixtureFiles(), classnameMatcher(t, "Connection"))
+	subjects := projection.SelectSubjects(nil, fixtureFiles(), classnameMatcher(t, "Connection"))
 
 	if len(subjects.Files) != 1 || subjects.Files[0].Path != "internal/db/conn.go" {
 		t.Errorf("selected %+v, want only the file declaring Connection", paths(subjects))
@@ -57,7 +57,7 @@ func TestSelectSubjectsKeepsTheOrderTheFilesWereReadIn(t *testing.T) {
 		fixtureFiles()[0],
 	}
 
-	subjects := projection.SelectSubjects(files)
+	subjects := projection.SelectSubjects(nil, files)
 
 	if len(subjects.Files) != 2 || subjects.Files[0].Path != "internal/db/conn.go" {
 		t.Errorf("selected %v, want the order the files arrived in", paths(subjects))
@@ -67,7 +67,7 @@ func TestSelectSubjectsKeepsTheOrderTheFilesWereReadIn(t *testing.T) {
 	// The same property in the branch that narrows the files to the ones declaring a kept class, which is the
 	// only one that goes through a map: `*o*` keeps Connection and Router, declared in two different files, so
 	// a selection reading the map back instead of the files it was given would report them in either order.
-	narrowed := projection.SelectSubjects(files, classnameMatcher(t, "*o*"))
+	narrowed := projection.SelectSubjects(nil, files, classnameMatcher(t, "*o*"))
 
 	want := []string{"internal/db/conn.go", "internal/api/handler.go"}
 	if got := paths(narrowed); !slices.Equal(got, want) {
@@ -79,7 +79,7 @@ func TestSelectSubjectsKeepsTheOrderTheFilesWereReadIn(t *testing.T) {
 func TestSelectSubjectsThatMatchNoClassMeasureNothing(t *testing.T) {
 	// Zero matches is an ordinary answer here — whether an empty selection is a failure is the empty-test
 	// guard's question — but a rule that named classes and found none must not fall back to every file.
-	subjects := projection.SelectSubjects(fixtureFiles(), classnameMatcher(t, "Missing"))
+	subjects := projection.SelectSubjects(nil, fixtureFiles(), classnameMatcher(t, "Missing"))
 
 	if len(subjects.Classes) != 0 {
 		t.Errorf("selected %d classes, want none", len(subjects.Classes))
@@ -90,10 +90,41 @@ func TestSelectSubjectsThatMatchNoClassMeasureNothing(t *testing.T) {
 }
 
 func TestSelectSubjectsOfNoFilesMeasuresNothing(t *testing.T) {
-	subjects := projection.SelectSubjects(nil)
+	subjects := projection.SelectSubjects(nil, nil)
 
-	if len(subjects.Files) != 0 || len(subjects.Classes) != 0 {
+	if len(subjects.Files) != 0 || len(subjects.Classes) != 0 || len(subjects.Components) != 0 {
 		t.Errorf("selected %+v, want nothing", subjects)
+	}
+}
+
+func TestSelectSubjectsMeasuresThePackagesItsFilesMakeUp(t *testing.T) {
+	// The third population is built through the same door as the other two, so a rule about a package is
+	// scoped by the verbs the user typed rather than by whatever the graph happens to hold.
+	subjects := projection.SelectSubjects(fixtureGraph(), fixtureFiles())
+
+	labels := make([]string, 0, len(subjects.Components))
+	for _, component := range subjects.Components {
+		labels = append(labels, component.Label)
+	}
+	if want := []string{"internal/api", "internal/db"}; !slices.Equal(labels, want) {
+		t.Errorf("selected components %v, want %v", labels, want)
+	}
+	if got := subjects.Components[0].DependsOn; !slices.Equal(got, []string{"internal/db"}) {
+		t.Errorf("internal/api depends on %v, want [internal/db]", got)
+	}
+}
+
+func TestSelectSubjectsNarrowsItsPackagesWithItsClassSelectors(t *testing.T) {
+	// A class selector narrows the files, and the packages are the packages of the files that were kept: the
+	// dependency between the two folders is gone with the file that carried it, so the surviving component is
+	// as stable as the part of the project the rule selected.
+	subjects := projection.SelectSubjects(fixtureGraph(), fixtureFiles(), classnameMatcher(t, "Connection"))
+
+	if len(subjects.Components) != 1 || subjects.Components[0].Label != "internal/db" {
+		t.Fatalf("selected components %+v, want internal/db alone", subjects.Components)
+	}
+	if got := subjects.Components[0].DependedOnBy; len(got) != 0 {
+		t.Errorf("internal/db is depended on by %v, want nothing selected to depend on it", got)
 	}
 }
 
@@ -101,7 +132,7 @@ func TestSelectSubjectsDoesNotShareItsFilesWithTheCallersSlice(t *testing.T) {
 	// A projection handed to a report must not change when the caller reuses the slice it passed in.
 	files := fixtureFiles()
 
-	subjects := projection.SelectSubjects(files)
+	subjects := projection.SelectSubjects(nil, files)
 	files[0].LinesOfCode = 999
 
 	if subjects.Files[0].LinesOfCode == 999 {

@@ -6,14 +6,19 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
 )
 
+// countGroup is the word this group is called in the sentence a rule renders as. It is stated once, because a
+// group that spelled itself in the stage it names and again in the builder it hands back could disagree with
+// itself.
+const countGroup = "count"
+
 // MetricsCountBuilder is the stage between a metrics rule's scope and its number: `metrics, in folder
 // "internal/**", count`, waiting for which of the eight counts the rule is about.
 //
 // It exists so that the eight verbs below are a group rather than eight more methods on the scope. `count`
-// is what the family calls this group, and the families beside it — the cohesion metrics, the distance
-// metrics — are groups of their own, so a rule says which kind of number it means before it says which
-// number: `count, method count` reads as one phrase, and the scope stage stays the stage about *where* the
-// rule looks.
+// is what the family calls this group, and the families beside it — the distance metrics of
+// MetricsDistanceBuilder, the cohesion metrics — are groups of their own, so a rule says which kind of number
+// it means before it says which number: `count, method count` reads as one phrase, and the scope stage stays
+// the stage about *where* the rule looks.
 //
 // A MetricsCountBuilder is immutable and carries the scope it was asked of unchanged. Every verb hands back
 // a MetricBuilder, which is the stage that can be resolved.
@@ -88,12 +93,12 @@ func (b MetricsCountBuilder) String() string {
 
 // stages are the parts of the sentence this stage has been built from: the scope's, then `count`.
 func (b MetricsCountBuilder) stages() []string {
-	return append(b.scope.stages(), "count")
+	return append(b.scope.stages(), countGroup)
 }
 
-// measuring is every count verb: the scope it was asked of, plus the metric the verb named. Which number a
-// verb is, is the calculation.CountMetric it passes in, so no metric is defined twice — the eight are the
-// eight factories in metrics/calculation and this stage only names them.
+// measuring is every count verb: the scope it was asked of, the group it belongs to, and the metric the verb
+// named. Which number a verb is, is the calculation.CountMetric it passes in, so no metric is defined twice —
+// the eight are the eight factories in metrics/calculation and this stage only names them.
 func (b MetricsCountBuilder) measuring(metric calculation.CountMetric) MetricBuilder {
-	return MetricBuilder{count: b, metric: metric}
+	return MetricBuilder{scope: b.scope, group: countGroup, metric: metric}
 }

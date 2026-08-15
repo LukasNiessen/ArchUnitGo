@@ -14,6 +14,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
+	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 )
 
 // theEmptyTestHint is the note a report adds to a rule that selected nothing, written out here rather than
@@ -207,6 +208,34 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 				layersassertion.NewClause("db", []string{"api"}, kernel.ShouldNot), "api"),
 			message: `layer "db": may not depend on layers "api"; it depends on api`,
 		},
+		{
+			name: "a package in the zone of pain",
+			violation: metricsassertion.NewZoneViolation(
+				"internal/db", "zone of pain", 0, 0, kernel.ShouldNot),
+			// The subject is called a component rather than named bare, because a folder and a file are told
+			// apart by nothing but the slash in them. The finding is the pair of coordinates: a reader told
+			// their package is in the corner still has to know whether the way out is an interface or fewer
+			// dependents.
+			message: `component "internal/db": should not, be in zone of pain; it is, at abstractness 0 and instability 0`,
+		},
+		{
+			name: "a package in the zone of uselessness",
+			violation: metricsassertion.NewZoneViolation(
+				"internal/port", "zone of uselessness", 1, 1, kernel.ShouldNot),
+			message: `component "internal/port": should not, be in zone of uselessness; ` +
+				"it is, at abstractness 1 and instability 1",
+		},
+		{
+			// Not something the fluent API can build, where each verb spells its own `should not` — and the
+			// finding still says what was actually the case rather than negating the requirement twice.
+			name: "a package the positive mood wanted in a zone and did not find there",
+			violation: metricsassertion.NewZoneViolation(
+				"internal/api", "zone of pain", 0.5, 1.0/3.0, kernel.Should),
+			// As many digits as it takes to say which float64 the ratio is, because a coordinate that was
+			// quietly rounded is a coordinate nobody can check against the rule that reported it.
+			message: `component "internal/api": should, be in zone of pain; ` +
+				"it is not, at abstractness 0.5 and instability 0.3333333333333333",
+		},
 	} {
 		t.Run(wanted.name, func(t *testing.T) {
 			message := archtest.NewViolationFactory(nil).Message(wanted.violation)
@@ -232,6 +261,8 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 			"a.go", nil, nil, kernel.Should),
 		layersassertion.KindLayerDependency: layersassertion.NewDependencyViolation(
 			layersassertion.NewClause("api", []string{"domain"}, kernel.Should), "db"),
+		metricsassertion.KindMetricsZone: metricsassertion.NewZoneViolation(
+			"internal/db", "zone of pain", 0, 0, kernel.ShouldNot),
 	}
 
 	for kind, violation := range phrased {

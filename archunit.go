@@ -34,6 +34,7 @@ import (
 	graphprojection "github.com/LukasNiessen/ArchUnitGo/graph/projection"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 	layersapi "github.com/LukasNiessen/ArchUnitGo/layers/fluentapi"
+	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 	metricscalculation "github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
 	metricsapi "github.com/LukasNiessen/ArchUnitGo/metrics/fluentapi"
 )
@@ -126,6 +127,13 @@ type FileExternalDependencyViolation = filesassertion.ExternalDependencyViolatio
 // written in and the concrete file dependencies that connect them.
 type LayerDependencyViolation = layersassertion.DependencyViolation
 
+// MetricsZoneViolation says that one package sits in one of the two corners of the abstractness and instability
+// plane a rule forbade — the zone of pain, concrete and depended upon, or the zone of uselessness, abstract and
+// used by nobody. It is what `should not be in zone of pain` and `should not be in zone of uselessness` report,
+// one per offending package, carrying the package, the zone in the words the rule was written in, the two
+// coordinates it was judged by and the mood.
+type MetricsZoneViolation = metricsassertion.ZoneViolation
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -141,6 +149,8 @@ const (
 	KindFileAdherence = filesassertion.KindFileAdherence
 	// KindLayerDependency is the kind of LayerDependencyViolation.
 	KindLayerDependency = layersassertion.KindLayerDependency
+	// KindMetricsZone is the kind of MetricsZoneViolation.
+	KindMetricsZone = metricsassertion.KindMetricsZone
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -221,12 +231,26 @@ type MetricsBuilder = metricsapi.MetricsBuilder
 // Statements, Imports, Functions, Classes, Interfaces, MethodCount, FieldCount.
 type MetricsCountBuilder = metricsapi.MetricsCountBuilder
 
+// MetricsDistanceBuilder is the stage between a metrics rule's scope and its number for the metrics about a
+// package rather than a file, which Distance returns: `metrics, in folder "internal/**", distance`, waiting for
+// one of the five verbs — Abstractness, Instability, DistanceFromMainSequence, NormalizedDistance,
+// CouplingFactor — or for one of the two zone checks, which are rules rather than numbers.
+type MetricsDistanceBuilder = metricsapi.MetricsDistanceBuilder
+
 // MetricBuilder is a metrics rule whose metric has been chosen — `metrics, ..., count, lines of code` — which
-// each counting verb returns. Measure is what it hands back the numbers themselves with, one per file for a
-// metric about a file and one per class for a metric about a class.
+// each counting and each distance verb returns. Measure is what it hands back the numbers themselves with, one
+// per file for a metric about a file, one per class for a metric about a class and one per folder for a metric
+// about a package.
 type MetricBuilder = metricsapi.MetricBuilder
 
-// Measurement is one number a metric read off one subject: what was measured, the file or class it was
+// MetricsZoneCondition is the terminal of the two rules about where a package sits in the abstractness and
+// instability plane — `metrics, ..., distance, should not be in zone of pain`, and the same for the zone of
+// uselessness — which ShouldNotBeInZoneOfPain and ShouldNotBeInZoneOfUselessness return. There is no mood stage
+// in this pair, as in the layers family: the corner a rule names and the mood it names it in are one verb. It is
+// a Checkable, so a built rule can be stored, passed to a helper or kept in a list of the suite's rules.
+type MetricsZoneCondition = metricsapi.MetricsZoneCondition
+
+// Measurement is one number a metric read off one subject: what was measured, the file, class or folder it was
 // measured about, and the answer. It is what MetricBuilder.Measure returns, one per subject.
 type Measurement = metricscalculation.Measurement
 
@@ -368,6 +392,16 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 // The four scope verbs are chainable and combined with AND, three of them describing files and
 // ForClassesMatching describing declared types. The family's own name for this entry point is `metrics` alone,
 // so unlike the others it has no second spelling.
+//
+// Which numbers there are to ask for is decided by the group the scope is followed by: `count` for the eight
+// metrics about a file or a class, `distance` for the five about a package — abstractness, instability, distance
+// from the main sequence, its normalised twin, and the coupling factor. The distance group also holds the two
+// rules this family judges without a threshold, where the corner and the mood are one verb:
+//
+//	violations, err := archunit.Metrics(nil).
+//		Distance().
+//		ShouldNotBeInZoneOfPain().
+//		Check(nil)
 func Metrics(locator *ProjectLocator) MetricsBuilder {
 	return metricsapi.Metrics(locator)
 }

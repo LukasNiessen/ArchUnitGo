@@ -30,7 +30,7 @@ func TestMetricsWithNoScopeVerbMeasuresEveryFileOfTheProject(t *testing.T) {
 	if got := subjectsOf(measurements); !slices.Equal(got, wantSubjects) {
 		t.Errorf("`metrics` measures %v, want every file %v", got, wantSubjects)
 	}
-	wantValues := []int{9, 4, 3, 3}
+	wantValues := []float64{9, 4, 3, 3}
 	if got := valuesOf(measurements); !slices.Equal(got, wantValues) {
 		t.Errorf("lines of code = %v, want the counts the fixture was written with, %v", got, wantValues)
 	}
@@ -115,7 +115,7 @@ func TestForClassesMatchingSelectsTheClassesAMetricAboutAClassIsMeasuredOver(t *
 	if got := subjectsOf(narrowed); !slices.Equal(got, wantNarrowed) {
 		t.Errorf("`for classes matching \"*er\"` measures %v, want %v", got, wantNarrowed)
 	}
-	if got := valuesOf(narrowed); !slices.Equal(got, []int{2, 1}) {
+	if got := valuesOf(narrowed); !slices.Equal(got, []float64{2, 1}) {
 		t.Errorf("method count = %v, want the 2 methods of Handler and the 1 member of Router", got)
 	}
 }
@@ -369,8 +369,8 @@ func subjectsOf(measurements []calculation.Measurement) []string {
 	return subjects
 }
 
-func valuesOf(measurements []calculation.Measurement) []int {
-	values := make([]int, 0, len(measurements))
+func valuesOf(measurements []calculation.Measurement) []float64 {
+	values := make([]float64, 0, len(measurements))
 	for _, measurement := range measurements {
 		values = append(values, measurement.Value)
 	}
