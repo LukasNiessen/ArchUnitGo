@@ -14,6 +14,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
+	slicesassertion "github.com/LukasNiessen/ArchUnitGo/slices/assertion"
 )
 
 // theEmptyTestHint is the note a report adds to a rule that selected nothing, written out here rather than
@@ -207,6 +208,24 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 				layersassertion.NewClause("db", []string{"api"}, kernel.ShouldNot), "api"),
 			message: `layer "db": may not depend on layers "api"; it depends on api`,
 		},
+		{
+			name: "a slice that should not depend on another and does",
+			violation: slicesassertion.NewDependencyViolation("api", "db", kernel.ShouldNot,
+				extraction.NewEdge("internal/api/handler.go", "internal/db/conn.go", false, extraction.ImportKindPlain),
+			),
+			// The subject is the depending slice and the requirement names the other one, so the sentence is
+			// the rule without the end the subject already gave. The files are where to look, as they are for
+			// every family whose subject is a group rather than a file.
+			message: `slice "api": should not, contain dependency "db"; ` +
+				"it depends on db through internal/api/handler.go -> internal/db/conn.go",
+		},
+		{
+			name:      "a slice that should depend on another and does not",
+			violation: slicesassertion.NewDependencyViolation("db", "domain", kernel.Should),
+			// The one violation in the library that is about something absent, and it is phrased as the absence
+			// rather than as a list of no files: the projection has nothing to show, which is the offense.
+			message: `slice "db": should, contain dependency "domain"; it does not depend on domain`,
+		},
 	} {
 		t.Run(wanted.name, func(t *testing.T) {
 			message := archtest.NewViolationFactory(nil).Message(wanted.violation)
@@ -232,6 +251,8 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 			"a.go", nil, nil, kernel.Should),
 		layersassertion.KindLayerDependency: layersassertion.NewDependencyViolation(
 			layersassertion.NewClause("api", []string{"domain"}, kernel.Should), "db"),
+		slicesassertion.KindSliceDependency: slicesassertion.NewDependencyViolation(
+			"api", "db", kernel.ShouldNot),
 	}
 
 	for kind, violation := range phrased {

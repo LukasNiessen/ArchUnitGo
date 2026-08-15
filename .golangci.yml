@@ -362,6 +362,7 @@ linters:
             - github.com/LukasNiessen/ArchUnitGo/common
             - github.com/LukasNiessen/ArchUnitGo/files/assertion
             - github.com/LukasNiessen/ArchUnitGo/layers/assertion
+            - github.com/LukasNiessen/ArchUnitGo/slices/assertion
 
         # AGENTS.md: "assertion, projection and calculation are pure — no filesystem, no clock, no
         # globals." extraction is deliberately absent: it is the layer that reads the filesystem.

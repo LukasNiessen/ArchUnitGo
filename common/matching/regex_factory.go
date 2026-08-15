@@ -2,10 +2,15 @@
 // is the only package in the library that knows how a pattern is spelled.
 //
 // The rule it exists to enforce is that globs are sugar and regex is the substrate. NewGlobPattern
-// is the one place where glob syntax is understood; it hands back a Pattern wrapping a compiled
-// regular expression, and nothing downstream ever sees a glob again. A Pattern plus a MatchTarget
-// is a Filter, and Filter.Matches is the library's single matching function: filename, path, folder
-// and classname rules all come through it.
+// and NewGlobCapturePattern are the only two doors into the one translation that understands glob
+// syntax; each hands back a Pattern wrapping a compiled regular expression, and nothing downstream
+// ever sees a glob again. A Pattern plus a MatchTarget is a Filter, and Filter.Matches is the
+// library's single matching function: filename, path, folder and classname rules all come through it.
+//
+// A Pattern answers two questions, and the second one is what a slicing projection is built on:
+// Matches says whether an identifier is described by the pattern, and Capture says which part of it
+// the pattern's one group cut out. `internal/(*)/**` describes the same identifiers either way; the
+// difference is that it also names them.
 package matching
 
 import (
@@ -18,6 +23,11 @@ import (
 // ErrInvalidPattern is returned when a pattern cannot be compiled. It means the user wrote a
 // pattern the library cannot understand, so callers should surface it rather than retry.
 var ErrInvalidPattern = errors.New("invalid pattern")
+
+// ErrOneCapture is returned when a pattern that is supposed to name what it matched captures
+// something other than exactly one group. Nothing to capture and two things to capture are the same
+// mistake: the caller asked a pattern for a name and it cannot say which one.
+var ErrOneCapture = errors.New("pattern does not capture exactly one name")
 
 // Pattern is a user pattern compiled to a regular expression, anchored at both ends: a pattern
 // describes a whole identifier, never a fragment of one. Write `.*` (or `**`) where a fragment is
@@ -48,7 +58,8 @@ type PatternOptions struct {
 //   - `?` is exactly one character, never a separator;
 //   - `[abc]` is one character from the class, `[a-z]` a range and `[!abc]` a negated class.
 //
-// Everything else is literal, so `.` and `+` mean themselves. Separators are normalised, so
+// Everything else is literal, so `.`, `+` and `(` mean themselves — parentheses are special only in
+// the capture glob NewGlobCapturePattern reads. Separators are normalised, so
 // `internal\api\**` and `internal/api/**` are the same glob on every operating system — which is
 // also why a glob has no escape character. Use NewRegexPattern when a pattern needs one.
 //
@@ -62,11 +73,41 @@ func NewGlobPattern(glob string, options *PatternOptions) (Pattern, error) {
 	if normalized == "" {
 		return Pattern{}, fmt.Errorf("%w: glob is empty", ErrInvalidPattern)
 	}
-	body, err := globToRegex(normalized)
+	body, err := globToRegex(normalized, false)
 	if err != nil {
 		return Pattern{}, err
 	}
 	return compilePattern(glob, body, options)
+}
+
+// NewGlobCapturePattern compiles a glob that names what it matched: the same syntax NewGlobPattern
+// reads, plus one pair of parentheses around the part of the identifier the pattern is to cut out.
+// It is what a slicing projection is spelled with — `internal/(*)/**` says that a file belongs to the
+// slice its folder under `internal` is named after.
+//
+// Exactly one pair of parentheses is required, because the pattern is asked for one name: a glob with
+// none and a glob with two are both ErrOneCapture. The parentheses are the only characters this
+// constructor reads differently from NewGlobPattern, so a glob that needs a literal one belongs in
+// NewGlobPattern or, if it also needs to capture, in NewRegexCapturePattern.
+//
+// `**` inside or before a capture matches as little as it can, which is the only reading that lets a
+// capture next to it mean anything:
+//
+//	internal/(**)/**   captures `api` from `internal/api/handler.go`, not `api/handler.go`
+//	(*)/**             captures `internal` from `internal/api/handler.go`
+//
+// The pattern still describes whole identifiers, exactly as every other Pattern does — Capture is
+// Matches plus the name, and neither answers anything about an identifier the glob does not describe.
+func NewGlobCapturePattern(glob string, options *PatternOptions) (Pattern, error) {
+	normalized := normalizeSeparators(glob)
+	if normalized == "" {
+		return Pattern{}, fmt.Errorf("%w: glob is empty", ErrInvalidPattern)
+	}
+	body, err := globToRegex(normalized, true)
+	if err != nil {
+		return Pattern{}, err
+	}
+	return compileCapturePattern(glob, body, options)
 }
 
 // NewRegexPattern compiles a regular expression into a Pattern. The expression is taken as
@@ -78,6 +119,21 @@ func NewRegexPattern(expression string, options *PatternOptions) (Pattern, error
 		return Pattern{}, fmt.Errorf("%w: regular expression is empty", ErrInvalidPattern)
 	}
 	return compilePattern(expression, expression, options)
+}
+
+// NewRegexCapturePattern compiles a regular expression that names what it matched: the expression is
+// taken as written and anchored, exactly as NewRegexPattern takes it, and it must contain exactly one
+// capturing group or it is ErrOneCapture.
+//
+// It is the substrate under NewGlobCapturePattern, and the escape hatch for the slicing a capture glob
+// cannot spell: a name that is a suffix of a segment, a name assembled with an alternation, a folder
+// whose name contains a literal parenthesis. Write `(?:...)` for a group that only groups — a second
+// capturing group is the same mistake as none.
+func NewRegexCapturePattern(expression string, options *PatternOptions) (Pattern, error) {
+	if expression == "" {
+		return Pattern{}, fmt.Errorf("%w: regular expression is empty", ErrInvalidPattern)
+	}
+	return compileCapturePattern(expression, expression, options)
 }
 
 // NewLiteralPattern compiles a string into a Pattern that matches exactly that string and nothing
@@ -110,6 +166,26 @@ func (p Pattern) Matches(candidate string) bool {
 		return false
 	}
 	return p.regex.MatchString(normalizeSeparators(candidate))
+}
+
+// Capture is the name this pattern cut out of candidate, and whether it cut one out at all. It is
+// Matches plus the answer to which part matched, and it is what turns a pattern into a slicing: the
+// name is the slice the identifier belongs to.
+//
+// Nothing is captured unless the pattern describes the whole candidate, so an identifier the pattern
+// says nothing about is in no slice rather than in a slice called the empty string. The same answer
+// covers a pattern that has no capture in it — the zero Pattern, or one built by NewGlobPattern — and
+// a capture that matched an empty run of characters: a nameless slice is not a slice, and this is the
+// one place that judgement is made.
+func (p Pattern) Capture(candidate string) (string, bool) {
+	if p.regex == nil || p.regex.NumSubexp() != 1 {
+		return "", false
+	}
+	groups := p.regex.FindStringSubmatch(normalizeSeparators(candidate))
+	if len(groups) != 2 || groups[1] == "" {
+		return "", false
+	}
+	return groups[1], true
 }
 
 // String renders the pattern as the user wrote it.
@@ -192,6 +268,23 @@ func (f RegexFactory) Compile(pattern string) (Pattern, error) {
 	}
 }
 
+// CapturePattern turns one pattern string into a Pattern that names what it matched, in this
+// factory's syntax. It is Compile's twin, and it exists for the same reason: `defined by` and `defined
+// by regex` differ by the factory they carry and by nothing at the call site.
+//
+// A pattern that does not capture exactly one name is ErrOneCapture, whichever syntax it was written
+// in — for a glob that means one pair of parentheses, for a regular expression one capturing group.
+func (f RegexFactory) CapturePattern(pattern string) (Pattern, error) {
+	switch f.syntax {
+	case SyntaxGlob:
+		return NewGlobCapturePattern(pattern, &f.options)
+	case SyntaxRegex:
+		return NewRegexCapturePattern(pattern, &f.options)
+	default:
+		return Pattern{}, fmt.Errorf("%w: unknown pattern syntax %d", ErrInvalidPattern, f.syntax)
+	}
+}
+
 // FilenameMatcher compiles pattern and matches it against the last segment of an identifier. It is
 // the string-facing twin of the package-level function of the same name, which takes a Pattern that
 // is already compiled.
@@ -258,27 +351,59 @@ func compilePattern(source, body string, options *PatternOptions) (Pattern, erro
 	return Pattern{source: source, regex: regex}, nil
 }
 
+// compileCapturePattern anchors and compiles a regex body that is supposed to name what it matched,
+// and insists that it names exactly one thing. It is compilePattern plus that one check, so anchoring
+// still happens in exactly one place — and the check survives the anchoring, because the group the
+// anchoring adds is non-capturing.
+func compileCapturePattern(source, body string, options *PatternOptions) (Pattern, error) {
+	pattern, err := compilePattern(source, body, options)
+	if err != nil {
+		return Pattern{}, err
+	}
+	if captured := pattern.regex.NumSubexp(); captured != 1 {
+		return Pattern{}, fmt.Errorf("%w: %q captures %d", ErrOneCapture, source, captured)
+	}
+	return pattern, nil
+}
+
 // globToRegex translates a glob into an unanchored regular expression body. Glob syntax exists in
 // this function and nowhere else.
-func globToRegex(glob string) (string, error) {
+//
+// captures says the glob is a capture glob: parentheses are the regex's own rather than literal
+// characters, and every `**` matches as little as it can instead of as much. Both differences serve the
+// one purpose — a `**` next to a capture has to give ground, or the capture would swallow the rest of
+// the identifier and `internal/(**)/**` would name `api/handler.go` rather than `api`. The structure of
+// each `**` construct is written once and only its greediness varies, because a capture glob and a
+// plain glob describe the same identifiers and a second spelling of `/(?:.*/)?` would be a second
+// chance to get one of them wrong.
+func globToRegex(glob string, captures bool) (string, error) {
+	run := `.*`
+	if captures {
+		run = `.*?`
+	}
 	var body strings.Builder
 	for index := 0; index < len(glob); {
 		remainder := glob[index:]
 		switch {
 		case strings.HasPrefix(remainder, "/**/"):
 			// Crossing zero segments counts, so `a/**/b` matches `a/b`.
-			body.WriteString(`/(?:.*/)?`)
+			body.WriteString(`/(?:` + run + `/)?`)
 			index += len("/**/")
 		case remainder == "/**":
 			// A trailing `/**` covers the folder itself as well as everything under it.
-			body.WriteString(`(?:/.*)?`)
+			body.WriteString(`(?:/` + run + `)?`)
 			index += len("/**")
 		case index == 0 && strings.HasPrefix(remainder, "**/"):
-			body.WriteString(`(?:.*/)?`)
+			body.WriteString(`(?:` + run + `/)?`)
 			index += len("**/")
 		case strings.HasPrefix(remainder, "**"):
-			body.WriteString(`.*`)
+			body.WriteString(run)
 			index += len("**")
+		case captures && (remainder[0] == '(' || remainder[0] == ')'):
+			// The one character a capture glob reads as the regex's own. Everything else, including a
+			// parenthesis in a plain glob, falls through to QuoteMeta below.
+			body.WriteByte(remainder[0])
+			index++
 		case remainder[0] == '*':
 			body.WriteString(`[^/]*`)
 			index++

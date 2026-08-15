@@ -1742,3 +1742,106 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   so a re-export that dropped it would silently measure the repository the test runs in, and only a rule
   pointed at a directory holding no `go.mod` can see that. It is one entry point rather than a pair, because
   `metrics` has no short alias. Verified by making `Metrics` return `metricsapi.Metrics(nil)`.
+
+## Issue #30 — Slices API: slicing projections and forbidden dependencies
+
+- WHY: `(**)` and `(*)` are read by `common/matching`, not by `slices/projection`: `NewGlobCapturePattern`,
+  `NewRegexCapturePattern`, `Pattern.Capture` and `RegexFactory.CapturePattern` join the package that already
+  owns glob syntax. AGENTS.md's rule is that globs compile to regex in exactly one place, and a capture glob is
+  the same syntax with one construct more — a second translator in the slices module would be the second place.
+- WHY: `globToRegex` grew one `captures bool` parameter rather than a capture-specific twin, and all four `**`
+  spellings are derived from a single `run` variable (`.*` plain, `.*?` capturing). The structure of `**` — the
+  optional segment before it, the optional slash after it — is then stated once, and only greediness differs
+  between the two doors. A hand-written second spelling of each construct is a spelling that can drift.
+- WHY: `.*?` and not `.*` under a capture, because Go's regexp is leftmost-preference: with a greedy run the
+  optional group before a capture would swallow every segment it could and `internal/(**)/**` would name the
+  *last* folder of a path rather than the first one under `internal`. Nine rows of
+  `TestNewGlobCapturePatternNamesWhatItMatched` pin what each construct actually captures, including the two
+  zero-segment cases — `**/(*)` against a root file and `internal/(*)/**/order.go` against a file one folder
+  down — which are the rows that fail if the optional runs are made mandatory.
+- WHY: parentheses stay literal in `NewGlobPattern` and are structural only in `NewGlobCapturePattern`. A scope
+  glob is matched against identifiers that may hold a `(`, and every existing rule was written against that
+  promise; the capture door is new, so it is the one that gets the new meaning.
+- WHY: a capture pattern is refused unless it captures exactly one group (`ErrOneCapture`), checked in
+  `compileCapturePattern` after compilation rather than by counting `(` in the glob. `regexp` already knows how
+  many groups an expression has, and the regex door takes the expression as written, so one check covers both
+  syntaxes and neither can disagree with the other.
+- WHY: `Pattern.Capture` answers `"", false` for an empty capture as well as for no match, and
+  `slices/projection`'s `sliceBy` drops an edge unless *both* ends are named. A nameless slice is not a slice,
+  and a slice with one end missing is a dependency on something outside the vocabulary — the same drop
+  `projection.PerInternalEdge` makes for an external target.
+- WHY: `ProjectSlices` has no short alias, where `ProjectFiles` has `Files` and `ProjectLayers` has `Layers`.
+  `slices` is the name of a standard-library package this repository imports, so `archunit.Slices` would make
+  every file that has both in scope alias one of them. The sibling convention loses to Go, which is AGENTS.md's
+  own tie-break, and `ProjectSlices`' doc says so where a reader would look for the alias.
+- WHY: `Identity` is re-exported from `common/projection` rather than mirrored in `slices/projection`. The issue
+  lists it beside the three slicings, and it is the one of the four that relabels nothing — a copy in the slices
+  module would be a second definition of a kernel function, and `slices/projection`'s package doc names it as
+  the kernel's instead.
+- WHY: `MapFunction` is on the public surface as an alias of `kernelprojection.MapFunction`, because the four
+  exported slicings return one and a caller who cannot name the return type cannot store it. It is the first
+  kernel projection type the surface names; nothing else of `common/projection` is exported with it.
+- WHY: `SliceByFileSuffix` reads identifiers with `path`, never `path/filepath`. Identifiers are normalised to
+  forward slashes, and `filepath` would split them differently on Windows — the same reason
+  `common/extraction/identifier.go` does its own prefix arithmetic.
+- WHY: `contain dependency` reports at most one violation per rule rather than one per offending import: the
+  sentence is about a pair of slices, so the pair is the finding and the concrete file dependencies are carried
+  on it as data. That is what makes a slices report short and still actionable, and it is what
+  `layers/assertion` already does for the same shape of sentence.
+- WHY: the positive mood's violation is the library's one violation about something absent, so it carries no
+  dependencies and `DependencyViolation.String` names the two slices alone. `ViolationFactory.sliceDependency`
+  branches on `len(Dependencies)` for the same reason, and phrases the requirement as the user wrote it —
+  `Mood.Holds` stays the one place in the library that inverts anything.
+- WHY: a slice named with the empty string (`ErrUnnamedSlice`) and a slice said to depend on itself
+  (`ErrSelfDependency`) are user errors returned by the terminal, not violations. The projection never produces
+  an empty name and never carries a self-dependency, so both rules would be vacuous in one mood and impossible
+  in the other whatever the project is — a mistake in what was typed rather than a finding about the code. They
+  are stored on the builder and returned before the project is read, as every other family's rejections are.
+- WHY: a chain with no slicing is `ErrNoSlicing` and not a compile error. The mood is a method on the entry
+  point itself — `ProjectSlices(nil).Should()` has to type-check for the grammar's mood stage to be exactly one
+  stage — so the missing slicing is a rejection naming `project slices`, and it is reported before the slice
+  names are looked at because a reader has to fix it first.
+- WHY: the empty-test guard is given one population for the slicing itself (subject `slices`) and one per named
+  slice (`files in slice "api"`). A slicing whose folder was renamed finds nothing at all, and a rule naming a
+  slice the project no longer has is vacuous even when the slicing works; the two go stale independently, so
+  each is its own population and a reader who broke both is told about both at once.
+- WHY: `.golangci.yml`'s `testing-layer` allow list gained `slices/assertion` — the report layer's strict list,
+  which is what makes a module added later denied by default. `archtest` reads the new violation type and
+  nothing else of the module.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `DefinedBy`, `Should`,
+  `ContainDependency` and their siblings are methods, which the analyzer cannot guard (`sig.Recv() != nil`), and
+  `SliceByPattern`/`SliceByRegex` return an error `errcheck` already guards. This follows #27, #28 and #32.
+- WHY: the prose the change made false was updated in the same diff — `archunit.go`'s package doc (the entry
+  points it lists), and `archunit_test.go`'s dogfooding policies, which now declare `slices` as a seventh layer,
+  hold it to the kernel-only clause every module is held to, forbid it a third-party dependency, and let the
+  report layer reach it because `archtest` now phrases its violations.
+- WHY: `TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface` was repointed from `slices/**` to
+  `common/util/**`. It needs a folder no file of this repository is in, and `slices/` now exists; AGENTS.md says
+  in as many words that there is no `common/util` and there will not be one, so that glob keeps the test failing
+  for the reason it was written for instead of going green the day its folder gets filled in.
+- WHY: the integration tests are `archunit_test.go`'s five new ones, which slice this repository through the
+  public surface: its own top-level folders as its slices, AGENTS.md rule 1 as a rule about them in both moods,
+  the dependency of `files` on `common` that this repository has on purpose and the message it prints, the guard
+  on a slice nobody is in, and the locator test every other family has — a slicing pointed at a directory
+  holding no `go.mod`, which is the only way to see a re-export that dropped the argument, verified by making
+  `ProjectSlices` return `slicesapi.ProjectSlices(nil)`. The sixth runs each of the four exported projections
+  over one hand-built edge, because the four differ only in what they label and what they drop, so a re-export
+  wired to the wrong one type-checks and no rule in the file would notice.
+- WHY: the gate's `at least one test exists` failure ("the module has no test files at all") is rejected for a
+  fifth round, and no code changed for it — the tree has 118 `*_test.go` files, the same `find` the step runs
+  lists all of them, and the step before it counted 964 test functions in them. The step is `gate.sh:236`,
+  `! find . -name '*_test.go' -not -path './.git/*' | grep -q .` under `set -uo pipefail`, so the pipeline also
+  carries *find's* status, and `! ` then turns find's failure into the VIOLATION. `grep -q` exits on the first
+  line it reads; find's output is 4957 bytes, so it takes two `write(2)`s — one when the 4096-byte stdio buffer
+  fills, one at exit — and the second lands on the closed pipe and dies of `SIGPIPE`, a non-zero with nothing on
+  stderr, which is exactly what the log shows: the VIOLATION line and no `find:` error above it. Measured
+  verbatim this round, reading `PIPESTATUS` *before* anything else — which is the correction to the earlier
+  rounds of this note, and why they read as intermittent: a plain `rc=$?` assignment resets `PIPESTATUS`, so the
+  pair those runs printed was the assignment's status and not the pipeline's. Read properly it is not
+  intermittent at all: `find=141 grep=0` in 10 of 10 runs, and 300 of 300 pipelines exiting 141 under
+  `pipefail`. The same command over `./common` alone — 1253 bytes of paths, so one write — exits `find=0` every
+  time, which is the boundary. So the step does not pass on this tree, and it did not pass on the base commit
+  either: `da23b32`'s 108 test files are 4511 bytes of paths, also over 4096. Nothing in the repository can
+  repair a check in `/harness/gate.sh`, and the one in-tree lever — getting the output back under 4096 bytes so
+  there is a single unpipeable write — means fewer or shorter test files, which is gaming the gate, not fixing
+  it. Every other step of the gate is green on this tree, re-run in full this round.
