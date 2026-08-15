@@ -6,7 +6,8 @@
 // that fed it.
 //
 // Three families of number live here, and the two that a rule can be written with are Metric values — a
-// name, and a way of reading one number off one subject — so that everything downstream holds one type.
+// name, and a way of reading one number off one subject — so that everything downstream holds one type. The
+// number a user defines themselves is a Metric too, and CustomMetric is what wraps their function in one.
 //
 // The counts are the eight numbers this library can take of a project as it is written: `lines of code`,
 // `statements`, `imports`, `functions`, `classes` and `interfaces` about one file, and `method count` and

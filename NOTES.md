@@ -1914,3 +1914,73 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   which packages are reported, because the shape of this library moves with every commit; the corner itself
   is pinned in `metrics/calculation/zone_test.go` against hand-built points. The honest answer it records is
   that this library's own kernel is in the zone of pain, which is the trade `common/` was written for.
+
+## Issue #35 — Metrics: custom metrics
+
+- WHY: `ShouldSatisfy` takes two arguments — the predicate *and* a `requirement string` — where the issue
+  writes `should satisfy(fn)`. It is the reason `AdhereTo` insists on words for the files module's escape
+  hatch: a closure has no readable form, so the other five threshold predicates print the figure they
+  compare against and this one has nothing to print. Those words are the whole of what the rule's sentence,
+  every violation and `archtest`'s report can say about what the number should have been. A blank one is
+  rejected as `ErrNoRequirement` rather than accepted, because a rule nobody can read from its output is a
+  rule nobody can fix.
+- WHY: the predicate is `func(calculation.Measurement, extraction.ClassInfo) bool` where the issue writes
+  `(value, classInfo)`. The measurement *is* the value plus the two things that say what it is about — the
+  metric's name and the subject — and a predicate over a metric about a file or a package has no class to
+  read, so the value alone would leave it unable to tell which number it was handed. The `ClassInfo` is the
+  zero value for those metrics, which `Satisfaction`'s doc states, and `should satisfy` is offered on every
+  metric rather than on the class metrics alone.
+- WHY: `custom metric` is a verb on `MetricsBuilder` and opens no group, where `count` and `distance` are
+  groups. A group exists to hold a family of verbs — eight and five — and one holding a single verb would be
+  a word the user typed twice. The word `custom metric` is still rendered as the group of the sentence, so a
+  rule reads as `metrics, custom metric, public surface ("...")` and the three metric families render alike.
+- WHY: the description lives on the fluent `MetricBuilder`, not on `calculation.CustomMetric`. It is a word
+  of the sentence, like `group` beside it: it is rendered by `String`, which `archtest.AssertPasses` prints
+  as the heading above every violation, and it says nothing about how the number is read. Putting it on the
+  metric would have meant either a second field nobody downstream reads or a `Description()` on the `Metric`
+  interface — prose written for thirteen metrics that describe themselves, which is refactoring passing code.
+- WHY: `metrics/assertion` now imports `metrics/extraction`, for the `ClassInfo` the predicate is handed.
+  `files/assertion` imports `files/extraction` for exactly the same reason — the `FileInfo` its own escape
+  hatch's predicate takes — so this is the precedented direction rather than a new one; both packages are
+  pure, the edge runs one way, and `metrics/calculation` already depends on `metrics/extraction`. The
+  alternative is a second `ClassInfo` declared in `assertion`, the duplicate the kernel rules exist to
+  prevent.
+- WHY: `SatisfactionViolation` carries the subject, the metric's name and the value as plain fields rather
+  than the `calculation.Measurement` they were read off. This is issue #34's note about `ZoneViolation.Zone`,
+  unchanged: `.golangci.yml`'s `testing-layer` allow list is strict, so a violation carrying a `calculation`
+  type could not be phrased without widening it to a package that holds no violations.
+- WHY: the empty-test population is reported as `measurements`, where the zone checks report `components`.
+  Which population a metric reads is the metric's own business — `lines of code` reads the files and
+  `method count` the classes — so what a reader has to be told is that the rule ended up with no number to
+  judge. A scope selecting files that declare no class is exactly that case, and
+  `TestShouldSatisfyOverAScopeWithNoClassIsAnEmptyTestViolation` pins it.
+- WHY: a nil user function answers no instead of failing — `calculation.CustomMetric.Measure` measures
+  nothing and `assertion.satisfies` returns false — mirroring `files/assertion.satisfies`. `forbidigo` bans
+  `panic`, and a library judging somebody else's code must not take their test process down. No rule the
+  fluent API builds reaches either path: a missing name, description, function, predicate or requirement is
+  a deferred `UserError` naming the verb, returned before the project is read.
+- WHY: `archtest` prints a satisfaction violation's subject unquoted, where a component's is
+  `component "internal/db"` and a layer's is `layer "db"`. A measurement's subject is a file, a class or a
+  folder depending on which metric was read, so there is no one noun to put in front of it — and the metric
+  named in the finding (`at method count 40`) is what says which of the three it is.
+- WHY: file stems are `metrics/calculation/custom_metric.go`, `metrics/assertion/satisfaction_violation.go`
+  and `gather_satisfaction_violations.go` — the `<thing> violation` / `gather <thing> violations` pair every
+  rule family uses — and `metrics/fluentapi/custom_metric.go` and `should_satisfy.go`, each with its test
+  file beside it.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `CustomMetric` and
+  `ShouldSatisfy` are methods, which that list cannot guard, and `Check` and `Measure` return errors
+  `errcheck` already guards. This follows #27, #28, #32, #33 and #34.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc
+  and its `Metric` interface doc (which said `CountMetric` and `DistanceMetric` were the two the library
+  ships), `metrics/assertion`'s package doc (which said `ZoneViolation` was the first violation type in it
+  and `GatherZoneViolations` the one function that makes one, and that the package judges packages),
+  `metrics/fluentapi`'s package doc and `MetricsBuilder` doc (the groups, the checkable rules and the
+  threshold predicates that "land with them"), `MetricBuilder`'s own doc, `archtest`'s `Message` doc example,
+  `archunit.go`'s `Metrics`, `MetricsBuilder` and `MetricBuilder` docs, and `archunit_test.go`'s two
+  compile-time blocks and its note that the empty-test guard "will be" wired into the threshold predicates.
+- WHY: the integration tests are `archunit_test.go`'s five new ones — a custom metric measured over this
+  repository's own fluent builders, `should satisfy` judging one of those numbers and reporting it through
+  the report layer, a rule this repository keeps, the empty-test guard on the new terminal, and the five
+  things neither half of the escape hatch can run without. They assert the subject, the metric's name and a
+  bound rather than the numbers, because the shape of this library moves with every commit; the arithmetic
+  is pinned in `metrics/calculation/custom_metric_test.go` against hand-built classes.

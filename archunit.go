@@ -36,6 +36,7 @@ import (
 	layersapi "github.com/LukasNiessen/ArchUnitGo/layers/fluentapi"
 	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 	metricscalculation "github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
+	metricsextraction "github.com/LukasNiessen/ArchUnitGo/metrics/extraction"
 	metricsapi "github.com/LukasNiessen/ArchUnitGo/metrics/fluentapi"
 )
 
@@ -134,6 +135,12 @@ type LayerDependencyViolation = layersassertion.DependencyViolation
 // coordinates it was judged by and the mood.
 type MetricsZoneViolation = metricsassertion.ZoneViolation
 
+// MetricsSatisfactionViolation says that one number a metric read does not satisfy the predicate a rule was
+// given, or does satisfy it where the rule forbade it. It is what `should satisfy` reports, one per offending
+// measurement — carrying the subject the number was read off, the metric's name, the number itself, the
+// requirement in the words the user wrote beside their function, and the mood.
+type MetricsSatisfactionViolation = metricsassertion.SatisfactionViolation
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -151,6 +158,8 @@ const (
 	KindLayerDependency = layersassertion.KindLayerDependency
 	// KindMetricsZone is the kind of MetricsZoneViolation.
 	KindMetricsZone = metricsassertion.KindMetricsZone
+	// KindMetricsSatisfaction is the kind of MetricsSatisfactionViolation.
+	KindMetricsSatisfaction = metricsassertion.KindMetricsSatisfaction
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -223,7 +232,8 @@ type LayersPolicyCondition = layersapi.LayersPolicyCondition
 
 // MetricsBuilder is the scope stage of a rule about the numbers a project's code adds up to, which Metrics
 // returns and every scope verb — WithName, InFolder, InPath, ForClassesMatching — hands back a new one of. It
-// is named here so that one scope can be stored and branched into a rule per metric.
+// is named here so that one scope can be stored and branched into a rule per metric. Count and Distance open
+// the two groups of metrics the library names, and CustomMetric is the one a user defines themselves.
 type MetricsBuilder = metricsapi.MetricsBuilder
 
 // MetricsCountBuilder is the stage between a metrics rule's scope and its number, which Count returns:
@@ -238,9 +248,10 @@ type MetricsCountBuilder = metricsapi.MetricsCountBuilder
 type MetricsDistanceBuilder = metricsapi.MetricsDistanceBuilder
 
 // MetricBuilder is a metrics rule whose metric has been chosen — `metrics, ..., count, lines of code` — which
-// each counting and each distance verb returns. Measure is what it hands back the numbers themselves with, one
-// per file for a metric about a file, one per class for a metric about a class and one per folder for a metric
-// about a package.
+// each counting verb, each distance verb and CustomMetric return. Measure is what it hands back the numbers
+// themselves with, one per file for a metric about a file, one per class for a metric about a class and one per
+// folder for a metric about a package, and ShouldSatisfy is the threshold predicate that judges them against a
+// comparison the user writes.
 type MetricBuilder = metricsapi.MetricBuilder
 
 // MetricsZoneCondition is the terminal of the two rules about where a package sits in the abstractness and
@@ -250,9 +261,39 @@ type MetricBuilder = metricsapi.MetricBuilder
 // a Checkable, so a built rule can be stored, passed to a helper or kept in a list of the suite's rules.
 type MetricsZoneCondition = metricsapi.MetricsZoneCondition
 
+// MetricsSatisfactionCondition is the terminal of the metrics rule whose comparison the user writes themselves
+// — `metrics, ..., count, method count, should satisfy "be at most 10 methods wide"` — which
+// MetricBuilder.ShouldSatisfy returns. There is no mood stage: `should satisfy` spells its own mood, as all six
+// threshold predicates do. It is a Checkable, so a built rule can be stored, passed to a helper or kept in a
+// list of the suite's rules.
+type MetricsSatisfactionCondition = metricsapi.MetricsSatisfactionCondition
+
 // Measurement is one number a metric read off one subject: what was measured, the file, class or folder it was
-// measured about, and the answer. It is what MetricBuilder.Measure returns, one per subject.
+// measured about, and the answer. It is what MetricBuilder.Measure returns, one per subject, and the first
+// argument of the predicate `should satisfy` takes.
 type Measurement = metricscalculation.Measurement
+
+// MetricsClassInfo is one of the project's declared types as a user's own function sees it: its name, its
+// identifier, the file it was declared in, whether it is an interface, how many fields and methods it has, and
+// which of its fields each of its methods reaches. It is what the function passed to `custom metric` is handed,
+// one per selected class, and the second argument of the predicate `should satisfy` takes — the zero value
+// there for a number that was read off a file or a package rather than a class.
+type MetricsClassInfo = metricsextraction.ClassInfo
+
+// MetricsFieldInfo is one field of a MetricsClassInfo, and which of that class's methods reach it.
+type MetricsFieldInfo = metricsextraction.FieldInfo
+
+// MetricsMethodInfo is one method of a MetricsClassInfo, and which of that class's fields it reaches.
+type MetricsMethodInfo = metricsextraction.MethodInfo
+
+// MetricsClassMeasure is the metric a user writes themselves: one number read off one class. It is the third
+// argument of `custom metric`, which asks it once about every selected class.
+type MetricsClassMeasure = metricscalculation.ClassMeasure
+
+// MetricsSatisfaction is the comparison a user writes themselves: one question about one measurement, answered
+// yes or no. It is the first argument of `should satisfy`, which requires it to answer yes about every number
+// the rule measured.
+type MetricsSatisfaction = metricsassertion.Satisfaction
 
 // GraphBuilder is a dependency-graph report as far as it has been described — `project graph`, plus every
 // modifier chained onto it — which ProjectGraph returns and every modifier hands back a new one of. It is
@@ -401,6 +442,23 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 //	violations, err := archunit.Metrics(nil).
 //		Distance().
 //		ShouldNotBeInZoneOfPain().
+//		Check(nil)
+//
+// CustomMetric is the third thing a scope can be followed by, and the family's escape hatch: a name, the words
+// saying what the number means, and the user's own function for reading it off one class. It is a metric like
+// any other, so the same Measure and the same threshold predicates follow it — and ShouldSatisfy is the
+// predicate for the comparisons no threshold expresses, holding every number a rule measured to a function the
+// user writes:
+//
+//	violations, err := archunit.Metrics(nil).
+//		ForClassesMatching("*Service").
+//		CustomMetric("public surface", "how many methods and fields a type exposes",
+//			func(class archunit.MetricsClassInfo) float64 {
+//				return float64(class.MethodCount + class.FieldCount)
+//			}).
+//		ShouldSatisfy(func(measurement archunit.Measurement, class archunit.MetricsClassInfo) bool {
+//			return measurement.Value <= 20 || class.Interface
+//		}, "expose at most 20 methods and fields unless it is an interface").
 //		Check(nil)
 func Metrics(locator *ProjectLocator) MetricsBuilder {
 	return metricsapi.Metrics(locator)

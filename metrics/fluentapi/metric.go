@@ -6,16 +6,18 @@ import (
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	"github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
+	"github.com/LukasNiessen/ArchUnitGo/metrics/projection"
 )
 
 // MetricBuilder is a metrics rule whose metric has been chosen and whose number has not been judged yet:
 // `metrics, in folder "internal/**", count, lines of code`.
 //
-// It is what every metric verb of every group returns — the eight counts and the five distance metrics
-// alike — and it is the stage the six threshold predicates — `should be below`, `should be above`, `should
-// be`, `should be below or equal`, `should be above or equal`, `should satisfy` — are chained onto, so a
-// rule about a number is this value plus a comparison. Measure is what it can do on its own: hand back the
-// numbers themselves.
+// It is what every metric verb of every group returns — the eight counts, the five distance metrics and the
+// custom metric a user defines themselves alike — and it is the stage the six threshold predicates —
+// `should be below`, `should be above`, `should be`, `should be below or equal`, `should be above or equal`,
+// `should satisfy` — are chained onto, so a rule about a number is this value plus a comparison.
+// ShouldSatisfy is the first of the six to land. Measure is what it can do on its own: hand back the numbers
+// themselves.
 //
 // One type serves every group because the group is a word of the sentence rather than a kind of rule: what
 // differs between `count, lines of code` and `distance, abstractness` is which population the metric reads
@@ -30,9 +32,18 @@ import (
 type MetricBuilder struct {
 	// scope is the rule as it was described before the group and the metric were named.
 	scope MetricsBuilder
-	// group is the word the metric was chosen out of — `count`, `distance` — kept so that the rule renders
-	// as the sentence the user typed rather than as the scope and the metric with the group missing.
+	// group is the word the metric was chosen out of — `count`, `distance`, `custom metric` — kept so that
+	// the rule renders as the sentence the user typed rather than as the scope and the metric with the group
+	// missing.
 	group string
+	// description is what the number means, in the user's own words, and it is empty for every metric the
+	// library names: `lines of code` describes itself and a custom metric's name cannot, which is why
+	// CustomMetric asks for these words and no other verb does.
+	//
+	// It is kept here rather than on the metric because it is a word of the sentence, like the group above:
+	// what calculation.CustomMetric holds is the name a measurement is reported under and the function that
+	// reads it, and the prose beside them belongs where the rest of the rule's prose already is.
+	description string
 	// metric is the number this rule is about, and how it is read off the subjects the scope named.
 	metric calculation.Metric
 }
@@ -63,12 +74,7 @@ func (b MetricBuilder) Measure(options *kernel.CheckOptions) ([]calculation.Meas
 	if err != nil {
 		return nil, err
 	}
-	if b.metric == nil {
-		// The zero MetricBuilder names no metric, and a rule with no number to read measures nothing —
-		// which is the answer the zero calculation.CountMetric gives to the same question, one layer down.
-		return nil, nil
-	}
-	return b.metric.Measure(subjects), nil
+	return b.readings(subjects), nil
 }
 
 // Selectors are the compiled scope verbs this rule was built from, in the order they were chained. They are
@@ -78,13 +84,14 @@ func (b MetricBuilder) Selectors() []matching.Filter {
 }
 
 // String renders the rule for logs and test failures, as `metrics, path without filename matches
-// "internal/**", count, lines of code`.
+// "internal/**", count, lines of code` — and, for the metric a user defined themselves, with the words they
+// described it with: `metrics, custom metric, public surface ("how many methods and fields a type exposes")`.
 func (b MetricBuilder) String() string {
 	return strings.Join(b.stages(), ", ") + b.scope.rejected()
 }
 
 // stages are the parts of the sentence this rule has been built from: the scope's, then the group, then the
-// metric.
+// metric — with the words describing it in brackets, for the one metric the library did not define.
 //
 // A part that is not there is left out rather than rendered as an empty word, so that the zero MetricBuilder
 // — no group and no metric — reads as `metrics` instead of as a sentence with two gaps in it.
@@ -94,7 +101,25 @@ func (b MetricBuilder) stages() []string {
 		stages = append(stages, b.group)
 	}
 	if b.metric != nil {
-		stages = append(stages, b.metric.Name())
+		named := b.metric.Name()
+		if b.description != "" {
+			named += ` ("` + b.description + `")`
+		}
+		stages = append(stages, named)
 	}
 	return stages
+}
+
+// readings are this rule's numbers, read off the subjects a resolved scope came to: one measurement per
+// subject the metric is about, in the order they were selected.
+//
+// It is the one place the metric is asked for anything, so Measure and every predicate chained onto this
+// stage read the same numbers the same way. The zero MetricBuilder names no metric, and a rule with no
+// number to read measures nothing — which is the answer the zero calculation.CountMetric gives to the same
+// question, one layer down.
+func (b MetricBuilder) readings(subjects projection.Subjects) []calculation.Measurement {
+	if b.metric == nil {
+		return nil
+	}
+	return b.metric.Measure(subjects)
 }
