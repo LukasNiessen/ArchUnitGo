@@ -1464,3 +1464,79 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   surface is one helper.
 - WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AssertAllPass` returns nothing, so
   there is no result to guard.
+
+## Issue #27 — Layers API
+
+- WHY: there is no mood stage in this family, which is a deviation from AGENTS.md's "Mood: exactly 1" and the
+  one thing in this issue worth arguing about. `may only depend on layers` and `may not depend on layers` are
+  their own polarity, so a mood before them reads as `should not, may not depend on layers` — a sentence
+  nobody would type, and the acceptance test AGENTS.md sets for a name is reading the chain aloud. The mood is
+  still what makes the two one piece of logic rather than two: it travels on `assertion.Clause`, where `Should`
+  is the allowlist and `ShouldNot` the blocklist, and `Clause.Allows` is `Mood.Holds(named contains target)` —
+  one predicate, one flag. The table row in AGENTS.md was amended in the same diff rather than left false.
+- WHY: the grammar is declarations first, clauses after: `layer(name)` closed by a `defined by` verb hands back
+  the `LayersBuilder`, and only `where layer(name)` leads to a predicate and thus to a terminal. That order is
+  what lets a clause naming an undeclared layer be rejected where it was typed — see below — and it is why
+  `LayersPolicyCondition` offers `WhereLayer` and not `Layer`: a chain that went back to declaring after
+  writing a clause would drop out of `Checkable`, so a policy built in that order could not be checked at all.
+  Declaring a layer twice is legal and merges (below), so nothing a user might want to say is lost.
+- WHY: `LayersBuilder` is deliberately not a `Checkable`. A chain that has declared layers and written no
+  clause is not yet a rule about anything, so there is nothing for a terminal to report; it is a value worth
+  storing all the same, which is why it is named on the public surface and why the tests declare this
+  repository's layers once in a helper and branch every policy off it.
+- WHY: a clause naming a layer the policy never declared is a `UserError` wrapping `ErrUndeclaredLayer`,
+  rejected in `clausing` at the moment it is typed rather than at the terminal. An undeclared layer has no
+  files, so it is at neither end of any projected dependency, so the clause would judge nothing and pass
+  forever — the failure the empty-test guard exists for, caught one stage earlier where the name a user
+  mistyped can be quoted back at them. It is the typo the sibling libraries report most.
+- WHY: `may not depend on layers()` with nothing named is rejected (`ErrNoLayersNamed`) while
+  `may only depend on layers()` with nothing named is legal and means the sealed layer. They are not
+  symmetrical: a blocklist that forbids nothing holds forever, and an allowlist that allows nothing is a policy
+  people really write — a domain that may not reach the code around it. The rejected clause still joins the
+  policy so that `String()` renders the sentence the user typed, with the rejection in parentheses after it;
+  the policy carries the error, so it is never judged.
+- WHY: a layer name declared twice is one layer whose selectors are OR-ed, not two layers with one name.
+  `layer "domain" defined by folder "internal/domain"` followed by `layer "domain" defined by folder
+  "internal/model"` can only mean the domain is both, and merging in `declaring` is also what lets everything
+  downstream — the projection, the guard's populations, a clause's lookup — take one layer per name for
+  granted. An overlap between *different* layers is resolved by declaration order: `projection.LayerOf` returns
+  the first layer whose pattern describes the file, so a file is in exactly one layer and the order is the
+  user's, never sorted.
+- WHY: the issue's three semantics live where the pipeline already puts them, and none of them is a special
+  case in this module. Intra-layer dependencies are allowed because `kernelprojection.ProjectEdges` drops
+  label-equal edges, which is the data model's own self-edge rule; edges with an end in no declared layer are
+  dropped by `projection.PerLayerEdge`, the module's one `MapFunction`; blocklists before allowlists is
+  `assertion.GatherDependencyViolations` asking the `ShouldNot` clauses first. That last one is about the
+  *report* rather than the pass — every clause is in force and a dependency breaking both is one violation
+  either way — and it is blamed on the blocklist because that is the sentence the reader wrote about that very
+  pair of layers.
+- WHY: one violation per offending pair of layers, not per import, carrying the concrete `extraction.Edge`s
+  that connect them. That is what `ProjectedEdge.CumulatedEdges` is for, and it is what makes a layer report
+  short enough to read and still specific enough to act on: `layer "db": may not depend on layers "api"; it
+  depends on api through db/conn.go -> api/handler.go`.
+- WHY: the empty-test guard is asked one population per declared layer, not one for the policy, and it reports
+  every empty layer rather than the first. Any one of a policy's patterns can be the stale one, a layer nobody
+  is in makes every clause about it vacuous, and a reader who renamed two folders should be told about both.
+  The subject names the layer — `files in layer "api"` — because `layers` alone would not say which pattern to
+  go and fix.
+- WHY: `SelectLayerFiles` is the module's counterpart to `SelectFiles` and returns `map[string][]string` with
+  every declared layer as a key, including the empty ones. An empty layer is neither an error nor a violation
+  there: whether it is a failure is a question only a rule that judges something can ask.
+- WHY: the public surface names the three stages and the terminal and nothing else. `projection.Layer` stays
+  internal — `declaredLayers` is unexported — because a user describes a layer by typing `defined by`, not by
+  building a compiled selector, and the error sentinels are not re-exported either, which is the choice
+  `ErrNoPredicate` already made in the files module.
+- WHY: file stems follow the vocabulary as the files module's do — `project_layers.go`, `layer.go`,
+  `where_layer.go`, `may_only_depend_on_layers.go`, `may_not_depend_on_layers.go`, `policy_condition.go` in
+  `fluentapi`; `layer.go`, `select_layer_files.go`, `per_layer_edge.go` in `projection`; `clause.go`,
+  `dependency_violation.go`, `gather_dependency_violations.go` in `assertion` — each with its `_test.go`
+  sibling.
+- WHY: the phrasing of a layer violation is `archtest`'s, like every other family's, and it duplicates the
+  clause's wording rather than calling `Clause.String()`: the violation carries data (`Layer`, `DependsOn`,
+  `Named`, `Mood`, `Dependencies`), the report layer decides the sentence, and a report that borrowed a
+  chain's `String()` would make the phrasing impossible to change in one place. `layers/assertion` was added
+  to depguard's strict `testing-layer` allow list for it, one line, on purpose.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. Every stage of this chain is a
+  method, and that list cannot guard methods; the entry points return a builder a caller must use, and the
+  comment above the list already says why an unterminated chain is the idiom critic's catch rather than a
+  linter's.

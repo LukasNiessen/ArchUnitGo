@@ -185,10 +185,16 @@ the name.
 |---|---|---|
 | Entry | exactly 1 | a scope builder |
 | Scope | 0..n, chainable, combined with AND | a scope builder |
-| Mood | exactly 1 | a positive or negated predicate builder |
+| Mood | exactly 1, except where the predicate carries it | a positive or negated predicate builder |
 | Predicate | exactly 1 | a terminal, or an object builder if the predicate is relational |
 | Object | 1..n, chainable | a terminal |
 | Terminal | exactly 1 | violations, or a rendered artifact |
+
+The one exception to the mood stage is the pair of layer predicates below: `may only depend on layers`
+and `may not depend on layers` are their own polarity, so a mood before them would read as `should not,
+may not depend on layers`. The mood is still what makes the two one piece of logic — it travels on the
+clause the predicate builds, where the allowlist is `should` and the blocklist `should not` — and every
+other family, existing or not yet written, has the stage.
 
 Word choice is fixed. Casing is yours. Exported identifiers are `PascalCase`, unexported ones `camelCase`. `depend on files` becomes `DependOnFiles`.
 
@@ -197,7 +203,9 @@ Word choice is fixed. Casing is yours. Exported identifiers are `PascalCase`, un
 an optional project locator; omitted means auto-detect. Never make it required.
 
 **Scope verbs** are prepositional, describing where or what — `with name`, `in folder`, `in path`,
-`in file`, `for classes matching`, `defined by`, `defined by regex`, `defined by folder`.
+`in file`, `for classes matching`, `defined by`, `defined by regex`, `defined by folder`, `layer`,
+`where layer`. The last two are the layer policy's pair: `layer(name)`, closed by a `defined by` verb,
+declares who exists, and `where layer(name)` picks the one a clause is about.
 
 **Mood** is exactly two words, `should` and `should not`. No synonyms, ever.
 
