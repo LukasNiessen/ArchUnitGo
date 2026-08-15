@@ -64,6 +64,15 @@ const emptyTestHint = "an empty rule would hold forever, so selecting nothing is
 // offers it on `should` alone and there is no other rule this violation could have come from.
 const cyclesRequirement = "should, have no cycles"
 
+// diagramRequirement is the sentence a diagram violation broke, spelled out for the reason cyclesRequirement
+// is: `adhere to diagram` is offered on `should` alone, because a diagram is a closed statement about a whole
+// project and its negation would ask that a project contradict its own documentation somewhere.
+//
+// It says `adhere to diagram` for the drawing given as text and for the one read out of a file alike. Which of
+// the two the user typed is not in the violation, and a reader looking at their own failing test has the path
+// in front of them; the requirement's job is to name the rule.
+const diagramRequirement = "should, adhere to diagram"
+
 // ViolationFactory phrases one violation: the collection of constructors that turns the data a rule
 // reported into the sentence a reader gets.
 //
@@ -94,6 +103,8 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
 //	layer "db": may not depend on layers "api"; it depends on api through db/conn.go -> api/handler.go
 //	slice "api": should not, contain dependency "db"; it depends on db through api/handler.go -> db/conn.go
+//	slice "api": should, adhere to diagram; it depends on db, which the diagram does not draw through api/a.go -> db/b.go
+//	component "cache": should, adhere to diagram; the project has no slice for it
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
 // The requirement is always rendered as the rule stated it, never as its negation — `should not, filename
@@ -129,6 +140,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.layerDependency(reported)
 	case slicesassertion.DependencyViolation:
 		return f.sliceDependency(reported)
+	case slicesassertion.DiagramViolation:
+		return f.sliceDiagram(reported)
 	default:
 		return f.unphrased(violation)
 	}
@@ -274,6 +287,37 @@ func (f ViolationFactory) sliceDependency(violation slicesassertion.DependencyVi
 		finding = "it depends on " + violation.DependsOn + through(violation.Dependencies)
 	}
 	return f.sentence(`slice "`+violation.Slice+`"`, requirement, finding)
+}
+
+// sliceDiagram phrases one place where a project and the component diagram somebody drew of it disagree: what
+// the disagreement is about, the rule in the words it was written in, and which of the three ways they do not
+// match this is.
+//
+// The finding is what the words inside the sentence are picked by, because the three are different things to do
+// about: an arrow to draw or an import to delete, a component to add to the drawing, a name in the drawing that
+// no longer exists. The subject follows the finding for the same reason — a slice for the two findings about the
+// code, a component for the one about the drawing — so that a reader is told which of the two documents to open
+// before anything else.
+//
+// The concrete file dependencies are the tail of the finding, exactly as they are for every other family whose
+// subject is a group rather than a file: what is wrong, then where to look. The other two findings carry none,
+// which is what they say.
+func (f ViolationFactory) sliceDiagram(violation slicesassertion.DiagramViolation) string {
+	switch violation.Finding {
+	case slicesassertion.FindingUndrawnDependency:
+		finding := "it depends on " + violation.DependsOn + ", which the diagram does not draw" +
+			through(violation.Dependencies)
+		return f.sentence(`slice "`+violation.Slice+`"`, diagramRequirement, finding)
+	case slicesassertion.FindingUndeclaredSlice:
+		return f.sentence(`slice "`+violation.Slice+`"`, diagramRequirement, "the diagram does not declare it")
+	case slicesassertion.FindingAbsentComponent:
+		return f.sentence(`component "`+violation.Slice+`"`, diagramRequirement, "the project has no slice for it")
+	default:
+		// A finding this layer has not been taught is a violation built by hand or a value out of range, and it
+		// is reported as the vocabulary the violation itself has rather than dropped: a report with a gap in it
+		// is how a reader finds out that something else is wrong.
+		return f.sentence(`slice "`+violation.Slice+`"`, diagramRequirement, violation.Finding.String())
+	}
 }
 
 // through renders the concrete file dependencies a violation about two groups of files was broken by —

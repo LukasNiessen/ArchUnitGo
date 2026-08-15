@@ -19,13 +19,17 @@ import (
 // Together with SlicesShouldNotBuilder it is one of the two thin types over one shared rule — see slicesRule
 // — so a predicate with a meaningful negation is implemented once, for both moods, and the mood reaches the
 // assertion as assertion.Mood rather than as a second code path.
+//
+// It has one predicate its twin has not: `adhere to diagram`, which is offered on this mood alone because a
+// diagram is a closed statement about a whole project and its negation would ask that a project contradict its
+// own documentation somewhere. That is the shape `have no cycles` has in the files module.
 type SlicesShouldBuilder struct {
 	rule slicesRule
 }
 
 // SlicesShouldNotBuilder is the negated mood of a rule about slices — `project slices, defined by
 // "internal/(**)/**", should not` — and is SlicesShouldBuilder's twin: the same slicing, the same terminals,
-// the same predicate, one flag apart.
+// the same predicate wherever a negation means anything, one flag apart.
 //
 //	rule := archunit.ProjectSlices(nil).DefinedBy("internal/(**)/**").ShouldNot()
 //
@@ -67,9 +71,13 @@ func (b SlicesBuilder) ShouldNot() SlicesShouldNotBuilder {
 	return SlicesShouldNotBuilder{rule: b.ruleIn(assertion.ShouldNot)}
 }
 
-// Mood is assertion.Should, the mood this builder is the positive half of. It is the flag the predicate
+// Mood is assertion.Should, the mood this builder is the positive half of. It is the flag `contain dependency`
 // passes to assertion.GatherDependencyViolations, and the one thing that distinguishes this builder from
 // SlicesShouldNotBuilder.
+//
+// It is always assertion.Should here, and the one predicate this builder has that its twin has not — `adhere
+// to diagram` — is the reason: a diagram is a closed statement about a whole project, so it is judged in this
+// mood alone and passes no flag on at all.
 func (b SlicesShouldBuilder) Mood() assertion.Mood {
 	return b.rule.mood
 }
@@ -89,9 +97,9 @@ func (b SlicesShouldBuilder) String() string {
 	return b.rule.String()
 }
 
-// Mood is assertion.ShouldNot, the mood this builder is the negated half of. It is the flag the predicate
-// passes to assertion.GatherDependencyViolations, and the one thing that distinguishes this builder from
-// SlicesShouldBuilder.
+// Mood is assertion.ShouldNot, the mood this builder is the negated half of. It is the flag `contain
+// dependency` passes to assertion.GatherDependencyViolations, and the one thing that distinguishes this builder
+// from SlicesShouldBuilder.
 func (b SlicesShouldNotBuilder) Mood() assertion.Mood {
 	return b.rule.mood
 }
@@ -133,9 +141,10 @@ func (b SlicesBuilder) ruleIn(mood assertion.Mood) slicesRule {
 // slicesRule is the half of a rule about slices that both moods carry: the slicing the mood was asked of, and
 // the mood itself. It is the one shared value the two builders above are thin types over.
 //
-// The predicate takes one of these and hands the mood on to assertion.GatherDependencyViolations, where
+// `contain dependency` takes one of these and hands the mood on to assertion.GatherDependencyViolations, where
 // assertion.Mood.Holds is the single comparison the two moods differ by. Nothing in the module reads the flag
-// in order to choose between two implementations — that is the duplication the mood exists to prevent.
+// in order to choose between two implementations — that is the duplication the mood exists to prevent. `adhere
+// to diagram` carries one of these too and hands no mood on, because it exists in the positive one alone.
 type slicesRule struct {
 	// scope is the stage the mood was asked of, kept whole rather than unpacked: it already carries the
 	// locator, the two pattern factories, the slicing and anything this library rejected, and a terminal

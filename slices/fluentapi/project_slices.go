@@ -22,10 +22,20 @@
 //	viaDomain := slicing.Should().ContainDependency("api", "domain")
 //
 // The chain is the family's ordinary one: the entry point, one scope verb — `defined by` or `defined by
-// regex` — the mood, the predicate `contain dependency`, and the terminal `check`. The scope is exactly one
-// verb rather than the usual chain of them, because a slicing is a projection and not a selection: two
-// slicings would be two different vocabularies to talk about the project in, so a second one is
-// ErrSlicedTwice instead of a narrower rule.
+// regex` — the mood, a predicate, and the terminal `check`. The scope is exactly one verb rather than the
+// usual chain of them, because a slicing is a projection and not a selection: two slicings would be two
+// different vocabularies to talk about the project in, so a second one is ErrSlicedTwice instead of a
+// narrower rule.
+//
+// There are two predicates, and they are two sizes of the same question. `contain dependency` is one pair of
+// slices, in either mood; `adhere to diagram` is the whole architecture at once, on the positive mood alone,
+// judged against the component diagram somebody drew of the project — which is what forty rules nobody keeps
+// up to date are better written as. Its two modifiers, `ignoring orphan slices` and `ignoring external
+// slices`, are chainable in either order.
+//
+// A slicing also has two terminals before any mood, which are a report rather than a rule: `to plantuml` and
+// `export as plantuml` draw the project's slices as the diagram the rule reads back, so a codebase nobody has
+// drawn yet is one export away from being checked against its own architecture.
 package fluentapi
 
 import (
@@ -40,9 +50,14 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/slices/projection"
 )
 
-// The four ways a rule about slices can be typed wrongly, as sentinels a caller can recognize with
-// errors.Is. Each of them is reported as an archerror.UserError naming the step of the chain at fault: the
-// library is working and the code has not been judged, there is simply no runnable rule to judge it with.
+// The four ways the slicing and the mood of a rule about slices can be typed wrongly, as sentinels a caller
+// can recognize with errors.Is. Each of them is reported as an archerror.UserError naming the step of the
+// chain at fault: the library is working and the code has not been judged, there is simply no runnable rule
+// to judge it with.
+//
+// They are the ones every rule in this module can run into. A predicate or a terminal with a misuse of its
+// own declares the sentinel for it beside itself — ErrMissingDiagramPath, ErrNothingToDraw,
+// ErrMissingExportPath — because the reason is only reachable through the one call that reports it.
 var (
 	// ErrNoSlicing says the chain reached its mood without a slicing: nobody said what the slices of this
 	// project are, so there is no vocabulary for the rule to be about. It is the one rejection this module
@@ -70,9 +85,11 @@ var (
 // one and branching from it is safe and is the point — the slicing is the half of the rule that is worth
 // typing once, and two rules over one slicing should not mean writing it twice.
 //
-// It is not a Checkable, and that is the grammar rather than an omission: a chain that has a slicing but no
-// mood and no predicate is not yet a rule about anything, so there is nothing for a terminal to report. The
-// Checkable is SlicesDependencyCondition, which the predicate returns.
+// It is not a Checkable, and that is the grammar rather than an omission: a slicing with no mood and no
+// predicate is not yet a rule about anything, so there is no violation list for it to report. Its two
+// terminals are reports rather than rules — `to plantuml` and `export as plantuml`, which draw the project's
+// slices instead of judging them — and the Checkables are SlicesDependencyCondition and
+// SlicesDiagramCondition, which the two predicates return.
 //
 // The zero value is `project slices` over the whole project, auto-detected, with no slicing — the same
 // builder ProjectSlices(nil) returns.

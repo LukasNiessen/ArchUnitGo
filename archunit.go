@@ -18,7 +18,9 @@
 // Not every chain describes a rule. ProjectGraph describes a report, so it has no mood, no predicate and no
 // violations: its terminals hand back the diagram — as data, as a document in one of six formats, or as a file
 // written to disk — rather than a list of what the code disagreed with. Everything else about it is the same —
-// a value, chainable modifiers, the same optional locator.
+// a value, chainable modifiers, the same optional locator. A slicing has such a terminal before its mood too:
+// ToPlantUML and ExportAsPlantUML draw the project's slices as the component diagram `should adhere to diagram`
+// judges one against.
 package archunit
 
 import (
@@ -137,6 +139,29 @@ type LayerDependencyViolation = layersassertion.DependencyViolation
 // which a required dependency that is missing has none of.
 type SliceDependencyViolation = slicesassertion.DependencyViolation
 
+// SliceDiagramViolation says that a project and the component diagram somebody drew of it disagree in one
+// place. It is what `should adhere to diagram` and `should adhere to diagram in file` report, one per
+// disagreement rather than one per rule — carrying which of the three findings it is, the names it is about
+// and, for a dependency the diagram does not draw, the concrete file dependencies that made it.
+type SliceDiagramViolation = slicesassertion.DiagramViolation
+
+// SliceDiagramFinding is which of the three ways a project and a diagram of it can disagree a
+// SliceDiagramViolation reports, and the field a report reads before the others: the rest of the violation
+// means what the finding says it means.
+type SliceDiagramFinding = slicesassertion.DiagramFinding
+
+const (
+	// FindingUndrawnDependency is a dependency the project has and the diagram does not draw. It is the
+	// finding a diagram is drawn for, and the only one no modifier switches off.
+	FindingUndrawnDependency = slicesassertion.FindingUndrawnDependency
+	// FindingUndeclaredSlice is a slice the project has and the diagram does not declare, which `ignoring
+	// orphan slices` leaves out for the slices no dependency reaches.
+	FindingUndeclaredSlice = slicesassertion.FindingUndeclaredSlice
+	// FindingAbsentComponent is a component the diagram declares and the project has no slice for, which
+	// `ignoring external slices` leaves out.
+	FindingAbsentComponent = slicesassertion.FindingAbsentComponent
+)
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -154,6 +179,8 @@ const (
 	KindLayerDependency = layersassertion.KindLayerDependency
 	// KindSliceDependency is the kind of SliceDependencyViolation.
 	KindSliceDependency = slicesassertion.KindSliceDependency
+	// KindSliceDiagram is the kind of SliceDiagramViolation.
+	KindSliceDiagram = slicesassertion.KindSliceDiagram
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -236,8 +263,10 @@ type SlicesShouldBuilder = slicesapi.SlicesShouldBuilder
 
 // SlicesShouldNotBuilder is the negated mood of a rule about slices, which SlicesBuilder.ShouldNot returns:
 // `project slices, defined by "internal/(**)/**", should not`. It is the positive builder's twin — the same
-// slicing, the same predicate, the same terminal, one flag apart — and it is the mood a rule about slices is
-// nearly always written in.
+// slicing, the same predicate wherever a negation means anything, one flag apart — and it is the mood a rule
+// about slices is nearly always written in. `adhere to diagram` is offered on SlicesShouldBuilder alone,
+// because a diagram is a closed statement about a whole project and its negation would ask that a project
+// contradict its own documentation somewhere.
 type SlicesShouldNotBuilder = slicesapi.SlicesShouldNotBuilder
 
 // SlicesDependencyCondition is the terminal of `project slices, defined by "internal/(**)/**", should not,
@@ -245,6 +274,13 @@ type SlicesShouldNotBuilder = slicesapi.SlicesShouldNotBuilder
 // dependency are arguments of that one verb, so there is no object stage to chain, and it is a Checkable, so a
 // built rule can be stored, passed to a helper or kept in a list of the suite's rules.
 type SlicesDependencyCondition = slicesapi.SlicesDependencyCondition
+
+// SlicesDiagramCondition is the predicate and the terminal of `project slices, defined by "internal/(**)/**",
+// should, adhere to diagram in file "docs/architecture.puml"`, which AdhereToDiagram and AdhereToDiagramInFile
+// return on the positive mood. Its two modifiers — IgnoringOrphanSlices, IgnoringExternalSlices — are chainable
+// in either order, and it is a Checkable, so a whole architecture's worth of rule can be stored, passed to a
+// helper or kept in a list of the suite's rules as one rule.
+type SlicesDiagramCondition = slicesapi.SlicesDiagramCondition
 
 // MapFunction is a projection: what one dependency of the graph becomes when the library relabels it, or
 // nothing at all when the projection is not about it. It is what SliceByPattern and its siblings return, and it
@@ -407,6 +443,15 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 // Nothing declares the slices: `internal/(**)/**` says that this project's slices are its folders under
 // internal, so `internal/api/handler.go` is in the slice `api`, and a file the pattern does not match is in no
 // slice at all. That is the difference from a layer policy, where every layer is named before any file is read.
+//
+// The other rule a slicing can be asked for is the whole architecture at once, against the component diagram
+// somebody drew of it — and the reverse of it, which draws the diagram out of the project as it is:
+//
+//	rule := archunit.ProjectSlices(nil).
+//		DefinedBy("internal/(**)/**").
+//		Should().
+//		AdhereToDiagramInFile("docs/architecture.puml")
+//	err := archunit.ProjectSlices(nil).DefinedBy("internal/(**)/**").ExportAsPlantUML("docs/architecture.puml", nil)
 //
 // There is no shorter alias for it, unlike ProjectFiles and ProjectLayers: `slices` alone is the name of a
 // standard library package, and a chain starting with it would read as one.
