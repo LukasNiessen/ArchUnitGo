@@ -1,0 +1,154 @@
+# Continuous integration for ArchUnitGo: the gate a maintainer runs by hand, run again on every push.
+#
+# Two things about the shape of this file are deliberate.
+#
+# Every check is a plain command, spelled exactly as somebody would type it locally — `go build ./...`,
+# `golangci-lint run ./...` — and never hidden behind an action's arguments. A red job then tells you
+# what to type to reproduce it, and ci_test.go holds the file to that list so a check cannot quietly
+# leave it.
+#
+# The jobs are split by what a failure *means*, not to save wall-clock: `build` says the code does not
+# compile, `test` that it does not work, `dogfood` that the library broke its own architecture rules,
+# `lint` that it does not follow the conventions .golangci.yml enforces, and `cross-build` that it only
+# works on the machine it was written on. Each of those is somebody else's afternoon, so each gets its
+# own line in the checks list.
+#
+# AGENTS.md: "Commit straight to main. No branching ceremony, no required review, no pull requests."
+# So `push` is the event that matters and it is unfiltered — a branch nobody opened a pull request for
+# is checked too — and `pull_request` is here only so that a contributed one is not a blind spot.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A push replacing an older one cancels its run. Nothing here writes anywhere, so a cancelled run
+# leaves nothing half-done.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # setup-go installs the version go.mod declares; `local` stops the toolchain from silently fetching
+  # a different one mid-job, so "green in CI" means green on the version the module says it needs.
+  GOTOOLCHAIN: local
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      # `-diff` reports what tidying would change and exits non-zero instead of doing it, which is
+      # what makes it a check rather than an edit.
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # -race because a check writes to a shared graph cache and a user's suite may run its rules in
+      # parallel; -shuffle=on because a rule that only passes after another test ran is not a rule;
+      # -count=1 because the test cache would otherwise report a pass that nothing re-ran.
+      - run: go test -race -shuffle=on -count=1 ./...
+
+  dogfood:
+    name: Architecture (the library on itself)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # The dogfooding suite — AGENTS.md's four dependency rules written as rules of this library and
+      # checked against this repository — lives in the root package, in architecture_test.go. Running
+      # that package on its own line is what makes "the library broke its own architecture" a signal a
+      # reader can see, instead of one failure among twenty-six packages.
+      #
+      # It is the whole package rather than a `-run` filter over the suite's test names on purpose:
+      # `-run` that matches nothing exits 0, so the day a test is renamed the filter would hand back a
+      # green job that ran no rule at all. That is exactly the silent pass AGENTS.md forbids the
+      # library itself ("zero matches is a violation, not a pass"), and it would be bought here for
+      # seventeen seconds of duplicated test time.
+      - run: go test -race -shuffle=on -count=1 .
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Installed and then run by hand, in the three commands .golangci.yml's own header names as the
+      # gate. `install-only` is what buys that: the action's default is to run `golangci-lint run`
+      # itself, which would leave the other two commands looking like extras rather than the check.
+      #
+      # The version is pinned rather than `latest` because a linter release is a change to what this
+      # repository considers correct — every rule in .golangci.yml is one somebody read — and it
+      # should arrive in a commit that bumps this line, not in whichever push happens to follow it.
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
+      # .golangci.yml is the deterministic half of code review, so a typo in it that turned a linter
+      # off would be a check silently not running. `config verify` is that file read against its
+      # schema, and it goes first for the same reason.
+      - run: golangci-lint config verify
+      - run: golangci-lint fmt --diff
+      - run: golangci-lint run ./...
+
+  cross-build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows because identifiers are normalised paths, and the separator a host walks with is
+          # the one thing about extraction that differs per platform. Every pattern in every rule
+          # matches against those strings, so this is where a `\` that escaped normalisation lands.
+          - goos: windows
+            goarch: amd64
+          # 386 for the word size, which the metrics module is the reason to care about: a count, a
+          # shift or an untyped constant that only fits a 64-bit int stops compiling here, and here is
+          # the cheapest place to be told.
+          - goos: linux
+            goarch: '386'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Compiled, not run: a cross-compiled test binary cannot execute on this runner. What the test
+      # suite would say on those platforms is a question this job deliberately does not answer.
+      #
+      # The platform is set on this step alone rather than on the job, so that the toolchain the
+      # previous step installs and caches is still the runner's own.
+      - run: go build ./...
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
