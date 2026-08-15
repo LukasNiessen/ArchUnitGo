@@ -2340,3 +2340,55 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   still asserted byte for byte, which is what pins it against being zeroed or hard-coded; making the two
   numbers differ would mean inventing a "some files were not read" path that the extraction deliberately does
   not have.
+
+## Issue #40 — Dogfood: enforce our own architecture rules on ourselves
+
+- WHY: the suite is one file at the repository root, `architecture_test.go`, and not a test file beside the
+  file it tests as the naming convention asks — it tests no file. It is about the layout of the whole
+  repository, so the root of the module is where a reader looking for "the architecture of this project"
+  finds it, and it is the level the four rules are stated at.
+- WHY: the suite is `map[string]archunit.Checkable` handed to `AssertAllPass`, and the rules of rule 2 are
+  built by a loop over `domainModulesOfThisRepository()` rather than typed out per module. One shape per
+  module is what makes the module landing next inside the rules on the day its folder appears, instead of on
+  the day somebody remembers to add four lines. `TestTheArchitectureSuiteSaysSomethingAboutEveryFolderOfThisRepository`
+  is the other half of that: a top-level folder the suite knows nothing about is a failure, because the
+  empty-test guard only catches the opposite mistake — a pattern whose folder was renamed away.
+- WHY: the suite covers AGENTS.md's rule 3 (the report layer reads the kernel and the modules' violations)
+  and the third-party half of rule 1 as well as the four bullets the issue names. The issue's list is the
+  four dependency rules of AGENTS.md read short, and rule 1 says "nothing but the standard library **and the
+  analysis toolchain**", which is only a rule if the toolchain's one hole is named and held to one folder.
+- WHY: the six dogfooding tests that already existed in `archunit_test.go` are left where they are, and the
+  suite restates three of their rule shapes rather than avoiding the overlap.
+  `TestThisRepositoryHasNoCyclesBetweenItsFiles` is the acyclicity rule verbatim,
+  `TestADomainModuleOfThisRepositoryDependsOnTheKernelAndOnNoOtherModule` is the four rules of the suite's
+  rule-2 loop glob for glob, and `TestTheThirdPartyPolicyOfThisRepositoryIsOneRuleWithOneDocumentedHole`
+  together with `TestThisRepositoryObeysItsOwnThirdPartyDependencyPolicy` is the third-party half of rule 1
+  with the same `*.*/**` and the same toolchain hole — the latter also carrying the positive `the extractor
+  knows the analysis toolchain` rule. In each of them the rule is the vehicle and a feature of the library is
+  what is being proved, so folding one into the suite would delete a family's integration test to save a
+  duplicated sentence. `TestThisRepositoryObeysItsOwnDependencyRules` goes on to the boundaries inside a
+  module — a pure assertion half not reaching back into its fluent API — which no rule of one shape per module
+  can express, and `TestThisRepositoryObeysItsOwnLayerPolicy` is the same architecture as the one policy it
+  is; those two the suite genuinely does not restate. What the suite adds that none of the six do is coverage
+  of every module by shape.
+- WHY: the empty-test guard covers less of this suite than "every rule goes through it" would suggest, and the
+  two extra tests are where the rest is covered. Every rule's scope is guarded, and so is the object of the
+  `depend on files` rules — but the object of a `depend on external modules` rule is unguarded by design
+  (`files/fluentapi/depend_on_external_modules.go`: "no module matched" and "no selected file depends on such a
+  module" are one statement, and under the negated mood it is the pass), so the seven rules written with
+  `thirdPartyModules` would all report nothing if that pattern stopped matching anything.
+  `TestAThirdPartyRuleOfThisRepositoryReportsTheFileThatBreaksIt` is the failing half for that shape — the
+  kernel's third-party rule with its `except` for the toolchain removed, which has to report
+  `golang.org/x/tools/go/packages` on the extractor — and the positive `the extractor knows the analysis
+  toolchain` rule pins `analysisToolchain` the same way from inside the suite.
+- WHY: `TestTheArchitectureSuiteSaysSomethingAboutEveryFolderOfThisRepository` reads the suite itself as well as
+  the extractor's folders, asking for both per-module rule names. Naming a module in
+  `domainModulesOfThisRepository` is what the folder half checks, but the loop that turns the name into two
+  rules is the half that can silently stop producing them — a dropped assignment, or a key that no longer varies
+  per module and collapses all four onto one entry — and no other test in the file counts or names them.
+- WHY: `nothing depends on the public surface` is written as `in path "*.go"` — every Go file at the module
+  root — rather than as `with name "archunit.go"`, which is how the older pairwise test spells it. A `*` never
+  crosses a separator, so the pattern is exactly the root package, and a second file landing there is inside
+  the rule the day it lands. `TestThePublicSurfaceIsTheOneFileTheSuiteForbidsDependingOn` pins that the
+  pattern names `archunit.go` and nothing else, since a pattern that named the wrong file would leave the rule
+  green rather than empty.
