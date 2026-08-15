@@ -20,6 +20,11 @@
 // from`, `dependents of`, `collapse to folder depth`, `collapse by pattern`, `titled` and `with check
 // options`.
 //
+// Four of those take a pattern, and each of them takes the exclusion of except.go: `except` qualifies the
+// pattern modifier the chain wrote most recently, so `focus on "app/**" within 1 hop, except "**/generated/**"`
+// is one modifier and not a tenth kind of query. It is the one word here that is not order-independent, and it
+// cannot be: an exclusion belongs to the clause it was typed in.
+//
 // There are thirteen terminals. Snapshot hands the report back as data, and the other twelve hand it back as a
 // document: `to dot`, `to mermaid`, `to d2`, `to csv`, `to json` and `to html` as a string, and `export as
 // dot` and its five siblings as a file on disk. Every one of them is Snapshot followed by one function of
@@ -84,6 +89,10 @@ type GraphBuilder struct {
 	// It is the whole of what the projection is given, and it is a value rather than a pointer so that a
 	// builder cannot share it with the copy it came from.
 	query projection.SnapshotOptions
+	// qualified is which of the query's pattern modifiers the chain wrote most recently, which is the one an
+	// `except` qualifies. It is remembered rather than derived, because the four of them append to four
+	// different fields and nothing in a resolved query says which was written last.
+	qualified patternModifier
 	// check is how the project is read, from `with check options`, and nil means the defaults. It is a copy
 	// of what the user passed, for the reason the locator is: a report that changes when the bag it was
 	// built from is edited afterwards is not immutable.

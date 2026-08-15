@@ -15,6 +15,15 @@
 // family as they land — and every entry point takes an optional *ProjectLocator, where nil means the project
 // the test itself is in.
 //
+// Every selector in the library takes an exclusion, and it is spelled `except` in all four families: `in
+// folder "app/**", except "**/generated"` is one clause, so the rule a team means — everything under a folder
+// but not the generated part of it — is written the way they say it rather than inverted into a rule about the
+// generated folder. An exclusion qualifies the selector it follows and nothing else, its patterns are read
+// against the same part of an identifier as that selector unless a targeted form such as `except with name`
+// says otherwise, and it is repeatable. What each family spells is in its own except.go: four forms of the
+// verb in the files module, five in metrics, three in layers, and the plain one in the graph module, where every
+// pattern is matched against the whole identifier already.
+//
 // Not every chain describes a rule. ProjectGraph describes a report, so it has no mood, no predicate and no
 // violations: its terminals hand back the diagram — as data, as a document in one of six formats, or as a file
 // written to disk — rather than a list of what the code disagreed with. Everything else about it is the same —
@@ -429,6 +438,11 @@ const (
 
 // ProjectFiles is the entry point of every rule about files: `project files`. The locator is optional
 // and nil means auto-detect.
+//
+// The scope verbs and the object verbs both take `except`, and both have the three targeted forms of it —
+// `except with name`, `except in folder`, `except in path` — so a rule carves the hole where it is meant:
+// `in folder "app/**", except "**/generated"` is a rule about less code, and `should not depend on files, in
+// folder "internal/db/**", except "internal/db/dto/**"` is a boundary with one documented door in it.
 func ProjectFiles(locator *ProjectLocator) FilesBuilder {
 	return filesapi.ProjectFiles(locator)
 }
@@ -452,6 +466,11 @@ func Files(locator *ProjectLocator) FilesBuilder {
 //
 // Dependencies inside a layer are always allowed, dependencies with an end in no declared layer are ignored,
 // and `MayOnlyDependOnLayers()` with nothing named is the sealed layer.
+//
+// A declaration takes `except`, and `except in folder` and `except in path` are the same verb with the target
+// said out loud: `Layer("api").DefinedByFolder("internal/api/**").Except("**/generated")` is the layer a folder
+// is with one package taken back out of it. A file excluded that way is in no layer, so every dependency it is
+// an end of is ignored.
 func ProjectLayers(locator *ProjectLocator) LayersBuilder {
 	return layersapi.ProjectLayers(locator)
 }
@@ -488,8 +507,10 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 // has to learn which of them the author picked.
 //
 // The four scope verbs are chainable and combined with AND, three of them describing files and
-// ForClassesMatching describing declared types. The family's own name for this entry point is `metrics` alone,
-// so unlike the others it has no second spelling.
+// ForClassesMatching describing declared types, and each of them takes `except` — plus the four targeted forms
+// of it, one per scope verb, of which ExceptClassesMatching is the class population's own. An exclusion is
+// about the same population as the verb it qualifies, which is a rule only this family has to state. The
+// family's own name for this entry point is `metrics` alone, so unlike the others it has no second spelling.
 //
 // Which numbers there are to ask for is decided by the group the scope is followed by: `count` for the eight
 // metrics about a file or a class, `distance` for the five about a package — abstractness, instability, distance
@@ -545,6 +566,10 @@ func Metrics(locator *ProjectLocator) MetricsBuilder {
 // `including self dependencies`, `focus on`, `reachable from`, `dependents of`, `collapse to folder depth`,
 // `collapse by pattern`, `titled` and `with check options` — and each of them narrows what the diagram draws
 // or says how it is labeled. The default report is one node per file of the project's own code.
+//
+// The four that take a pattern each take `except`, which qualifies the one the chain wrote most recently: it is
+// how a diagram leaves out the generated packages, and how `collapse by pattern "third party" "**"` keeps one
+// module out of its catch-all group.
 //
 // The same described report renders as a document instead, in any of six formats, as a string or as a file:
 //

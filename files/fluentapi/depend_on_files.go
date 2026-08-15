@@ -30,7 +30,8 @@ import (
 //
 // The object verbs are `with name`, `in folder` and `in path`, they read exactly as the scope verbs of the
 // same name one stage earlier, and they are combined with AND: each narrows the set of files the rule is
-// about depending on, so their order never matters.
+// about depending on, so their order never matters. Each of them takes the `except` companion of except.go,
+// which is how a boundary gets its one documented hole.
 //
 // It carries the scope and the mood it was asked of unchanged, and it is immutable like every stage before it
 // — so a rule can be stored, passed to a helper and checked as often as it is useful, and one object can be

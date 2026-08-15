@@ -13,6 +13,10 @@
 // are combined with AND: each one narrows the selection, so their order never matters. What that
 // selection means, given a graph, is files/projection.SelectFiles.
 //
+// Each of them takes an exclusion, which is `except` and its three targeted forms in except.go: it
+// qualifies the verb it follows, so `in folder "app/**", except "**/generated"` is one clause and not an
+// inverted rule. Object verbs take the same companion.
+//
 // After the scope comes the mood, and there are exactly two of it — Should and ShouldNot, with no
 // synonyms — returning the two thin builders in mood.go. The predicate and the terminal are the stages
 // after that.

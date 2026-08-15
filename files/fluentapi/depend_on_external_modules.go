@@ -33,7 +33,9 @@ import (
 // library narrows with AND: a third-party policy is a list of alternatives — `matching "github.com/lib/pq"` or
 // `matching "github.com/deprecated/**"` — and a module cannot be two modules at once, so ANDing two of them
 // would name the empty set and make the second verb meaningless. The rendering says `or` where the rest of the
-// library says `,`, so nothing about that reading has to be remembered.
+// library says `,`, so nothing about that reading has to be remembered. `except` is the one companion that verb
+// takes, and it qualifies the alternative it follows rather than the list, for the same reason: an exclusion
+// belongs to the clause it was written in.
 //
 // It carries the scope and the mood it was asked of unchanged, and it is immutable like every stage before it —
 // so a rule can be stored, passed to a helper and checked as often as it is useful, and one object can be
