@@ -367,24 +367,31 @@ linters:
         # globals." extraction is deliberately absent: it is the layer that reads the filesystem.
         # The clock half of this rule is forbidigo's `time.Now`, below; denying `time` outright
         # would also ban time.Duration.
+        #
+        # rendering is here for the same reason though AGENTS.md does not name it: a renderer is a
+        # pure function from a projection.Snapshot to a document, and writing that document to a file
+        # is the fluent API's `export as <format>` terminal. A renderer that reached for os would
+        # take the seam that makes every output format testable against a hand-built snapshot with
+        # it.
         pure-packages:
           list-mode: lax
           files:
             - "**/assertion/**"
             - "**/projection/**"
             - "**/calculation/**"
+            - "**/rendering/**"
             - "!$test"
           deny:
             - pkg: os
-              desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure — no filesystem"
             - pkg: io/fs
-              desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure — no filesystem"
             - pkg: path/filepath
               desc: "pure packages take normalised identifiers, not paths; path helpers belong in their own named package under common/, never a common/util"
             - pkg: net
-              desc: "AGENTS.md: assertion/projection/calculation are pure — no network"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure — no network"
             - pkg: os/exec
-              desc: "AGENTS.md: assertion/projection/calculation are pure"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure"
             - pkg: go/packages
               desc: "pure packages work on an extracted Graph, not on the toolchain"
             - pkg: golang.org/x/tools

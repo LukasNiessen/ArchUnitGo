@@ -16,8 +16,9 @@
 // test itself is in.
 //
 // Not every chain describes a rule. ProjectGraph describes a report, so it has no mood, no predicate and no
-// violations: its terminal hands back the diagram's data rather than a list of what the code disagreed with.
-// Everything else about it is the same — a value, chainable modifiers, the same optional locator.
+// violations: its terminals hand back the diagram — as data, as a document in one of six formats, or as a file
+// written to disk — rather than a list of what the code disagreed with. Everything else about it is the same —
+// a value, chainable modifiers, the same optional locator.
 package archunit
 
 import (
@@ -212,13 +213,15 @@ type LayersPolicyCondition = layersapi.LayersPolicyCondition
 // modifier chained onto it — which ProjectGraph returns and every modifier hands back a new one of. It is
 // named here because a query is the expensive half of a report to write: one described report can be stored
 // and branched into as many focuses, collapses and output formats as a suite wants. It is the whole chain and
-// the terminal in one type, because a report has no mood and no predicate to pass through.
+// all thirteen terminals in one type, because a report has no mood and no predicate to pass through: Snapshot
+// for the report as data, ToDot and its five siblings for it as a string, ExportAsDot and its five siblings
+// for it as a file.
 type GraphBuilder = graphapi.GraphBuilder
 
 // GraphSnapshot is what a described report hands back: the nodes that survived the query, the dependencies
 // between them, the title and the counts. It is the seam the graph module hangs from — rendering is two
-// steps, build a snapshot and then render it, so every output format is a function of this one value and a
-// query option nobody has written a renderer for is still in all of them.
+// steps, build a snapshot and then render it, so each of the six output formats is a function of this one
+// value and a query option nobody has written a renderer for is still in all of them.
 type GraphSnapshot = graphprojection.Snapshot
 
 // GraphNode is one box of a report: the label it is drawn under — a file, a folder or a named group,
@@ -344,6 +347,13 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 // `including self dependencies`, `focus on`, `reachable from`, `dependents of`, `collapse to folder depth`,
 // `collapse by pattern`, `titled` and `with check options` — and each of them narrows what the diagram draws
 // or says how it is labeled. The default report is one node per file of the project's own code.
+//
+// The same described report renders as a document instead, in any of six formats, as a string or as a file:
+//
+//	err := archunit.ProjectGraph(nil).
+//		CollapseToFolderDepth(2).
+//		Titled("the modules of this project").
+//		ExportAsHTML("build/architecture.html")
 func ProjectGraph(locator *ProjectLocator) GraphBuilder {
 	return graphapi.ProjectGraph(locator)
 }

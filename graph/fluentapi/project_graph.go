@@ -20,10 +20,13 @@
 // from`, `dependents of`, `collapse to folder depth`, `collapse by pattern`, `titled` and `with check
 // options`.
 //
-// The terminal is Snapshot, and the two-step split behind it is the reason this module is shaped the way it
-// is: a query builds a projection.Snapshot, and rendering is a function of that snapshot alone. So a new
-// output format is one function that nothing here has to know about, and a modifier added here is understood
-// by every format the day it lands.
+// There are thirteen terminals. Snapshot hands the report back as data, and the other twelve hand it back as a
+// document: `to dot`, `to mermaid`, `to d2`, `to csv`, `to json` and `to html` as a string, and `export as
+// dot` and its five siblings as a file on disk. Every one of them is Snapshot followed by one function of
+// graph/rendering, and that two-step split is the reason this module is shaped the way it is: a query builds a
+// projection.Snapshot, and rendering is a function of that snapshot alone. So a new output format is one
+// function that nothing here has to know about, and a modifier added here is understood by every format the
+// day it lands.
 package fluentapi
 
 import (
@@ -136,9 +139,9 @@ func (b GraphBuilder) Titled(title string) GraphBuilder {
 // cleared cache — for the report this chain describes. A nil bag means the defaults.
 //
 // It is a modifier rather than an argument to the terminal, unlike `check(options?)` in every rule family,
-// and the reason is that this module's terminals are not one: a snapshot, a rendered diagram and a file
-// written to disk would each have to take the same bag, and the chain is where a thing that is said once
-// belongs. AllowEmptyTests is honored here too, as the way to permit a report of nothing.
+// and the reason is that this module's terminals are not one but thirteen: a snapshot, six rendered documents
+// and six files written to disk would each have to take the same bag, and the chain is where a thing that is
+// said once belongs. AllowEmptyTests is honored here too, as the way to permit a report of nothing.
 //
 // The bag is copied, so editing it afterwards does not change a report already described. Calling this twice
 // keeps the last bag.

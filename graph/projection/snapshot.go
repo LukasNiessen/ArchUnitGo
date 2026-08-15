@@ -3,9 +3,10 @@
 //
 // Rendering a graph is two steps, and this package is the first of them — build a snapshot: keep the nodes
 // the query asks about, collapse them onto the labels it asks for, aggregate the dependencies between those
-// labels, count what came out. Rendering is the second, and every renderer consumes this one Snapshot. That
-// split is the whole point of the package: a new output format is one function over a Snapshot, and a new
-// query option is one field of SnapshotOptions that every format understands the day it lands.
+// labels, count what came out. Rendering is the second, it lives in graph/rendering, and every one of the six
+// formats there consumes this one Snapshot. That split is the whole point of the package: a new output format
+// is one function over a Snapshot, and a new query option is one field of SnapshotOptions that every format
+// understands the day it lands.
 //
 // Three concepts, one of them a function. Snapshot, with its Node, Edge and Summary parts, is what a report
 // is; SnapshotOptions, with its Focus and CollapseGroup parts, is the query that describes one; and
@@ -114,9 +115,9 @@ func (s Snapshot) Empty() bool {
 //	nodes: internal/api, internal/db
 //	internal/api -> internal/db [3 dependencies] [plain]
 //
-// It is deliberately not one of the output formats the issue after this one adds — those are files a user
-// keeps, and they get their own functions and their own tests. This is the same debugging courtesy every
-// other type in the library extends to whoever is reading a failure.
+// It is deliberately not one of the six output formats — those are documents a user keeps, they live in
+// graph/rendering, and they have their own functions and their own tests. This is the same debugging courtesy
+// every other type in the library extends to whoever is reading a failure.
 func (s Snapshot) String() string {
 	headline := s.title
 	if headline == "" {
