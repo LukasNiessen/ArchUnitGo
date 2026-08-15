@@ -1679,3 +1679,66 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   plus `graph/fluentapi`'s `to_format_test.go` and `export_as_format_test.go` against fixture projects on
   disk. `graph/rendering`'s own suite is unit tests against hand-built snapshots, with a whole-document golden
   assertion per format and one cross-format file for the promises all six share.
+
+## Issue #32 — Metrics: extraction and count metrics
+
+- WHY: the module ships its scope, its extraction and its eight counts, but no mood, no threshold predicate and
+  no `Check` — those are the issue after this one, and the six threshold predicates `AGENTS.md` fixes are what
+  judge a number. `MetricBuilder.Measure(options)` is the resolution door in the meantime, the way
+  `FilesBuilder.SelectFiles` was for issue #16: it hands back the numbers, so every stage below it is exercised
+  by a test through the public surface instead of waiting for a predicate to reach it.
+- WHY: `count` is a stage the grammar in `AGENTS.md` has no word list for — its categories are entry point,
+  scope verb, mood, predicate, modifier and terminal, and "which number" is none of them. It is a stage rather
+  than eight more methods on the scope because the families beside it (cohesion, distance, the abstractness and
+  instability pair) are groups of their own, and `count, method count` reads as one phrase where
+  `MethodCount()` hanging off the scope would leave the eight counts and the coming ratios in one flat list.
+- WHY: `metrics/projection.SelectFiles` walks `graph.SelfEdges()` itself instead of calling
+  `files/projection.SelectFiles`. Rule 2 forbids the import — a domain module may not depend on a sibling — and
+  `common/projection`'s own package doc says its three functions are the whole surface and that each is a
+  function of a graph and one `MapFunction`, which a population selection is not. `layers/projection`
+  duplicates the same walk for the same reason, so this is the sibling convention rather than a departure from
+  it. Moving the walk into the kernel is a refactor of passing code and out of this issue's scope.
+- WHY: `metrics/extraction.countNonBlankLines` is a second copy of the helper `files/extraction` keeps
+  unexported, for the same rule-2 reason. The two are not the same measure and would have diverged anyway:
+  `files/extraction` counts the non-blank lines of a file as text, and `lines of code` here counts the non-blank
+  lines left after every comment has been masked out.
+- WHY: the class-level metrics the family has that Go has no concept for — depth of inheritance, number of
+  children — are absent rather than reported as 0, which the issue asks for. `ClassInfo`'s doc says so at the
+  place a reader would look for them, so nobody adds a field that would always hold the same number.
+- WHY: `classes` and `interfaces` count declared types — a struct, an interface, or a name given to another
+  type — and a class identifier is `internal/api.Handler`, the folder rather than the package clause. Go has no
+  classes and the vocabulary is the family's; the folder is what `for classes matching`, `in folder` and every
+  identifier in the library already agree on, and a package name is not unique across a project while a folder
+  is.
+- WHY: `for classes matching` narrows the measured files as well as the classes, so a rule that names classes
+  and then counts something about a file is measured over the files declaring one of them. The alternative is a
+  verb the user typed that changes nothing, and a metric about a file being measured over files that hold none
+  of the named classes.
+- WHY: a method is attributed to its type across the *selected* files of a folder, because a method is declared
+  beside its type rather than inside it and only the selected files are read. A narrowed scope therefore reports
+  the method count of what it selected — the same documented trade `PerSelectedFileEdge` makes — and
+  `ExtractFileInfo`'s doc states it.
+- WHY: `metrics/extraction` refuses a file it cannot parse with a `TechnicalError`, where the graph extractor
+  goes on past a file that does not compile. A metric is a number, and one taken over the files that happened to
+  parse is a number nobody can reproduce; the graph is a relation, where a missing file loses edges and nothing
+  else.
+- WHY: `projection.SelectSubjects` returns both populations — files and classes — from one call, and
+  `calculation.CountMetric.Measure` takes the one its non-nil function names. A rule's scope is written before
+  its metric is chosen, so this is what keeps the file answer and the class answer of one rule from disagreeing
+  and keeps every stage between the scope and the number from branching on the kind of metric.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed: `Metrics` and the eight count verbs
+  are methods or an entry point whose result is chained, which that list cannot guard, and `Measure` returns an
+  error that `errcheck` already guards. This follows #27 and #28.
+- WHY: the prose the change made false was updated in the same diff — `archunit.go`'s package doc (the entry
+  points it lists) and `archunit_test.go`'s layer policy, which now declares `metrics` as a sixth layer, holds
+  it to the kernel-only clause every other module is held to, and forbids it a third-party dependency.
+- WHY: the integration tests are `archunit_test.go`'s five new ones, which measure this repository through the
+  public surface — one per stage of the chain, the eight counts, the class population `for classes matching`
+  selects, and the empty selection that is no error at this door — and they assert subjects and metric names
+  rather than the numbers themselves, because the counts of this library's own source change with every commit.
+  The exact numbers are pinned in the module's own unit tests, against hand-built fixtures. The fifth is
+  `TestTheLocatorReachesTheProjectThroughTheMetricsEntryPoint`, the sibling of the files, layers and graph
+  families' locator tests: the locator is an argument nothing else observes — `String()` does not render it —
+  so a re-export that dropped it would silently measure the repository the test runs in, and only a rule
+  pointed at a directory holding no `go.mod` can see that. It is one entry point rather than a pair, because
+  `metrics` has no short alias. Verified by making `Metrics` return `metricsapi.Metrics(nil)`.
