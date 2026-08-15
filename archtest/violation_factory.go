@@ -44,9 +44,11 @@ import (
 	"strings"
 
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/assertion"
+	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
+	slicesassertion "github.com/LukasNiessen/ArchUnitGo/slices/assertion"
 )
 
 // emptyTestHint is what a report adds to an empty-test violation, and the one message in this layer that
@@ -91,6 +93,7 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //	files/domain/order.go: should not, depend on external modules, path matches "*.*/**"; it depends on gorm.io/gorm
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
 //	layer "db": may not depend on layers "api"; it depends on api through db/conn.go -> api/handler.go
+//	slice "api": should not, contain dependency "db"; it depends on db through api/handler.go -> db/conn.go
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
 // The requirement is always rendered as the rule stated it, never as its negation — `should not, filename
@@ -124,6 +127,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.adherence(reported)
 	case layersassertion.DependencyViolation:
 		return f.layerDependency(reported)
+	case slicesassertion.DependencyViolation:
+		return f.sliceDependency(reported)
 	default:
 		return f.unphrased(violation)
 	}
@@ -247,15 +252,46 @@ func (f ViolationFactory) externalDependency(violation filesassertion.ExternalDe
 // the predicate, so `should not, may not depend on layers` would be the sentence nobody typed. Nothing is
 // inverted, exactly as in every other phrasing in this file — the requirement is what the clause said.
 func (f ViolationFactory) layerDependency(violation layersassertion.DependencyViolation) string {
-	finding := "it depends on " + violation.DependsOn
-	if len(violation.Dependencies) > 0 {
-		rendered := make([]string, 0, len(violation.Dependencies))
-		for _, dependency := range violation.Dependencies {
-			rendered = append(rendered, dependency.Source+" -> "+dependency.Target)
-		}
-		finding += " through " + strings.Join(rendered, ", ")
-	}
+	finding := "it depends on " + violation.DependsOn + through(violation.Dependencies)
 	return f.sentence(`layer "`+violation.Layer+`"`, layerClause(violation.Mood, violation.Named), finding)
+}
+
+// sliceDependency phrases one slice of a project depending on another where the rule forbade it, or not
+// depending on it where the rule required it: the slice, the rule in the words it was written in, and the file
+// dependencies that connect the two.
+//
+// The subject is the depending slice and the requirement names the other one, so the sentence is what the user
+// typed without the end the subject already gave — `slice "api": should not, contain dependency "db"`. It is
+// the shape a relational rule about files reads in, one vocabulary up.
+//
+// The absent direction is real for this family, and it is phrased without branching on the mood: the
+// dependencies are empty exactly when their absence is the offense, which is the reading
+// ViolationFactory.dependency takes for the same reason.
+func (f ViolationFactory) sliceDependency(violation slicesassertion.DependencyViolation) string {
+	requirement := violation.Mood.String() + `, contain dependency "` + violation.DependsOn + `"`
+	finding := "it does not depend on " + violation.DependsOn
+	if len(violation.Dependencies) > 0 {
+		finding = "it depends on " + violation.DependsOn + through(violation.Dependencies)
+	}
+	return f.sentence(`slice "`+violation.Slice+`"`, requirement, finding)
+}
+
+// through renders the concrete file dependencies a violation about two groups of files was broken by —
+// ` through a.go -> b.go, c.go -> d.go` — and the empty string when it carries none.
+//
+// It is the tail of every finding in this file whose subject is a group rather than a file: what is wrong is
+// that the two groups are connected, and where to look is the imports that connect them, in that order. One
+// spelling serves every such family, because a reader who has learned to read one of them has learned them
+// all — which is what this whole package is for.
+func through(dependencies extraction.Graph) string {
+	if len(dependencies) == 0 {
+		return ""
+	}
+	rendered := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		rendered = append(rendered, dependency.Source+" -> "+dependency.Target)
+	}
+	return " through " + strings.Join(rendered, ", ")
 }
 
 // unphrased phrases a violation this layer has not been taught: its kind, and whatever it can say about
