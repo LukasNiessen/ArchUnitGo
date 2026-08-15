@@ -94,6 +94,33 @@ var (
 		WhereLayer("files").MayNotDependOnLayers("kernel")
 )
 
+// The metrics family's three stages, each named by the type the chain actually returns, and the eight count
+// verbs as method values, because which numbers this library can take of a project is part of the surface. There
+// is no mood stage to name yet — the six threshold predicates land with the rules that judge a number — so what
+// is named as a terminal is the resolution door, and a Measurement with it, because a suite that wants the
+// numbers of its project rather than a pass or a fail reads them.
+var (
+	_ archunit.MetricsBuilder = archunit.Metrics(nil).
+		WithName("*.go").
+		InFolder("common/**").
+		InPath("common/**/*.go").
+		ForClassesMatching("*Builder")
+	_ archunit.MetricsCountBuilder = archunit.Metrics(nil).Count()
+	_ archunit.MetricBuilder       = archunit.Metrics(nil).Count().LinesOfCode()
+	_ archunit.Measurement         = archunit.Measurement{Metric: "lines of code", Subject: "archunit.go", Value: 1}
+
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().LinesOfCode
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().Statements
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().Imports
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().Functions
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().Classes
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().Interfaces
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().MethodCount
+	_ func() archunit.MetricBuilder = archunit.Metrics(nil).Count().FieldCount
+
+	_ func(*archunit.CheckOptions) ([]archunit.Measurement, error) = archunit.Metrics(nil).Count().Imports().Measure
+)
+
 // The report family, whose chain is one stage and whose terminals are not Checkables, because a report is not a
 // rule: the builder is named so that a described query can be stored and branched into as many focuses and
 // output formats as a suite wants, and the snapshot's four parts are named so that a caller can write a
@@ -683,6 +710,7 @@ func TestThisRepositoryObeysItsOwnThirdPartyDependencyPolicy(t *testing.T) {
 		// here rather than in a reviewer's reading of go.mod.
 		archunit.ProjectFiles(nil).InFolder("files/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("layers/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("metrics/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("graph/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("archtest").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("common/assertion").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
@@ -825,14 +853,15 @@ func TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 }
 
 // theLayersOfThisRepository is the layout AGENTS.md describes, declared as a named-layer policy declares it:
-// the shared kernel, the three domain modules written so far and the report layer, one folder of this repository
-// each. It is a function rather than five repeated stages because that is the point of the declaration stage
+// the shared kernel, the four domain modules written so far and the report layer, one folder of this repository
+// each. It is a function rather than six repeated stages because that is the point of the declaration stage
 // being a value — a project's layers are typed once and every policy below branches off them.
 func theLayersOfThisRepository() archunit.LayersBuilder {
 	return archunit.ProjectLayers(nil).
 		Layer("kernel").DefinedByFolder("common/**").
 		Layer("files").DefinedByFolder("files/**").
 		Layer("layers").DefinedByFolder("layers/**").
+		Layer("metrics").DefinedByFolder("metrics/**").
 		Layer("graph").DefinedByFolder("graph/**").
 		Layer("report").DefinedByFolder("archtest/**")
 }
@@ -850,7 +879,7 @@ func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
 		t.Fatalf("SelectLayerFiles failed: %v", err)
 	}
 
-	if len(membership) != 5 {
+	if len(membership) != 6 {
 		t.Errorf("%s came to %d layers, want one key per declared layer", policy, len(membership))
 	}
 	for _, wanted := range []struct {
@@ -860,6 +889,7 @@ func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
 		{layer: "kernel", file: "common/matching/filter.go"},
 		{layer: "files", file: "files/fluentapi/project_files.go"},
 		{layer: "layers", file: "layers/fluentapi/project_layers.go"},
+		{layer: "metrics", file: "metrics/fluentapi/metrics.go"},
 		{layer: "graph", file: "graph/fluentapi/project_graph.go"},
 		{layer: "report", file: "archtest/violation_factory.go"},
 	} {
@@ -979,10 +1009,12 @@ func TestThisRepositoryObeysItsOwnLayerPolicy(t *testing.T) {
 		// which is what makes a module removable.
 		WhereLayer("files").MayOnlyDependOnLayers("kernel").
 		WhereLayer("layers").MayOnlyDependOnLayers("kernel").
+		WhereLayer("metrics").MayOnlyDependOnLayers("kernel").
 		WhereLayer("graph").MayOnlyDependOnLayers("kernel").
 		// And the report layer reads what a rule reported: the kernel and the two modules that report violations,
 		// whose pure assertion halves are the only part of them it is allowed to reach — which the file rules above
-		// say the rest of. The graph module reports none, so it is left out and this clause forbids the dependency.
+		// say the rest of. The graph and metrics modules report none, so they are left out and this clause forbids
+		// the dependency.
 		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers").
 		// The same thing the other way round, as the blocklist a team tightening one edge would write.
 		WhereLayer("files").MayNotDependOnLayers("layers")
@@ -1105,6 +1137,170 @@ func TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T)
 	}
 	if len(allowed) != 0 {
 		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", policy, allowed)
+	}
+}
+
+func TestMetricsCountsTheFilesOfThisRepositoryThroughThePublicSurface(t *testing.T) {
+	// The metrics family end to end through the public surface, dogfooding on this library: no locator, so the
+	// project is the one this test is in, the scope is a folder of it, and what comes back is one number per
+	// file of that folder. This is what a user reaches for to see the numbers before writing a rule about them.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InFolder("common/matching").WithName("*.go")
+
+	measurements, err := rule.Count().LinesOfCode().Measure(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	subjects := make([]string, 0, len(measurements))
+	for _, measurement := range measurements {
+		if measurement.Metric != "lines of code" {
+			t.Errorf("%s reports %q, want the metric it was asked for", rule, measurement.Metric)
+		}
+		if measurement.Value <= 0 {
+			t.Errorf("%s came to %s, want a file of this repository to carry code", rule, measurement)
+		}
+		if !strings.HasPrefix(measurement.Subject, "common/matching/") {
+			t.Errorf("%s measures %q, want only files the scope selected", rule, measurement.Subject)
+		}
+		if strings.HasSuffix(measurement.Subject, "_test.go") {
+			t.Errorf("%s measures %q, want the test files left out by default", rule, measurement.Subject)
+		}
+		subjects = append(subjects, measurement.Subject)
+	}
+	if !slices.Contains(subjects, "common/matching/filter.go") {
+		t.Errorf("%s measures %v, want the files of that folder among them", rule, subjects)
+	}
+	// The same knob every other terminal threads through, on the read a metric is taken of: with the test files
+	// in, the siblings are subjects too.
+	withTests, err := rule.Count().LinesOfCode().Measure(&archunit.CheckOptions{IncludeTestFiles: true})
+	if err != nil {
+		t.Fatalf("%s failed with IncludeTestFiles: %v", rule, err)
+	}
+	if len(withTests) <= len(measurements) {
+		t.Errorf("%s measures %d files with IncludeTestFiles and %d without, want the test files among them",
+			rule, len(withTests), len(measurements))
+	}
+}
+
+func TestEveryCountOfThisLibraryReadsItsOwnPopulationThroughThePublicSurface(t *testing.T) {
+	// The eight numbers the family names, each taken of one folder of this repository through the public
+	// surface: the six about a file are reported per file identifier and the two about a class per class
+	// identifier, which is what `for classes matching` selects and what a rule about a class would name.
+	//
+	// What is asserted is the subject and the metric rather than the number, because the counts of this
+	// library's own source change with every commit — the numbers themselves are pinned in the metrics
+	// module's tests, against fixtures a commit cannot move.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	group := archunit.Metrics(nil).InFolder("common/matching").Count()
+	tests := []struct {
+		metric  string
+		rule    archunit.MetricBuilder
+		subject string
+	}{
+		{metric: "lines of code", rule: group.LinesOfCode(), subject: "common/matching/filter.go"},
+		{metric: "statements", rule: group.Statements(), subject: "common/matching/filter.go"},
+		{metric: "imports", rule: group.Imports(), subject: "common/matching/filter.go"},
+		{metric: "functions", rule: group.Functions(), subject: "common/matching/filter.go"},
+		{metric: "classes", rule: group.Classes(), subject: "common/matching/filter.go"},
+		{metric: "interfaces", rule: group.Interfaces(), subject: "common/matching/filter.go"},
+		{metric: "method count", rule: group.MethodCount(), subject: "common/matching.Filter"},
+		{metric: "field count", rule: group.FieldCount(), subject: "common/matching.Filter"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.metric, func(t *testing.T) {
+			measurements, err := test.rule.Measure(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", test.rule, err)
+			}
+
+			subjects := make([]string, 0, len(measurements))
+			for _, measurement := range measurements {
+				if measurement.Metric != test.metric {
+					t.Errorf("%s reports %q, want the metric it was asked for", test.rule, measurement.Metric)
+				}
+				if measurement.Value < 0 {
+					t.Errorf("%s came to %s, want a count", test.rule, measurement)
+				}
+				subjects = append(subjects, measurement.Subject)
+			}
+			if !slices.Contains(subjects, test.subject) {
+				t.Errorf("%s measures %v, want %q among them", test.rule, subjects, test.subject)
+			}
+		})
+	}
+}
+
+func TestAMetricAboutAClassIsMeasuredOverTheClassesTheScopeNamesThroughThePublicSurface(t *testing.T) {
+	// `for classes matching` dogfooded on this library, which is full of builders: the pattern is matched
+	// against the declared name, so it says nothing about the package, while every subject it selects still
+	// carries the folder its type was declared in — and a class of this library has methods.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InFolder("metrics/fluentapi").ForClassesMatching("Metrics*Builder").Count().MethodCount()
+
+	measurements, err := rule.Measure(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	subjects := make([]string, 0, len(measurements))
+	for _, measurement := range measurements {
+		if measurement.Value <= 0 {
+			t.Errorf("%s came to %s, want a builder of this library to have methods", rule, measurement)
+		}
+		subjects = append(subjects, measurement.Subject)
+	}
+	want := []string{"metrics/fluentapi.MetricsBuilder", "metrics/fluentapi.MetricsCountBuilder"}
+	for _, class := range want {
+		if !slices.Contains(subjects, class) {
+			t.Errorf("%s measures %v, want %q among them", rule, subjects, class)
+		}
+	}
+	if slices.Contains(subjects, "metrics/fluentapi.MetricBuilder") {
+		t.Errorf("%s measures %v, want a class the pattern does not describe left out", rule, subjects)
+	}
+}
+
+func TestMeasuringNothingIsNoErrorThroughThePublicSurface(t *testing.T) {
+	// A scope no file of the project is in: measuring nothing is an ordinary answer at this door, because
+	// whether that is a failure is a question only a rule that judges a number can ask — and the six threshold
+	// predicates are where the empty-test guard will be wired in.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InFolder("no/such/folder/**").Count().LinesOfCode()
+
+	measurements, err := rule.Measure(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(measurements) != 0 {
+		t.Errorf("%s measures %v, want nothing", rule, measurements)
+	}
+	if selectors := rule.Selectors(); len(selectors) != 1 {
+		t.Errorf("%s reports %v as its selectors, want the verb that selected nothing", rule, selectors)
+	}
+}
+
+func TestTheLocatorReachesTheProjectThroughTheMetricsEntryPoint(t *testing.T) {
+	// The wrapper threads the locator through to the extraction, so a rule pointed at a directory that holds
+	// no Go project says so — rather than quietly measuring the repository this test runs in, which is what
+	// dropping the argument would look like, and which no comparison of two nil-located rules would notice.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(&archunit.ProjectLocator{Directory: t.TempDir()}).Count().LinesOfCode()
+
+	measurements, err := rule.Measure(nil)
+
+	if err == nil {
+		t.Errorf("`metrics` measured %v against a directory that is no project, want an error naming it", measurements)
+	}
+	if len(measurements) != 0 {
+		t.Errorf("`metrics` measures %v, want nothing when the project cannot be located", measurements)
 	}
 }
 

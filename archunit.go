@@ -11,9 +11,9 @@
 // layout — which is also why nothing inside the library is allowed to depend on it.
 //
 // A rule is a value, not an action: building one does no work, and only a terminal reads the project.
-// The chain starts at an entry point — ProjectFiles, ProjectLayers and ProjectGraph today, one per family
-// as they land — and every entry point takes an optional *ProjectLocator, where nil means the project the
-// test itself is in.
+// The chain starts at an entry point — ProjectFiles, ProjectLayers, Metrics and ProjectGraph today, one per
+// family as they land — and every entry point takes an optional *ProjectLocator, where nil means the project
+// the test itself is in.
 //
 // Not every chain describes a rule. ProjectGraph describes a report, so it has no mood, no predicate and no
 // violations: its terminals hand back the diagram — as data, as a document in one of six formats, or as a file
@@ -34,6 +34,8 @@ import (
 	graphprojection "github.com/LukasNiessen/ArchUnitGo/graph/projection"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 	layersapi "github.com/LukasNiessen/ArchUnitGo/layers/fluentapi"
+	metricscalculation "github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
+	metricsapi "github.com/LukasNiessen/ArchUnitGo/metrics/fluentapi"
 )
 
 // ProjectLocator says where the project under analysis is. A nil *ProjectLocator means auto-detect,
@@ -209,6 +211,25 @@ type LayerPolicyBuilder = layersapi.LayerPolicyBuilder
 // a whole N-layer policy can be stored, passed to a helper or kept in a list of the suite's rules as one rule.
 type LayersPolicyCondition = layersapi.LayersPolicyCondition
 
+// MetricsBuilder is the scope stage of a rule about the numbers a project's code adds up to, which Metrics
+// returns and every scope verb — WithName, InFolder, InPath, ForClassesMatching — hands back a new one of. It
+// is named here so that one scope can be stored and branched into a rule per metric.
+type MetricsBuilder = metricsapi.MetricsBuilder
+
+// MetricsCountBuilder is the stage between a metrics rule's scope and its number, which Count returns:
+// `metrics, in folder "internal/**", count`, waiting for one of the eight counting verbs — LinesOfCode,
+// Statements, Imports, Functions, Classes, Interfaces, MethodCount, FieldCount.
+type MetricsCountBuilder = metricsapi.MetricsCountBuilder
+
+// MetricBuilder is a metrics rule whose metric has been chosen — `metrics, ..., count, lines of code` — which
+// each counting verb returns. Measure is what it hands back the numbers themselves with, one per file for a
+// metric about a file and one per class for a metric about a class.
+type MetricBuilder = metricsapi.MetricBuilder
+
+// Measurement is one number a metric read off one subject: what was measured, the file or class it was
+// measured about, and the answer. It is what MetricBuilder.Measure returns, one per subject.
+type Measurement = metricscalculation.Measurement
+
 // GraphBuilder is a dependency-graph report as far as it has been described — `project graph`, plus every
 // modifier chained onto it — which ProjectGraph returns and every modifier hands back a new one of. It is
 // named here because a query is the expensive half of a report to write: one described report can be stored
@@ -330,6 +351,25 @@ func ProjectLayers(locator *ProjectLocator) LayersBuilder {
 // Layers is ProjectLayers under the shorter name the family also gives it. The two are one entry point.
 func Layers(locator *ProjectLocator) LayersBuilder {
 	return layersapi.Layers(locator)
+}
+
+// Metrics is the entry point of every rule about the numbers a project's code adds up to: `metrics`. The
+// locator is optional and nil means auto-detect.
+//
+// A rule says where it looks, which number it is about, and — with the threshold predicates that judge one —
+// what that number has to be:
+//
+//	measurements, err := archunit.Metrics(nil).
+//		InFolder("internal/api/**").
+//		Count().
+//		LinesOfCode().
+//		Measure(nil)
+//
+// The four scope verbs are chainable and combined with AND, three of them describing files and
+// ForClassesMatching describing declared types. The family's own name for this entry point is `metrics` alone,
+// so unlike the others it has no second spelling.
+func Metrics(locator *ProjectLocator) MetricsBuilder {
+	return metricsapi.Metrics(locator)
 }
 
 // ProjectGraph is the entry point of every dependency-graph report: `project graph`. The locator is optional
