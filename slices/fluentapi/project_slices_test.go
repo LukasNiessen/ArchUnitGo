@@ -236,7 +236,7 @@ func writeSlicedFixtureProject(t *testing.T) string {
 	t.Helper()
 
 	root := t.TempDir()
-	files := map[string]string{
+	writeFixtureFiles(t, root, map[string]string{
 		"go.mod":  "module example.com/sliced\n\ngo 1.26\n",
 		"main.go": "package main\n\nimport \"example.com/sliced/internal/api\"\n\nfunc main() { api.Handle() }\n",
 		"internal/api/handler.go": "package api\n\nimport (\n\t\"example.com/sliced/internal/db\"\n\t" +
@@ -246,7 +246,16 @@ func writeSlicedFixtureProject(t *testing.T) string {
 		"internal/db/conn.go":      "package db\n\nfunc Save(any) {}\n",
 		"internal/db/conn_test.go": "package db_test\n\nimport (\n\t\"testing\"\n\n\t" +
 			"\"example.com/sliced/internal/api\"\n)\n\nfunc TestHandle(*testing.T) { api.Handle() }\n",
-	}
+	})
+	return root
+}
+
+// writeFixtureFiles writes files given by their project-relative slash-separated names into a fixture project,
+// creating the folders they are in. It is how a test that needs a slice the shared fixture has not got adds one,
+// so that a folder written by hand is written the same way the fixture's own are.
+func writeFixtureFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+
 	for name, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -256,5 +265,4 @@ func writeSlicedFixtureProject(t *testing.T) string {
 			t.Fatalf("writing %q failed: %v", name, err)
 		}
 	}
-	return root
 }

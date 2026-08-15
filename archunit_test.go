@@ -107,6 +107,17 @@ var (
 		DefinedBy("(*)/**").Should().ContainDependency("files", "common")
 	_ archunit.SlicesDependencyCondition = archunit.ProjectSlices(nil).
 		DefinedBy("(*)/**").ShouldNot().ContainDependency("common", "files")
+	// The diagram predicate is on the positive mood alone, in both its forms, and its two modifiers are
+	// chainable in either order — so what is named here is the type the modified chain still returns.
+	_ archunit.Checkable = archunit.ProjectSlices(nil).
+		DefinedBy("(*)/**").Should().AdhereToDiagram("@startuml\ncomponent [common]\n@enduml")
+	_ archunit.SlicesDiagramCondition = archunit.ProjectSlices(nil).
+		DefinedBy("(*)/**").Should().AdhereToDiagramInFile("docs/architecture.puml").
+		IgnoringOrphanSlices().IgnoringExternalSlices()
+	// And the two report terminals a slicing has before any mood, as the method values they are: one hands the
+	// diagram back as a document, the other writes it where a reader will find it.
+	_ func(*archunit.CheckOptions) (string, error) = archunit.ProjectSlices(nil).DefinedBy("(*)/**").ToPlantUML
+	_ func(string, *archunit.CheckOptions) error   = archunit.ProjectSlices(nil).DefinedBy("(*)/**").ExportAsPlantUML
 )
 
 // And the four slicing projections, for a caller who wants the mapper rather than a rule: three of them cut a
@@ -1322,6 +1333,218 @@ func TestASliceNobodyIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T)
 	}
 	if len(allowed) != 0 {
 		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
+	}
+}
+
+// thisRepositorysDiagram is the architecture of ArchUnitGo as the component diagram of its own modules, sliced
+// by top-level folder: the shared kernel that depends on nothing of the library's, the five domain modules that
+// depend on it and not on each other, the testing layer that phrases three of them, and the public surface that
+// re-exports the lot. It is AGENTS.md's four dependency rules drawn rather than typed.
+//
+// `archunit.go` is a component because `(*)/**` reads a file at the root of the project as the whole of its own
+// name — a slicing describes what it describes, and there is no list of slices to leave it out of.
+const thisRepositorysDiagram = `
+' the modules of ArchUnitGo
+@startuml
+component [common]
+component [files]
+component [layers]
+component [slices]
+component [metrics]
+component [graph]
+component [archtest]
+component [archunit.go]
+
+' every domain module is written against the kernel, and against no sibling
+[files] --> [common]
+[layers] --> [common]
+[slices] --> [common]
+[metrics] --> [common]
+[graph] --> [common]
+
+' the testing layer phrases the violations of the three families that have any
+[archtest] --> [common]
+[archtest] --> [files]
+[archtest] --> [layers]
+[archtest] --> [slices]
+
+' and the public surface re-exports everything, which is all it does
+[archunit.go] --> [common]
+[archunit.go] --> [files]
+[archunit.go] --> [layers]
+[archunit.go] --> [slices]
+[archunit.go] --> [metrics]
+[archunit.go] --> [graph]
+[archunit.go] --> [archtest]
+@enduml
+`
+
+func TestThisRepositoryAdheresToTheComponentDiagramOfItsOwnModules(t *testing.T) {
+	// The whole architecture as one rule, dogfooding on this library: eight components, every arrow a
+	// permission, and nothing about this repository outside the drawing. It is the rule AGENTS.md's four
+	// dependency rules are worth writing as — a sibling import nobody meant to add is an arrow the drawing does
+	// not have, and a module added without being drawn is a component nobody declared.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectSlices(nil).DefinedBy("(*)/**").Should().AdhereToDiagram(thisRepositorysDiagram)
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, archunit.NewViolationFactory(nil).Message(violation))
+	}
+	// The two sizes are how the rule renders, because a whole document inside a one-line sentence would bury it.
+	if want := "adhere to diagram (8 components, 16 dependencies)"; !strings.Contains(rule.String(), want) {
+		t.Errorf("the rule reads %q, want %q in it", rule, want)
+	}
+}
+
+func TestThisRepositoryDrawsItselfAsTheDiagramItIsThenJudgedAgainst(t *testing.T) {
+	// The reverse direction and the round trip through the public surface: this library draws its own modules,
+	// writes the drawing where a reader would commit it, and the file is the string form byte for byte — which
+	// is what a user relies on when a diagram is committed beside the code. Then the rule reads that very file
+	// back and holds, which is how a codebase nobody has drawn yet starts being checked against itself.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	slicing := archunit.ProjectSlices(nil).DefinedBy("(*)/**")
+	path := filepath.Join(t.TempDir(), "docs", "architecture.puml")
+
+	document, err := slicing.ToPlantUML(nil)
+	if err != nil {
+		t.Fatalf("`to plantuml` failed: %v", err)
+	}
+	if err := slicing.ExportAsPlantUML(path, nil); err != nil {
+		t.Fatalf("`export as plantuml` failed: %v", err)
+	}
+
+	exported, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the exported diagram failed: %v", err)
+	}
+	if string(exported) != document {
+		t.Errorf("the exported diagram holds\n%s\nwant the document its string form renders\n%s", exported, document)
+	}
+	// Every module of this library is drawn, and the kernel is drawn as depending on none of them.
+	for _, want := range []string{"component [common]", "component [archtest]", "[files] --> [common]"} {
+		if !strings.Contains(document, want) {
+			t.Errorf("the drawn diagram does not hold %q:\n%s", want, document)
+		}
+	}
+	if strings.Contains(document, "[common] --> ") {
+		t.Errorf("the drawn diagram has the kernel depending on a module:\n%s", document)
+	}
+
+	rule := slicing.Should().AdhereToDiagramInFile(path)
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, archunit.NewViolationFactory(nil).Message(violation))
+	}
+}
+
+func TestADiagramThisRepositoryBreaksReportsEveryDisagreementAtOnce(t *testing.T) {
+	// What a diagram is worth: one rule, and it reports every place the drawing and the code disagree in one
+	// run. This drawing is the one above with three deliberate mistakes — an arrow nobody drew, a module nobody
+	// declared, and a component nobody wrote — and the three findings come back in the order a reader works in.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	stale := `@startuml
+component [common]
+component [files]
+component [layers]
+component [slices]
+component [graph]
+component [archtest]
+component [archunit.go]
+component [transport]
+[files] --> [common]
+[layers] --> [common]
+[slices] --> [common]
+[graph] --> [common]
+[archtest] --> [common]
+[archtest] --> [layers]
+[archtest] --> [slices]
+[archunit.go] --> [common]
+[archunit.go] --> [files]
+[archunit.go] --> [layers]
+[archunit.go] --> [slices]
+[archunit.go] --> [graph]
+[archunit.go] --> [archtest]
+@enduml
+`
+	rule := archunit.ProjectSlices(nil).DefinedBy("(*)/**").Should().AdhereToDiagram(stale)
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 3 {
+		t.Fatalf("%s reports %v, want the three disagreements it was written with", rule, violations)
+	}
+	if kind := violations[0].Kind(); kind != archunit.KindSliceDiagram {
+		t.Errorf("the violation is of kind %q, want %q", kind, archunit.KindSliceDiagram)
+	}
+	wanted := []struct {
+		finding archunit.SliceDiagramFinding
+		slice   string
+	}{
+		// The arrow the drawing is missing: the testing layer phrases the violations of the files module, and
+		// this drawing forgot to say so. Both ends are declared, which is what makes it this finding.
+		{finding: archunit.FindingUndrawnDependency, slice: "archtest"},
+		// The module the drawing does not declare. Every arrow it is an end of is left out, because what a
+		// reader has to do first is draw the component.
+		{finding: archunit.FindingUndeclaredSlice, slice: "metrics"},
+		// And the component this project has no slice for, which is how a drawing rots: a folder that was
+		// renamed or deleted after it was made.
+		{finding: archunit.FindingAbsentComponent, slice: "transport"},
+	}
+	for index, want := range wanted {
+		reported, ok := violations[index].(archunit.SliceDiagramViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a SliceDiagramViolation", rule, violations[index])
+		}
+		if reported.Finding != want.finding || reported.Slice != want.slice {
+			t.Errorf("the violation is %q %s, want %q %s", reported.Slice, reported.Finding, want.slice, want.finding)
+		}
+	}
+
+	// The undrawn arrow carries the imports that made it, and the report a failing test would print names them.
+	undrawn, ok := violations[0].(archunit.SliceDiagramViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want a SliceDiagramViolation", rule, violations[0])
+	}
+	if undrawn.DependsOn != "files" || len(undrawn.Dependencies) == 0 {
+		t.Errorf("the undrawn dependency is on %q through %v, want files and the imports behind it",
+			undrawn.DependsOn, undrawn.Dependencies)
+	}
+	message := archunit.NewViolationFactory(nil).Message(undrawn)
+	if !strings.HasPrefix(message, `slice "archtest": should, adhere to diagram; `+
+		"it depends on files, which the diagram does not draw through archtest/") {
+		t.Errorf("the violation reads %q, want the slices first and the files after them", message)
+	}
+
+	// And the modifiers, on the same drawing: one of them is about the drawing's own extra components, the
+	// other about the project's isolated modules — of which this repository has none, so it changes nothing
+	// here and must not be the way the undeclared module went quiet.
+	external, err := rule.IgnoringExternalSlices().Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(external) != 2 {
+		t.Errorf("%s reports %v, want the component this project has no slice for left out", rule, external)
+	}
+	orphans, err := rule.IgnoringOrphanSlices().Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(orphans) != 3 {
+		t.Errorf("%s reports %v, want all three: no module of this repository is isolated", rule, orphans)
 	}
 }
 

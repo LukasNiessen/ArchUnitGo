@@ -1845,3 +1845,74 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   repair a check in `/harness/gate.sh`, and the one in-tree lever — getting the output back under 4096 bytes so
   there is a single unpipeable write — means fewer or shorter test files, which is gaming the gate, not fixing
   it. Every other step of the gate is green on this tree, re-run in full this round.
+
+## Issue #31 — Slices API: PlantUML component diagrams
+
+- WHY: two new packages in the slices module, `slices/extraction` and `slices/rendering`, rather than one file
+  each somewhere existing. AGENTS.md's per-module shape lists `extraction/` as the optional home of
+  module-specific gathering, and reading a diagram off a disk is exactly that; `graph/rendering` is the
+  precedent for a module owning a renderer, and `.golangci.yml`'s `pure-packages` glob (`**/rendering/**`)
+  already holds the new one to the same purity as `assertion/`. `slices/assertion` importing
+  `slices/extraction` mirrors its existing dependency on `common/extraction`: the assertion is handed a
+  `Diagram` value and still does no I/O itself.
+- WHY: the diagram parser is hand-written line scanning and not a regex. `.golangci.yml`'s depguard denies
+  `regexp` in `**/slices/**` non-test files, so the rule that keeps pattern compilation in `common/matching`
+  is what decides the parser's shape. Arrows are found from the `>` backwards over the run of `-`, which is
+  what lets a component be called `my-api`.
+- WHY: a line the dialect was not taught is refused with its number and its text (`ErrUnreadableDiagramLine`)
+  rather than skipped. A skipped line is a dependency nobody checks, which is the one failure mode a rule
+  about a whole architecture must not have. `title`, `skinparam`, `!include`, aliases and stereotypes are
+  therefore deliberate refusals, and a diagram that has them says so in a way the user can fix — the escape
+  hatch is PlantUML's own `'` comment, which the parser does read.
+- WHY: `adhere to diagram` is offered on `should` alone, so `SlicesShouldNotBuilder` does not have it and
+  `GatherDiagramViolations` takes no `assertion.Mood`. A diagram is a closed statement about a whole project;
+  its negation would ask that a project contradict its own documentation somewhere. `have no cycles` is the
+  precedent, and `assertion.Mood.Holds` stays the library's single inversion point because nothing here
+  inverts anything.
+- WHY: `ignoring orphan slices` and `ignoring external slices` each switch off one finding about a *name* and
+  neither can suppress an undrawn dependency — the finding a diagram is drawn for. A slice the drawing does
+  not declare is reported once, about the slice, and the arrows it is an end of are left out: the drawing is
+  missing a component, not a hundred arrows.
+- WHY: `to plantuml` and `export as plantuml` sit on `SlicesBuilder`, before any mood, as the graph module's
+  output terminals sit on `GraphBuilder`. A drawing states what a project is, so there is no rule for it to be
+  the terminal of. They refuse to draw a project with no slice in it (`ErrNothingToDraw`) instead of handing
+  back an empty frame, honouring `AllowEmptyTests` as the opt-out — `graph`'s `ErrEmptySnapshot` is the
+  precedent for a report terminal reusing the guard's own knob, because a report has no violation list to put
+  a finding in.
+- WHY: `slices/rendering` has its own `pluralize`, as `graph/projection` and `archtest` do. Two-line plural
+  helpers in the module that needs them is this repository's existing pattern, and a shared one would be a new
+  kernel API for `1 component`.
+- WHY: the sentinels of the new predicate and the new terminals — `ErrMissingDiagramPath`, `ErrNothingToDraw`,
+  `ErrMissingExportPath` — are declared beside the calls that report them rather than joining
+  `project_slices.go`'s block of four, and they are not re-exported from `archunit.go`. `graph`'s
+  `ErrEmptySnapshot` and the slices module's own `ErrNoSlicing` are not on the public surface either; the
+  surface names types and kinds, and adding these four would be a policy change rather than this issue.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AdhereToDiagram`,
+  `IgnoringOrphanSlices`, `ToPlantUML` and the rest are methods, which the analyzer cannot guard
+  (`sig.Recv() != nil`), and the two that return an error are guarded by `errcheck` already. This follows #27,
+  #28, #30 and #32.
+- WHY: the prose the change made false was updated in the same diff — `archunit.go`'s package doc (which said
+  only `ProjectGraph` describes a report) and its `ProjectSlices` doc, `slices/fluentapi`'s package doc (the
+  chain's predicates and terminals) and its "four ways a rule can be typed wrongly" block, both `Mood()` docs
+  and the `slicesRule` doc in `slices/fluentapi/mood.go` (which said the predicate always hands the mood to
+  `GatherDependencyViolations`), `slices/assertion`'s package doc, and `archtest.ViolationFactory.Message`'s
+  example list.
+- WHY: the integration tests are `archunit_test.go`'s three new ones, which judge this repository against the
+  component diagram of its own modules — AGENTS.md's four dependency rules drawn rather than typed — then draw
+  that diagram out of the project, byte-compare the exported file against the string form, and read the
+  exported file back as the rule's own input; the third breaks the drawing in three deliberate ways and pins
+  that all three findings, their order, the message the report prints and both modifiers come back through the
+  public surface. `slices/fluentapi/to_plantuml_test.go` exports with a non-nil
+  `&CheckOptions{IncludeTestFiles: true}` and asserts the arrow only the fixture's `_test.go` file makes
+  (`[db] --> [api]`) is in the written file and absent by default, so an export that dropped the options bag
+  fails.
+- WHY: the incoming-only orphan case the test critic asked for was *added beside* the outgoing-only one rather
+  than replacing it, at both levels — the unit test keeps `ui` as the source of an arrow and gains `mail` as
+  the target of one, and the fluent test keeps `tools` as the isolated folder and gains `mail`, a folder that
+  imports nothing and that a new file of the api slice imports. Converting the existing case as written would
+  have covered `orphaned`'s `TargetLabel` half by uncovering its `SourceLabel` half: verified by deleting each
+  of the two comparisons in turn, and both mutations now fail both tests.
+- WHY: `writeFixtureFiles` was lifted out of `writeSlicedFixtureProject` unchanged, which is the only edit to
+  code that was already passing. The new slices are written into one test's own copy of the fixture project, not
+  into the shared fixture every other test in the package is judged against, and writing them by hand there
+  would have been the same loop a second time.

@@ -1,26 +1,39 @@
 // Package assertion is the slices module's half of the ASSERT stage: it judges the projected
-// dependencies between a project's slices and reports one violation per dependency a rule does not allow
-// — or per dependency it required and did not find.
+// dependencies between a project's slices, against a rule about one pair of them or against a whole
+// component diagram somebody drew, and reports one violation per disagreement.
 //
-// One function judges, GatherDependencyViolations, and one type is reported, DependencyViolation. A
-// violation is data: it says which slice depended on which, in which mood the rule was written, and it
-// carries the concrete file dependencies it was broken by, but not a word about them. Message
-// construction belongs to the testing layer, where one place controls phrasing, numbering and color.
+// Two functions judge, and each of them reports its own type:
+//
+//   - GatherDependencyViolations, for `contain dependency(from, to)` in either mood, reporting
+//     DependencyViolation — at most one, because the rule asks one question.
+//   - GatherDiagramViolations, for `adhere to diagram`, reporting DiagramViolation — one per
+//     disagreement between the drawing and the code, in one of three kinds of disagreement.
+//
+// A violation is data either way: which slice depended on which, in which mood the rule was written or
+// which way the drawing and the code failed to match, and the concrete file dependencies it was found
+// through — but not a word about them. Message construction belongs to the testing layer, where one place
+// controls phrasing, numbering and color.
 //
 // The mood is what makes `should contain dependency` and `should not contain dependency` one piece of
 // logic. The predicate is the same question either way — does this projection have a dependency from this
 // slice to that one — and assertion.Mood.Holds is the single comparison that inverts it, so the forbidden
-// dependency and the required one are one code path rather than two.
+// dependency and the required one are one code path rather than two. A diagram takes no mood at all: it is
+// a closed statement about a whole project, so the negated reading would be a rule that a project
+// contradict its own documentation somewhere.
 //
 // Slices differ from layers in what a rule is written over, and it shows here: a layer policy is a list of
-// clauses judged against a projection whose labels were declared, while a slicing rule is one question
-// about two slice names that were cut out of the identifiers by the pattern. There is no Clause type,
-// because there is no list — `contain dependency(from, to)` is the whole predicate.
+// clauses judged against a projection whose labels were declared, while a slicing rule is about names that
+// were cut out of the identifiers by the pattern. There is no Clause type, and the diagram is not one
+// either — `contain dependency(from, to)` is the whole of one predicate, and the whole of the other is a
+// drawing read into an extraction.Diagram, which is a list of the pairs somebody allowed rather than a
+// list of clauses to evaluate in order.
 //
 // The package is pure, like every assertion package in the library: no filesystem, no clock, no globals,
 // and nothing in it knows Go. It takes the projected structure common/projection produced and hands back
 // a []assertion.Violation, so what a rule judges can be tested against a hand-built projection before any
-// project is extracted at all.
+// project is extracted at all. The diagram it judges against is a value too — the module's extraction
+// package owns the one call that reads it off a disk, exactly as common/extraction owns the one that reads
+// the graph — so a diagram rule is as testable from a hand-built pair of values as a dependency rule is.
 package assertion
 
 import (
