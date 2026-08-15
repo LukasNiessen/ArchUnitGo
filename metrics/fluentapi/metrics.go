@@ -24,6 +24,12 @@
 // because it is the one verb of a group: the number is the user's own function of one class, so it is the
 // family's escape hatch and the reason the two groups above do not have to be exhaustive.
 //
+// A group also closes on its own, without a metric verb, in the one case where naming a single number would
+// be answering a question the user has not asked: `export as html` writes every metric of the group over the
+// one scope to a file, as one self-contained page. That terminal is a report rather than a rule — no mood, no
+// predicate, no violations — and MetricsExporter is the same report for numbers a caller has already measured
+// and grouped their own way.
+//
 // The six threshold predicates judge a metric's numbers against what they have to be, and they are the mood
 // and the predicate stages of this family in one verb each. Five of them hold every number to a figure the
 // user typed — `should be below`, `should be above`, `should be`, `should be below or equal`, `should be above
@@ -37,7 +43,7 @@
 // in zone of uselessness` are predicates about the plane its first two metrics span rather than comparisons
 // against a figure, so they spell the mood themselves and hand back a MetricsZoneCondition. Those two, the
 // threshold condition and the satisfaction condition are the family's checkable rules, as opposed to its
-// measurements.
+// measurements and its reports.
 package fluentapi
 
 import (

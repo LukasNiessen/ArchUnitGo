@@ -2051,3 +2051,80 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   a real Go file can satisfy — a file has at least one line and not a billion — rather than against numbers a
   commit can move; the arithmetic is pinned in `metrics/calculation/threshold_test.go` against hand-built
   figures.
+
+## Issue #37 — Metrics: HTML report export
+
+- WHY: there is no `export as HTML` on an LCOM builder, because this port has no LCOM fluent group to put one
+  on. The LCOM family is eight plain functions in `metrics/calculation/lcom_metrics.go` — `LCOM96a`, `LCOM96b`,
+  `LCOM1`…`LCOM5` and `LCOMStar` — and that package's own doc says they are functions rather than `Metric` values
+  because no fluent verb names them yet (issue #34's decision). The terminal therefore landed on the two
+  groups that exist, `MetricsCountBuilder` and `MetricsDistanceBuilder`; the day a `cohesion` group lands, its
+  `ExportAsHTML` is three lines over the same `MetricsBuilder.exportedAsHTML` and its `reported()` list.
+- WHY: the page is rendered in a new pure package, `metrics/rendering`, and written to disk from
+  `metrics/fluentapi`, mirroring `graph/rendering` plus `graph/fluentapi/export_as_format.go`. `.golangci.yml`
+  already denies `os`, `io/fs`, `path/filepath`, `net` and `os/exec` to `**/rendering/**`, so the split is
+  enforced rather than remembered. `AGENTS.md`'s per-module shape does not list a `rendering/` package, which
+  is the deviation — `graph/rendering` set that precedent and `.golangci.yml`'s own comment beside the
+  `pure-packages` rule already records the reason ("rendering is here for the same reason though AGENTS.md does
+  not name it"): a renderer is a pure function of a projected value, so it is pure for the reason `projection`
+  is.
+- WHY: the timestamp is a `time.Time` field on `rendering.ReportOptions`, zero meaning no stamp, and never a
+  clock this library reads. `forbidigo` bans `time.Now` and its message names this issue as the reason the ban
+  is worth having: a page that stamped itself renders different bytes on every run, so a report committed
+  beside the code shows up in every diff and no test can assert on a page at all.
+- WHY: the caller's own CSS is appended *after* the library's stylesheet and written unescaped. After, because
+  CSS resolves a tie in favor of the later rule, so a caller who restyles the heading wins it and keeps
+  everything they did not name; unescaped, because a stylesheet that has been escaped is not one any more. It
+  is the one string on the page that is not escaped, and it is the caller's own text rather than anything read
+  out of the project — every heading, subject, metric name and title goes through `htmlEscaped`.
+- WHY: the group terminals take the check options at the terminal — `ExportAsHTML(path string, options
+  *kernel.CheckOptions)` — rather than through a `with check options` modifier as `graph` does. This family
+  passes the bag at `Measure` and at `Check`, so a third convention inside one module would be the surprise.
+  The report's own knobs (title, timestamp, CSS) are not on that bag: they say what the *page* is, not how the
+  rule is run, which is what `MetricsExporter` and `MetricsReportOptions` are for.
+- WHY: a group's report is titled with the rule's own sentence, `b.String()` — `metrics, path without filename
+  matches "internal/**", count` — so a page found in a build's output says which scope produced it. A caller
+  with something better to call it goes through `NewMetricsExporter`, which is also the only way to a stamp
+  and a stylesheet. That keeps the fluent terminal a one-argument-plus-options call instead of growing a
+  `titled`/`stamped`/`styled` modifier trio the grammar does not have.
+- WHY: the group and not the metric is what closes with a report. `Count().ExportAsHTML(...)` measures all
+  eight counts over one resolved scope and `Distance().ExportAsHTML(...)` all five, because which of the eight
+  a page should show is not a question somebody has already answered when they ask for the page — and one
+  resolution for the whole page means a report cannot hold two numbers taken of two different readings of the
+  same code. The metrics of a group are produced by the group's own verbs (`reported()`), so no metric is
+  enumerated twice, and `export_as_html_test.go` enumerates the verbs by reflection so a metric added to a
+  group and left out of its report is a failing test.
+- WHY: an empty report is `ErrEmptyReport` from the fluent terminals and *not* from `MetricsExporter`. The
+  terminals resolved a scope, so they can tell a stale glob from a project with nothing to report, which is
+  the empty-test guard's whole question; the exporter was handed the caller's own data and cannot. It is an
+  error rather than a violation for the reason `graph`'s `ErrEmptySnapshot` is — a terminal that writes an
+  artifact has no violation list to put one in — and `AllowEmptyTests` opts out of it, the same knob that opts
+  a rule out of the same guard. A group with no measurement is still rendered as a heading saying so, so a
+  caller who opted out gets a page that states the emptiness instead of a blank one.
+- WHY: `metrics/rendering` has its own `pluralize`, `number` and `htmlEscaped` rather than sharing
+  `graph/rendering`'s. They are unexported there, and dependency rule 2 forbids a domain module importing
+  another — the shared home would be `common/`, and three one-line string helpers do not earn a kernel package
+  that every future renderer would then have to agree with.
+- WHY: file stems follow the siblings — `metrics/rendering/render_html.go` beside `graph/rendering`'s, with
+  `report_data.go` and `report_options.go` for the two values it renders from, and
+  `metrics/fluentapi/metrics_exporter.go` and `export_as_html.go` for the terminals — each with its test file
+  beside it. The exporter is spelled `MetricsExporter` because the issue names it, and its options bag is
+  `ReportOptions` rather than `MetricsExporterOptions`: it describes the report, which is the thing, and the
+  public surface prefixes it as `MetricsReportOptions` the way it prefixes every other metrics alias.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `ExportAsHTML` returns an error
+  `errcheck` already guards, and the fluent stages are methods, which that list cannot guard. This follows
+  #27, #28, #32, #33, #34, #35 and #36.
+- WHY: the prose the change made false was updated in the same diff — `metrics/fluentapi`'s package doc (which
+  said a group is closed by one verb of the group and named the family's checkable rules as its only terminals
+  beside the measurements), `MetricsCountBuilder`'s and `MetricsDistanceBuilder`'s docs (which said every verb
+  hands back a `MetricBuilder` and listed what each group closes with), `archunit.go`'s package doc (which
+  said `ProjectGraph` is the one chain that describes a report), its `MetricsCountBuilder`,
+  `MetricsDistanceBuilder` and `Metrics` docs, and the comment above `archunit_test.go`'s metrics compile-time
+  block, which enumerated the family's stages and terminals.
+- WHY: the integration test is `archunit_test.go`'s
+  `TestTheMetricsReportOfThisRepositoryIsExportedThroughThePublicSurface`, dogfooding on this library: both
+  groups export a page of this repository's own `metrics/rendering` folder through the public surface, and the
+  exporter writes a third page from measurements read with `Measure` — with a title, a fixed timestamp and a
+  stylesheet of its own, and asserted to fetch nothing. It asserts on the headings, the subjects and the page's
+  self-containment rather than on any count a commit can move; the arithmetic of a page is pinned in
+  `metrics/rendering/render_html_test.go` against hand-built measurements.

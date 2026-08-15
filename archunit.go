@@ -18,7 +18,9 @@
 // Not every chain describes a rule. ProjectGraph describes a report, so it has no mood, no predicate and no
 // violations: its terminals hand back the diagram — as data, as a document in one of six formats, or as a file
 // written to disk — rather than a list of what the code disagreed with. Everything else about it is the same —
-// a value, chainable modifiers, the same optional locator.
+// a value, chainable modifiers, the same optional locator. A metrics chain can end in a report too: Count and
+// Distance each close with ExportAsHTML, and NewMetricsExporter writes the same page from numbers a caller has
+// already measured.
 package archunit
 
 import (
@@ -38,6 +40,7 @@ import (
 	metricscalculation "github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
 	metricsextraction "github.com/LukasNiessen/ArchUnitGo/metrics/extraction"
 	metricsapi "github.com/LukasNiessen/ArchUnitGo/metrics/fluentapi"
+	metricsrendering "github.com/LukasNiessen/ArchUnitGo/metrics/rendering"
 )
 
 // ProjectLocator says where the project under analysis is. A nil *ProjectLocator means auto-detect,
@@ -247,13 +250,15 @@ type MetricsBuilder = metricsapi.MetricsBuilder
 
 // MetricsCountBuilder is the stage between a metrics rule's scope and its number, which Count returns:
 // `metrics, in folder "internal/**", count`, waiting for one of the eight counting verbs — LinesOfCode,
-// Statements, Imports, Functions, Classes, Interfaces, MethodCount, FieldCount.
+// Statements, Imports, Functions, Classes, Interfaces, MethodCount, FieldCount. ExportAsHTML is the one
+// terminal of the group itself: it writes all eight counts of the scope to a file as one report.
 type MetricsCountBuilder = metricsapi.MetricsCountBuilder
 
 // MetricsDistanceBuilder is the stage between a metrics rule's scope and its number for the metrics about a
 // package rather than a file, which Distance returns: `metrics, in folder "internal/**", distance`, waiting for
 // one of the five verbs — Abstractness, Instability, DistanceFromMainSequence, NormalizedDistance,
-// CouplingFactor — or for one of the two zone checks, which are rules rather than numbers.
+// CouplingFactor — or for one of the two zone checks, which are rules rather than numbers, or for ExportAsHTML,
+// which writes all five numbers of the scope to a file as one report.
 type MetricsDistanceBuilder = metricsapi.MetricsDistanceBuilder
 
 // MetricBuilder is a metrics rule whose metric has been chosen — `metrics, ..., count, lines of code` — which
@@ -314,6 +319,24 @@ type MetricsClassMeasure = metricscalculation.ClassMeasure
 // yes or no. It is the first argument of `should satisfy`, which requires it to answer yes about every number
 // the rule measured.
 type MetricsSatisfaction = metricsassertion.Satisfaction
+
+// MetricsExporter writes a metrics report to a file: measurements somebody has already taken, rendered as one
+// self-contained HTML page and put where they asked for it. NewMetricsExporter is how one is built.
+//
+// It is the metrics family's report terminal for numbers that did not come from one rule — grouped per folder,
+// per release, per metric of the caller's own — where MetricsCountBuilder.ExportAsHTML and
+// MetricsDistanceBuilder.ExportAsHTML are the shorthand for a report of one scope.
+type MetricsExporter = metricsapi.MetricsExporter
+
+// MetricsReportData is what a metrics report is written from: the measurements, grouped under the heading each
+// group of them is listed under. A report written off a rule has one group per metric, and a caller assembling
+// their own groups them however they mean them to be compared.
+type MetricsReportData = metricsrendering.ReportData
+
+// MetricsReportOptions is what an exported metrics report says about itself: the title it is headlined with, the
+// timestamp it carries — the zero time, the default, means none, because this library reads no clock of its own
+// — and a stylesheet added after the library's. A nil *MetricsReportOptions means the defaults.
+type MetricsReportOptions = metricsrendering.ReportOptions
 
 // GraphBuilder is a dependency-graph report as far as it has been described — `project graph`, plus every
 // modifier chained onto it — which ProjectGraph returns and every modifier hands back a new one of. It is
@@ -478,6 +501,15 @@ func Layers(locator *ProjectLocator) LayersBuilder {
 //		ShouldNotBeInZoneOfPain().
 //		Check(nil)
 //
+// Either group also closes without naming a metric at all, and then the chain is a report rather than a rule:
+// `export as html` measures every number of the group over the one scope and writes them to a file as one
+// self-contained page, which is the form to reach for when the numbers are for a person rather than a threshold.
+//
+//	err := archunit.Metrics(nil).InFolder("internal/**").Count().ExportAsHTML("build/metrics.html", nil)
+//
+// NewMetricsExporter is the same page for measurements a caller has already taken and grouped their own way, and
+// the way to a title, a timestamp and a stylesheet of their own.
+//
 // CustomMetric is the third thing a scope can be followed by, and the family's escape hatch: a name, the words
 // saying what the number means, and the user's own function for reading it off one class. It is a metric like
 // any other, so the same Measure and the same threshold predicates follow it — and ShouldSatisfy is the
@@ -527,6 +559,18 @@ func ProjectGraph(locator *ProjectLocator) GraphBuilder {
 // DependencyGraph is ProjectGraph under the other name the family also gives it. The two are one entry point.
 func DependencyGraph(locator *ProjectLocator) GraphBuilder {
 	return graphapi.DependencyGraph(locator)
+}
+
+// NewMetricsExporter returns the exporter that writes a metrics report to a file. A nil *MetricsReportOptions
+// means the defaults — an untitled, unstamped, plainly styled page:
+//
+//	err := archunit.NewMetricsExporter(&archunit.MetricsReportOptions{Title: "the numbers of this project"}).
+//		ExportAsHTML(archunit.MetricsReportData{"lines of code": measurements}, "build/metrics.html")
+//
+// The timestamp on the options bag is the caller's own time.Now(), because a page that stamped itself would
+// render different bytes on every run — a report committed beside the code would then show up in every diff.
+func NewMetricsExporter(options *MetricsReportOptions) MetricsExporter {
+	return metricsapi.NewMetricsExporter(options)
 }
 
 // NewResultFactory returns the factory that shapes a rule's violations into a Result. A nil *MessageOptions
