@@ -46,6 +46,7 @@ import (
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
+	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 )
 
 // emptyTestHint is what a report adds to an empty-test violation, and the one message in this layer that
@@ -89,6 +90,7 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //	files/api/handler.go: should not, depend on files, path without filename matches "files/db"; it depends on files/db/conn.go
 //	files/domain/order.go: should not, depend on external modules, path matches "*.*/**"; it depends on gorm.io/gorm
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
+//	layer "db": may not depend on layers "api"; it depends on api through db/conn.go -> api/handler.go
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
 // The requirement is always rendered as the rule stated it, never as its negation — `should not, filename
@@ -120,6 +122,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.externalDependency(reported)
 	case filesassertion.AdherenceViolation:
 		return f.adherence(reported)
+	case layersassertion.DependencyViolation:
+		return f.layerDependency(reported)
 	default:
 		return f.unphrased(violation)
 	}
@@ -230,6 +234,30 @@ func (f ViolationFactory) externalDependency(violation filesassertion.ExternalDe
 	return f.sentence(violation.File, requirement, finding)
 }
 
+// layerDependency phrases one layer of a policy depending on another layer it may not: the pair of layers,
+// the clause that forbade it in the words it was written in, and the file dependencies that connect them.
+//
+// The subject is the depending layer rather than a file, because a layer policy fails per pair of layers and
+// the offense is that these two are connected at all — so the finding names the other layer first and the
+// concrete dependencies after it, which is the order a reader needs them in: what is wrong, then where to
+// look. A violation carrying no dependencies names the pair alone.
+//
+// The mood is one word of the requirement here as it is everywhere else, but it is `may only`/`may not`
+// rather than `should`/`should not`: a layer policy is the one family whose user spells the mood as part of
+// the predicate, so `should not, may not depend on layers` would be the sentence nobody typed. Nothing is
+// inverted, exactly as in every other phrasing in this file — the requirement is what the clause said.
+func (f ViolationFactory) layerDependency(violation layersassertion.DependencyViolation) string {
+	finding := "it depends on " + violation.DependsOn
+	if len(violation.Dependencies) > 0 {
+		rendered := make([]string, 0, len(violation.Dependencies))
+		for _, dependency := range violation.Dependencies {
+			rendered = append(rendered, dependency.Source+" -> "+dependency.Target)
+		}
+		finding += " through " + strings.Join(rendered, ", ")
+	}
+	return f.sentence(`layer "`+violation.Layer+`"`, layerClause(violation.Mood, violation.Named), finding)
+}
+
 // unphrased phrases a violation this layer has not been taught: its kind, and whatever it can say about
 // itself.
 //
@@ -273,6 +301,28 @@ func broke(mood kernel.Mood) string {
 		return "it does"
 	}
 	return "it does not"
+}
+
+// layerClause renders the requirement a layer policy's clause stated: the mood as its own verb, then the
+// layers it named, quoted and comma-separated — `may only depend on layers "domain", "db"` — or `may only
+// depend on no layers`, which is the sealed layer and the one reading of an empty list that is still English.
+//
+// It is spelled here and not read off the clause for the reason this whole package exists: how a failure
+// reads is one layer's decision, and a domain module's own String is for a log line. The layers are quoted
+// like a filter's pattern, because they are the words a reader has to go and find in their own test.
+func layerClause(mood kernel.Mood, named []string) string {
+	verb := "may only depend on"
+	if mood.Negated() {
+		verb = "may not depend on"
+	}
+	if len(named) == 0 {
+		return verb + " no layers"
+	}
+	quoted := make([]string, 0, len(named))
+	for _, layer := range named {
+		quoted = append(quoted, `"`+layer+`"`)
+	}
+	return verb + " layers " + strings.Join(quoted, ", ")
 }
 
 // clauses renders the selectors that described a population, in the order the user chained them onto the

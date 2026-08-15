@@ -74,6 +74,24 @@ func isGoFile(file archunit.FileInfo) bool {
 	return file.Extension == ".go" && file.NonBlankLineCount > 0
 }
 
+// The layer policy's three stages and its terminal, each named by the type the chain actually returns —
+// including the declaration stage, because declaring a project's layers is the expensive half of writing a
+// policy and a suite should be able to do it once in a helper and branch every policy off the result. There is
+// no mood stage to name: the two predicates are the two moods.
+var (
+	_ archunit.LayersBuilder      = archunit.ProjectLayers(nil).Layer("kernel").DefinedByFolder("common/**")
+	_ archunit.LayerBuilder       = archunit.ProjectLayers(nil).Layer("kernel")
+	_ archunit.LayerPolicyBuilder = archunit.ProjectLayers(nil).
+		Layer("kernel").DefinedByFolder("common/**").WhereLayer("kernel")
+	_ archunit.Checkable = archunit.ProjectLayers(nil).
+		Layer("kernel").DefinedByFolder("common/**").
+		WhereLayer("kernel").MayOnlyDependOnLayers()
+	_ archunit.LayersPolicyCondition = archunit.Layers(nil).
+		Layer("kernel").DefinedBy("common/**").
+		Layer("files").DefinedBy("files/**").
+		WhereLayer("files").MayNotDependOnLayers("kernel")
+)
+
 // The violation types a rule reports are on the surface too, because a user who wants more than a pass or
 // a fail reads the violation rather than its message.
 var (
@@ -83,16 +101,19 @@ var (
 	_ archunit.Violation     = archunit.FileDependencyViolation{}
 	_ archunit.Violation     = archunit.FileExternalDependencyViolation{}
 	_ archunit.Violation     = archunit.FileAdherenceViolation{}
+	_ archunit.Violation     = archunit.LayerDependencyViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
 	_ archunit.ViolationKind = archunit.KindFileDependency
 	_ archunit.ViolationKind = archunit.KindFileExternalDependency
 	_ archunit.ViolationKind = archunit.KindFileAdherence
+	_ archunit.ViolationKind = archunit.KindLayerDependency
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileExternalDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileAdherenceViolation{}.Mood
+	_ archunit.Mood          = archunit.LayerDependencyViolation{}.Mood
 )
 
 // The report layer is on the surface too, because a user who has a rule's violations still needs the message
@@ -758,6 +779,286 @@ func TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 	}
 }
 
+// theLayersOfThisRepository is the layout AGENTS.md describes, declared as a named-layer policy declares it:
+// the shared kernel, the two domain modules written so far and the report layer, one folder of this repository
+// each. It is a function rather than four repeated stages because that is the point of the declaration stage
+// being a value — a project's layers are typed once and every policy below branches off them.
+func theLayersOfThisRepository() archunit.LayersBuilder {
+	return archunit.ProjectLayers(nil).
+		Layer("kernel").DefinedByFolder("common/**").
+		Layer("files").DefinedByFolder("files/**").
+		Layer("layers").DefinedByFolder("layers/**").
+		Layer("report").DefinedByFolder("archtest/**")
+}
+
+func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
+	// The declaration half of a policy through the public surface, dogfooding on this library: no locator, so
+	// the project is the one this test is in, and every layer is a folder of it. This is what a user reaches
+	// for to see what a policy is talking about before asking whether it holds.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	policy := theLayersOfThisRepository()
+
+	membership, err := policy.SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectLayerFiles failed: %v", err)
+	}
+
+	if len(membership) != 4 {
+		t.Errorf("%s came to %d layers, want one key per declared layer", policy, len(membership))
+	}
+	for _, wanted := range []struct {
+		layer string
+		file  string
+	}{
+		{layer: "kernel", file: "common/matching/filter.go"},
+		{layer: "files", file: "files/fluentapi/project_files.go"},
+		{layer: "layers", file: "layers/fluentapi/project_layers.go"},
+		{layer: "report", file: "archtest/violation_factory.go"},
+	} {
+		if !slices.Contains(membership[wanted.layer], wanted.file) {
+			t.Errorf("the layer %q came to %v, want %q among them", wanted.layer, membership[wanted.layer], wanted.file)
+		}
+	}
+	// The public surface is in no declared layer, deliberately: a file an edge ends in no layer at is ignored
+	// by every clause, which is what lets a policy describe part of a project instead of all of it.
+	for layer, files := range membership {
+		if slices.Contains(files, "archunit.go") {
+			t.Errorf("the layer %q came to %q, want a file no pattern describes left out of every layer", layer, "archunit.go")
+		}
+	}
+}
+
+func TestLayersIsTheShortAliasOfProjectLayersOnThePublicSurface(t *testing.T) {
+	t.Cleanup(archunit.ClearGraphCache)
+
+	verbose, err := archunit.ProjectLayers(nil).Layer("kernel").DefinedByFolder("common/matching").SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectLayerFiles failed: %v", err)
+	}
+	short, err := archunit.Layers(nil).Layer("kernel").DefinedByFolder("common/matching").SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectLayerFiles failed: %v", err)
+	}
+
+	if !slices.Contains(verbose["kernel"], "common/matching/filter.go") {
+		t.Errorf("`project layers, layer defined by folder` came to %v, want the files of that folder", verbose["kernel"])
+	}
+	if !slices.Equal(short["kernel"], verbose["kernel"]) {
+		t.Errorf("`layers, ...` came to %v, want what `project layers, ...` came to, %v", short["kernel"], verbose["kernel"])
+	}
+}
+
+func TestTheLocatorReachesTheProjectThroughEitherLayersEntryPoint(t *testing.T) {
+	// Both wrappers thread the locator through to the extraction, so a policy pointed at a directory that holds
+	// no Go project says so — rather than quietly analyzing the repository this test runs in, which is what
+	// dropping the argument would look like, and which no comparison of two nil-located policies would notice.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	entryPoints := []struct {
+		name   string
+		policy archunit.LayersBuilder
+	}{
+		{
+			name: "project layers",
+			policy: archunit.ProjectLayers(&archunit.ProjectLocator{Directory: t.TempDir()}).
+				Layer("kernel").DefinedByFolder("common/**"),
+		},
+		{
+			name: "layers",
+			policy: archunit.Layers(&archunit.ProjectLocator{Directory: t.TempDir()}).
+				Layer("kernel").DefinedByFolder("common/**"),
+		},
+	}
+
+	for _, entry := range entryPoints {
+		t.Run(entry.name, func(t *testing.T) {
+			membership, err := entry.policy.SelectLayerFiles(nil)
+
+			if err == nil {
+				t.Errorf("`%s` came to %v against a directory that is no project, want an error naming it", entry.name, membership)
+			}
+			if len(membership) != 0 {
+				t.Errorf("`%s` came to %v, want nothing when the project cannot be located", entry.name, membership)
+			}
+		})
+	}
+}
+
+func TestALayerIsDefinedByAFolderOrByAWholePath(t *testing.T) {
+	// The two ways a layer is described, through the public surface: `defined by folder` is the one almost every
+	// policy wants, and `defined by` takes the whole path — which is how a layer of a single file, or one named
+	// by the file names rather than by the folder, is declared.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	byFolder, err := archunit.ProjectLayers(nil).
+		Layer("cycles").DefinedByFolder("common/projection/cycles").SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectLayerFiles failed: %v", err)
+	}
+	byPath, err := archunit.ProjectLayers(nil).
+		Layer("cycles").DefinedBy("common/projection/cycles/*.go").SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectLayerFiles failed: %v", err)
+	}
+	oneFile, err := archunit.ProjectLayers(nil).
+		Layer("tarjan").DefinedBy("common/projection/cycles/tarjan_scc.go").SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectLayerFiles failed: %v", err)
+	}
+
+	if !slices.Contains(byFolder["cycles"], "common/projection/cycles/tarjan_scc.go") {
+		t.Errorf("the layer defined by folder came to %v, want the files of that folder", byFolder["cycles"])
+	}
+	if !slices.Equal(byPath["cycles"], byFolder["cycles"]) {
+		t.Errorf("the layer defined by path came to %v, want the same files as the folder, %v", byPath["cycles"], byFolder["cycles"])
+	}
+	if want := []string{"common/projection/cycles/tarjan_scc.go"}; !slices.Equal(oneFile["tarjan"], want) {
+		t.Errorf("the layer defined by one path came to %v, want %v", oneFile["tarjan"], want)
+	}
+}
+
+func TestThisRepositoryObeysItsOwnLayerPolicy(t *testing.T) {
+	// The four dependency rules of AGENTS.md again — the ones written as pairwise file rules above — this time as
+	// the one policy they actually are. That is the whole reason this module exists: the same statement is four
+	// clauses here and a rule per ordered pair of layers there, and it reads as the architecture rather than as a
+	// list of globs. A green run means the layering is real, and the sealed kernel is the clause that keeps it so.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	policy := theLayersOfThisRepository().
+		// The shared kernel is shared, so it knows about no module and no report layer: sealed.
+		WhereLayer("kernel").MayOnlyDependOnLayers().
+		// A domain module knows the kernel and nothing else — not the report layer, and not a sibling module,
+		// which is what makes a module removable.
+		WhereLayer("files").MayOnlyDependOnLayers("kernel").
+		WhereLayer("layers").MayOnlyDependOnLayers("kernel").
+		// And the report layer reads what a rule reported: the kernel and the modules, whose pure assertion
+		// halves are the only part of them it is allowed to reach — which the file rules above say the rest of.
+		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers").
+		// The same thing the other way round, as the blocklist a team tightening one edge would write.
+		WhereLayer("files").MayNotDependOnLayers("layers")
+
+	violations, err := policy.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", policy, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", policy, archunit.NewViolationFactory(nil).Message(violation))
+	}
+}
+
+func TestALayerPolicyThisRepositoryBreaksReportsTheOffendingLayers(t *testing.T) {
+	// The failing half, because a rule that cannot fail says nothing: the report layer does depend on a module,
+	// and the files module does depend on the kernel. One violation per offending pair of layers rather than one
+	// per import, each carrying the two layers, the clause it broke and the concrete file dependencies — which is
+	// what makes a layer report short and still actionable.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	policy := theLayersOfThisRepository().
+		WhereLayer("report").MayNotDependOnLayers("files").
+		WhereLayer("files").MayOnlyDependOnLayers()
+
+	violations, err := policy.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", policy, err)
+	}
+
+	offenders := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		if kind := violation.Kind(); kind != archunit.KindLayerDependency {
+			t.Errorf("%s reports a %s violation, want a layer dependency one", policy, kind)
+			continue
+		}
+		dependency, ok := violation.(archunit.LayerDependencyViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a LayerDependencyViolation", policy, violation)
+		}
+		if len(dependency.Dependencies) == 0 {
+			t.Errorf("the violation of %q carries no file dependency, want the ones the layers are connected by",
+				dependency.Layer)
+		}
+		offenders = append(offenders, dependency.Layer+" -> "+dependency.DependsOn)
+	}
+
+	want := []string{"files -> kernel", "report -> files"}
+	if !slices.Equal(offenders, want) {
+		t.Fatalf("%s reports %v, want %v", policy, offenders, want)
+	}
+
+	// The blocklist violation in full, because the two clauses are judged differently and the data is what a
+	// report is phrased from: the layers the clause named, the mood it was written in and the files.
+	blocked, ok := violations[1].(archunit.LayerDependencyViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want a LayerDependencyViolation", policy, violations[1])
+	}
+	if blocked.Mood != archunit.ShouldNot || !slices.Equal(blocked.Named, []string{"files"}) {
+		t.Errorf("the violation blames `%s %v`, want the blocklist that forbade the pair", blocked.Mood, blocked.Named)
+	}
+	for _, edge := range blocked.Dependencies {
+		if !strings.HasPrefix(edge.Source, "archtest/") || !strings.HasPrefix(edge.Target, "files/") {
+			t.Errorf("the violation carries %s -> %s, want a dependency between the two layers it is about",
+				edge.Source, edge.Target)
+		}
+	}
+	// And the sealed layer, whose clause named nothing at all.
+	sealed, ok := violations[0].(archunit.LayerDependencyViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want a LayerDependencyViolation", policy, violations[0])
+	}
+	if sealed.Mood != archunit.Should || len(sealed.Named) != 0 {
+		t.Errorf("the violation blames `%s %v`, want the sealed layer's clause", sealed.Mood, sealed.Named)
+	}
+
+	// And the report a test failure would print, through the same factory every other rule's violations go to.
+	message := archunit.NewViolationFactory(nil).Message(blocked)
+	if !strings.HasPrefix(message, `layer "report": may not depend on layers "files"; it depends on files through archtest/`) {
+		t.Errorf("the violation reads %q, want the pair of layers first and the files after it", message)
+	}
+	if sealed := archunit.NewViolationFactory(nil).Message(sealed); !strings.HasPrefix(sealed,
+		`layer "files": may only depend on no layers; it depends on kernel through files/`) {
+		t.Errorf("the sealed layer's violation reads %q, want its clause read as `no layers`", sealed)
+	}
+}
+
+func TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T) {
+	// The empty-test guard on this family's terminal, through the public surface: a policy has one population per
+	// declared layer, because a layer nobody is in makes every clause about it vacuous and the whole policy green
+	// forever. The guard names the layer, so a reader knows which of a policy's patterns went stale.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	policy := archunit.ProjectLayers(nil).
+		Layer("kernel").DefinedByFolder("common/**").
+		Layer("slices").DefinedByFolder("slices/**").
+		WhereLayer("slices").MayOnlyDependOnLayers("kernel")
+
+	violations, err := policy.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", policy, err)
+	}
+
+	if len(violations) != 1 {
+		t.Fatalf("%s reports %v, want the one empty layer it has", policy, violations)
+	}
+	if kind := violations[0].Kind(); kind != archunit.KindEmptyTest {
+		t.Errorf("the violation is of kind %q, want %q", kind, archunit.KindEmptyTest)
+	}
+	empty, ok := violations[0].(archunit.EmptyTestViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want an EmptyTestViolation", policy, violations[0])
+	}
+	if empty.Subject != `files in layer "slices"` {
+		t.Errorf("the guard reports %q, want the layer nobody is in named", empty.Subject)
+	}
+	// And the opt-out, which is the same knob on the same bag every other terminal threads into the guard.
+	allowed, err := policy.Check(&archunit.CheckOptions{AllowEmptyTests: true})
+	if err != nil {
+		t.Fatalf("%s failed with AllowEmptyTests: %v", policy, err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", policy, allowed)
+	}
+}
+
 func TestTheReportOfARuleThisRepositoryBreaksNamesEveryOffender(t *testing.T) {
 	// The last stage of the pipeline through the public surface: a rule this repository breaks, its
 	// violations shaped into the report a test failure prints. The rule is the naming one above, so the
@@ -998,6 +1299,13 @@ func TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests(t *testing.T) {
 		"every file is named the way the layout asks for": archunit.ProjectFiles(nil).
 			Should().HaveName("[_a-z][_a-z0-9]*.go"),
 		"no file depends on another in a circle": archunit.ProjectFiles(nil).Should().HaveNoCycles(),
+		// A whole N-layer policy is one Checkable, so it sits in a suite beside the single-file rules as one
+		// entry rather than as the rule per pair of layers it would otherwise be.
+		"the layers of this library only depend inwards": theLayersOfThisRepository().
+			WhereLayer("kernel").MayOnlyDependOnLayers().
+			WhereLayer("files").MayOnlyDependOnLayers("kernel").
+			WhereLayer("layers").MayOnlyDependOnLayers("kernel").
+			WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers"),
 	}, nil)
 }
 

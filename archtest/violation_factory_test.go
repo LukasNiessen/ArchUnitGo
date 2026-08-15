@@ -13,6 +13,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/projection"
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
+	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 )
 
 // theEmptyTestHint is the note a report adds to a rule that selected nothing, written out here rather than
@@ -161,6 +162,51 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 			violation: filesassertion.CycleViolation{},
 			message:   "a cycle through no files: should, have no cycles",
 		},
+		{
+			name: "a layer that may not depend on another and does",
+			violation: layersassertion.NewDependencyViolation(
+				layersassertion.NewClause("db", []string{"api"}, kernel.ShouldNot), "api",
+				extraction.NewEdge("internal/db/conn.go", "internal/api/router.go", false, extraction.ImportKindPlain),
+			),
+			// The mood is `may not` rather than `should not`: a layer policy is the one family whose user
+			// spells the mood as part of the predicate. The pair of layers is the offense and the files are
+			// where to look, in that order.
+			message: `layer "db": may not depend on layers "api"; ` +
+				"it depends on api through internal/db/conn.go -> internal/api/router.go",
+		},
+		{
+			name: "a layer that depends on one an allowlist did not name",
+			violation: layersassertion.NewDependencyViolation(
+				layersassertion.NewClause("api", []string{"domain", "db"}, kernel.Should), "transport",
+				extraction.NewEdge("internal/api/handler.go", "internal/transport/http.go", false, extraction.ImportKindPlain),
+				extraction.NewEdge("internal/api/router.go", "internal/transport/http.go", false, extraction.ImportKindPlain),
+			),
+			// Every layer the clause named, in the order the user typed them, because any of them may be the
+			// one they meant to write differently — and every file dependency, because a layer policy fails
+			// per pair of layers and all of them have to be unpicked.
+			message: `layer "api": may only depend on layers "domain", "db"; it depends on transport through ` +
+				"internal/api/handler.go -> internal/transport/http.go, " +
+				"internal/api/router.go -> internal/transport/http.go",
+		},
+		{
+			name: "a sealed layer that depends on another at all",
+			violation: layersassertion.NewDependencyViolation(
+				layersassertion.NewClause("domain", nil, kernel.Should), "db",
+				extraction.NewEdge("internal/domain/order.go", "internal/db/conn.go", false, extraction.ImportKindPlain),
+			),
+			// `may only depend on layers` with nothing named reads as `no layers`, which is the one reading of
+			// the empty list that is still English.
+			message: `layer "domain": may only depend on no layers; it depends on db through ` +
+				"internal/domain/order.go -> internal/db/conn.go",
+		},
+		{
+			// A violation built by hand may carry no dependency, and a report of it then names the pair of
+			// layers alone rather than a file that is not there.
+			name: "a layer dependency built by hand out of no files",
+			violation: layersassertion.NewDependencyViolation(
+				layersassertion.NewClause("db", []string{"api"}, kernel.ShouldNot), "api"),
+			message: `layer "db": may not depend on layers "api"; it depends on api`,
+		},
 	} {
 		t.Run(wanted.name, func(t *testing.T) {
 			message := archtest.NewViolationFactory(nil).Message(wanted.violation)
@@ -184,6 +230,8 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 		filesassertion.KindFileAdherence:  filesassertion.NewAdherenceViolation("a.go", "be short", kernel.Should),
 		filesassertion.KindFileExternalDependency: filesassertion.NewExternalDependencyViolation(
 			"a.go", nil, nil, kernel.Should),
+		layersassertion.KindLayerDependency: layersassertion.NewDependencyViolation(
+			layersassertion.NewClause("api", []string{"domain"}, kernel.Should), "db"),
 	}
 
 	for kind, violation := range phrased {

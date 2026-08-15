@@ -11,8 +11,9 @@
 // layout — which is also why nothing inside the library is allowed to depend on it.
 //
 // A rule is a value, not an action: building one does no work, and only a terminal reads the project.
-// The chain starts at an entry point — ProjectFiles today, one per rule family as they land — and every
-// entry point takes an optional *ProjectLocator, where nil means the project the test itself is in.
+// The chain starts at an entry point — ProjectFiles and ProjectLayers today, one per rule family as they
+// land — and every entry point takes an optional *ProjectLocator, where nil means the project the test
+// itself is in.
 package archunit
 
 import (
@@ -24,6 +25,8 @@ import (
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	filesextraction "github.com/LukasNiessen/ArchUnitGo/files/extraction"
 	filesapi "github.com/LukasNiessen/ArchUnitGo/files/fluentapi"
+	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
+	layersapi "github.com/LukasNiessen/ArchUnitGo/layers/fluentapi"
 )
 
 // ProjectLocator says where the project under analysis is. A nil *ProjectLocator means auto-detect,
@@ -108,6 +111,12 @@ type FileDependencyViolation = filesassertion.DependencyViolation
 // selectors, the import paths actually found and the mood the rule was written in.
 type FileExternalDependencyViolation = filesassertion.ExternalDependencyViolation
 
+// LayerDependencyViolation says that one layer of a policy depends on another layer the policy does not allow
+// it to. It is what `may only depend on layers` and `may not depend on layers` report, one per pair of layers
+// rather than one per import — carrying the two layers, the layers the broken clause named, the mood it was
+// written in and the concrete file dependencies that connect them.
+type LayerDependencyViolation = layersassertion.DependencyViolation
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -121,6 +130,8 @@ const (
 	KindFileExternalDependency = filesassertion.KindFileExternalDependency
 	// KindFileAdherence is the kind of FileAdherenceViolation.
 	KindFileAdherence = filesassertion.KindFileAdherence
+	// KindLayerDependency is the kind of LayerDependencyViolation.
+	KindLayerDependency = layersassertion.KindLayerDependency
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -167,6 +178,29 @@ type FilesExternalDependencyCondition = filesapi.FilesExternalDependencyConditio
 // 400 lines long"`, which AdhereTo returns on either mood. It is a Checkable, so a built rule can be stored,
 // passed to a helper or kept in a list of the suite's rules.
 type FilesAdherenceCondition = filesapi.FilesAdherenceCondition
+
+// LayersBuilder is the declaration stage of a named-layer policy, which ProjectLayers and Layers return and
+// every `defined by` verb hands back a new one of. It is named here so that a project's layers can be
+// declared once, stored in a struct field or a package-level helper, and branched into as many policies as a
+// suite needs.
+type LayersBuilder = layersapi.LayersBuilder
+
+// LayerBuilder is a layer that has been named and not yet described: what Layer returns, and what DefinedBy
+// and DefinedByFolder close. It is a stage of its own because a layer with no files is a policy that passes
+// forever, so the pattern is asked for here rather than left optional.
+type LayerBuilder = layersapi.LayerBuilder
+
+// LayerPolicyBuilder is a clause that has named its layer and not yet said anything about it: what WhereLayer
+// returns, and what MayOnlyDependOnLayers and MayNotDependOnLayers close. There is no mood stage in this
+// family — the two predicates are the two moods.
+type LayerPolicyBuilder = layersapi.LayerPolicyBuilder
+
+// LayersPolicyCondition is the terminal of a named-layer policy — `project layers, layer "api" defined by
+// folder ..., where layer "db", may not depend on layers "api"` — which both predicates return. It is also
+// chainable, so a policy's further clauses follow straight on — every layer has to be declared before the
+// first clause, because a chain that went back to declaring would leave Checkable — and it is a Checkable, so
+// a whole N-layer policy can be stored, passed to a helper or kept in a list of the suite's rules as one rule.
+type LayersPolicyCondition = layersapi.LayersPolicyCondition
 
 // Result is a whole rule's outcome as a test needs it: whether the rule holds, and the one message to print
 // when it does not. It is what ResultFactory shapes a rule's violations into, and the two fields an adapter
@@ -237,6 +271,29 @@ func ProjectFiles(locator *ProjectLocator) FilesBuilder {
 // Files is ProjectFiles under the shorter name the family also gives it. The two are one entry point.
 func Files(locator *ProjectLocator) FilesBuilder {
 	return filesapi.Files(locator)
+}
+
+// ProjectLayers is the entry point of every named-layer policy: `project layers`. The locator is optional
+// and nil means auto-detect.
+//
+// A policy declares its layers and then says what they may depend on, and the whole of it is one rule:
+//
+//	rule := archunit.ProjectLayers(nil).
+//		Layer("api").DefinedByFolder("internal/api/**").
+//		Layer("domain").DefinedByFolder("internal/domain/**").
+//		Layer("db").DefinedByFolder("internal/db/**").
+//		WhereLayer("api").MayOnlyDependOnLayers("domain", "db").
+//		WhereLayer("domain").MayOnlyDependOnLayers()
+//
+// Dependencies inside a layer are always allowed, dependencies with an end in no declared layer are ignored,
+// and `MayOnlyDependOnLayers()` with nothing named is the sealed layer.
+func ProjectLayers(locator *ProjectLocator) LayersBuilder {
+	return layersapi.ProjectLayers(locator)
+}
+
+// Layers is ProjectLayers under the shorter name the family also gives it. The two are one entry point.
+func Layers(locator *ProjectLocator) LayersBuilder {
+	return layersapi.Layers(locator)
 }
 
 // NewResultFactory returns the factory that shapes a rule's violations into a Result. A nil *MessageOptions
