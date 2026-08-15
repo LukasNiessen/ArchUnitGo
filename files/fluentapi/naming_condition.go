@@ -3,6 +3,7 @@ package fluentapi
 import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 )
@@ -54,24 +55,31 @@ type FilesNamingCondition struct {
 // violations are the files module's own assertion.NamingViolation values, each carrying the file, the
 // requirement and the mood, or the one EmptyTestViolation of a scope that selected no file at all.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the
+// count each of those steps came to, every violation and the outcome. With no log asked for, which is the
+// default, nothing is written and nothing else about the check changes.
+//
 // The error is technical or the user's — a pattern the scope or the predicate could not compile, a locator
-// naming no Go project, a project that will not load — and never a failing rule. When it is non-nil the
-// violations say nothing.
+// naming no Go project, a project that will not load, a log this check was asked for that could not be
+// opened, written or closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c FilesNamingCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	// The graph is deliberately dropped: what a file is called and where it lives is on the file, so this
-	// rule is about the selection and not about the dependencies between the files in it.
-	_, selected, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		// The graph is deliberately dropped: what a file is called and where it lives is on the file, so this
+		// rule is about the selection and not about the dependencies between the files in it.
+		_, selected, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("selected files", len(selected))
 
-	if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
-		// A rule with no subject is reported instead of being judged: every file of an empty selection
-		// satisfies every requirement, in either mood, so such a rule would otherwise pass forever.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
+			// A rule with no subject is reported instead of being judged: every file of an empty selection
+			// satisfies every requirement, in either mood, so such a rule would otherwise pass forever.
+			return empty, nil
+		}
 
-	return filesassertion.GatherNamingViolations(selected, c.required, c.rule.mood), nil
+		return filesassertion.GatherNamingViolations(selected, c.required, c.rule.mood), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `project files, path without filename

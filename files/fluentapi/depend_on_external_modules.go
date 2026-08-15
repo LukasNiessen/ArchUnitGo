@@ -6,6 +6,7 @@ import (
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	kernelprojection "github.com/LukasNiessen/ArchUnitGo/common/projection"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
@@ -120,6 +121,10 @@ func (c FilesExternalDependencyCondition) Matching(pattern string) FilesExternal
 // and the only stage of the chain that reads anything. Both populations are resolved against one graph, because
 // two extractions could not be compared with each other.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the count
+// each of those steps came to, every violation and the outcome. With no log asked for, which is the default,
+// nothing is written and nothing else about the check changes.
+//
 // Only the subject goes through the empty-test guard, which is the one place this terminal differs from
 // FilesDependencyCondition.Check. This rule's object *is* a set of dependencies: "no module matched" and "no
 // selected file depends on such a module" are one statement, and for the negated mood — which is the mood
@@ -133,23 +138,28 @@ func (c FilesExternalDependencyCondition) Matching(pattern string) FilesExternal
 // selected no file at all.
 //
 // The error is technical or the user's — a pattern a scope verb or an object verb could not compile, a locator
-// naming no Go project, a project that will not load — and never a failing rule. When it is non-nil the
-// violations say nothing.
+// naming no Go project, a project that will not load, a log this check was asked for that could not be opened,
+// written or closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c FilesExternalDependencyCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	graph, selected, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		graph, selected, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("selected files", len(selected))
 
-	if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
-		// A rule with no subject is reported instead of being judged: there is no file to find a dependency
-		// for, so one mood of such a rule would pass forever and the other would report nothing at all.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
+			// A rule with no subject is reported instead of being judged: there is no file to find a dependency
+			// for, so one mood of such a rule would pass forever and the other would report nothing at all.
+			return empty, nil
+		}
 
-	modules := projection.SelectExternalModules(graph, c.modules...)
-	dependencies := kernelprojection.ProjectEdges(graph, projection.PerExternalDependencyEdge(selected, modules))
-	return filesassertion.GatherExternalDependencyViolations(selected, dependencies, c.modules, c.rule.mood), nil
+		modules := projection.SelectExternalModules(graph, c.modules...)
+		log.LogProgress("external modules matched", len(modules))
+		dependencies := kernelprojection.ProjectEdges(graph, projection.PerExternalDependencyEdge(selected, modules))
+		log.LogProgress("dependencies from the selected files to those modules", len(dependencies))
+		return filesassertion.GatherExternalDependencyViolations(selected, dependencies, c.modules, c.rule.mood), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `project files, path without filename

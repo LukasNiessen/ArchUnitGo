@@ -27,7 +27,8 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: pattern matching lives in `common/matching`, not in `common/util` as the `AGENTS.md` layout
   table says — `revive`'s `package-naming` rule in this repository's own `.golangci.yml` rejects
   `util` as a package name, and "directory is package" means the directory has to move with it. Only
-  pattern matching moved; `common/util` is still free to appear for logging and path helpers.
+  pattern matching moved; a package of its own is what every other would-be `util` tenant gets too.
+  (Issue #39 took the second one: logging landed as `common/logging`.)
 - WHY: separators are normalised for globs and for match candidates, but never for a regex pattern —
   in a regular expression a backslash is an escape, so rewriting it to `/` would silently corrupt
   `\.` into `/.`. A regex pattern is documented as using forward slashes, which is the identifier
@@ -136,6 +137,8 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: `logging` is one `io.Writer` field rather than a nested `{enabled, level}` bag. Non-nil is
   "enabled" and the destination is injected, which is what `.golangci.yml`'s `forbidigo` note on
   `log.Print*` requires of issue #39; a bool beside the writer would be a second way to say off.
+  (Superseded by issue #39: the field is a `*logging.Options`, which is still one nilable field
+  meaning off — the level and the log file could not travel on a writer.)
 - WHY: the Go-specific toggles are exactly three — `IncludeTestFiles` (go/packages' `Tests`),
   `IgnoredImportKinds` (an `extraction.ImportKindSet`, so blank driver imports can be dropped without
   four bools) and `BuildTags`. Each is a knob the extractor cannot work without; anything else would be
@@ -1441,7 +1444,8 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   public for exactly this.
 - WHY: nothing was wired to `CheckOptions.Logging` and no `t.Log` progress output was added. Nothing in the
   library writes to that field yet — issue #39 owns it — so a helper that piped it to the test log would be
-  piping an empty stream.
+  piping an empty stream. (Issue #39 wired it; `archtest` still does not touch the field, because the suite's
+  bag is threaded to every rule already and the log's destination is the caller's to choose.)
 - WHY: the unit test's `runner` drives each subtest body against a fresh zero-value `&testing.T{}` and reads
   `Failed()` off it, which is how a test of this form observes per-subtest outcomes without failing this
   repository's own suite. A recorder cannot stand in, because `Run`'s argument is a `*testing.T`. The
@@ -2213,3 +2217,126 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   files are not named `*_factory.go` — so `common/matching/exclusion.go` joining the folder made their
   expectations false. They now name three offenders and count `3 violations:`. That is updating data this
   change made stale, not loosening the assertion: both still pin the exact list, in order.
+
+## Issue #39 — Logging
+
+- WHY: `CheckOptions.Logging` changed type from `io.Writer` to `*logging.Options`, and
+  `CheckOptions.LogWriter()` was removed in favour of `CheckOptions.Logger()`. The issue asks for levels, a
+  log file, a timestamped filename and an append-vs-overwrite switch, and an `io.Writer` can carry none of
+  them; the field is still one nilable field whose nil means off, which is what issue #5's note was actually
+  about. `LogWriter` had no caller in the library and returned a raw writer, which is no longer the seam —
+  `Logger()` hands back the thing that writes the fixed vocabulary.
+- WHY: the package is `common/logging` and the option bag's file stem is `log_options.go` rather than
+  `options.go`, so that the stem still names the type a reader is looking for after the package name has been
+  dropped from it (`logging.Options`), the way `check_options.go` does in `common/fluentapi`.
+- WHY: a log record carries no timestamp. `.golangci.yml`'s `forbidigo` bans `time.Now` and tells an issue
+  that wants a timestamp to take it as a field on an options bag, so the only instant a log can state is
+  `Options.Timestamp` — and it names the file, not the lines. The side effect is the one that makes the
+  feature testable: two runs of the same check over the same code write the same bytes.
+- WHY: the filename stamp is `2006-01-02T15-04-05` and not `time.RFC3339`. A colon is not legal in a filename
+  on Windows and the repository cross-compiles for it, so the colons are hyphens and the offset is left off
+  for the same reason. A caller who wants an unambiguous stamp passes a UTC time.
+- WHY: the append-vs-overwrite switch is spelled `Overwrite bool`, defaulting to append, and not `Append`.
+  Every default in this library is a zero value, and appending has to be the default: a log file is opened
+  once per check, so a suite of twenty rules under one filename would keep only its twentieth rule's records
+  if truncation were the default.
+- WHY: the five records are one decorator in the kernel — `CheckOptions.LoggedCheck` — rather than nine
+  terminals each writing their own start, violation and end records. It is argued exactly as
+  `GatherEmptyTestViolations` is: the three records every family writes identically are written in one place,
+  so no family can log a little differently or forget to log at all. What is left at the call site is the
+  part only the terminal knows, which is the "more verbose at the call site" the issue asks for — every
+  terminal writes its own `LogProgress` lines and the two metrics threshold terminals their `LogMetric` ones.
+- WHY: `Logger` has no mutex and its doc states that one logger belongs to one check. The library makes a
+  logger per check, so a lock would protect nothing it shares; what makes a parallel suite behave is that the
+  log file is opened with `O_APPEND`, so parallel checks writing one file interleave whole records, and that
+  an injected writer shared between them is documented as the caller's to make concurrency-safe.
+- WHY: a write that fails is remembered and reported from `Close` rather than from the record method. A log
+  line has nowhere to return an error to, and `errcheck`'s `check-blank: true` means the alternative is not
+  `_ = write(...)`. `LoggedCheck` surfaces it, and it loses to the check's own error, because a rule that
+  could not be run is the more useful of the two things to say.
+- WHY: `assertion.EmptyTestViolation` gained a `String()`. Every other violation type in the library already
+  has one "for logs and test failures" and `Logger.LogViolation` renders each violation through it; this was
+  the one type that would have logged as its kind alone.
+- WHY: logging is not wired into `extraction`/`ExtractGraph`, `MetricBuilder.Measure`, or the report and
+  export terminals of `metrics` and `graph`. The issue scopes the log to a check — start check, end check,
+  progress, violation, metric — and `common/extraction` may not import a package that touches the options
+  bag's logging field without inverting the kernel's layering. A report is not a check and has no violations
+  to log; wiring one would be the speculative half of the feature.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `LoggedCheck` is a method, which
+  that list cannot guard, and the five records return nothing. This follows #27, #28, #32, #33, #34, #35,
+  #36, #37 and #38.
+- WHY: no `//nolint` was added anywhere in this issue.
+- WHY: the prose the change made false was updated in the same diff — `AGENTS.md`'s layout table and the
+  `common/util` note ("logging and path helpers get their own named packages when they land" is now half
+  history), `common/fluentapi`'s `CheckOptions.Logging` and `WithDefaults` docs and the `checkable.go` package
+  doc (which now names two kernel doors rather than one), the `Check` docs of the nine terminals that gained a
+  logging step, and in `archunit.go` the new `LogOptions`, `LogLevel`, `Logger` and `LogLevel*` re-exports
+  beside `CheckOptions`. Issue #5's and #2's notes above say what they superseded.
+- WHY: the integration tests are in `archunit_test.go`, dogfooding on this library:
+  `TestARuleOfThisRepositoryLogsWhatItDidThroughThePublicSurface` runs one real rule with a `*LogOptions`
+  and pins the five records; `TestALogFileOfThisRepositoryIsTheArtifactACiJobWouldArchive` asserts the
+  auto-created folder, the timestamped filename and append-vs-overwrite;
+  `TestARuleThatWasNotAskedToLogWritesNothing` is the default;
+  `TestEveryRuleFamilyOfThisRepositoryLogsItsOwnStepsThroughThePublicSurface` runs one rule of each of the
+  nine rewired terminals at `LogLevelDebug` over a scope that selects something, and pins the `start check`
+  record, the `end check` record with its own outcome and the exact list of `progress` steps that terminal
+  took — plus the `metric` record of the two threshold families; and
+  `TestTheLevelALogWasAskedForDecidesWhichRecordsACheckWritesThroughThePublicSurface` pins one rule's
+  `warn  violation:` records at `LogLevelWarn` and the empty log at `LogLevelError`. The first three ran
+  the check but observed only what `LoggedCheck` writes around it, so a deleted `LogProgress` or `LogMetric`
+  inside a terminal failed nothing; a family whose scope stops selecting fails its row at the empty-test
+  guard rather than passing quietly, because each row rejects a `KindEmptyTest` violation before it reads
+  the log.
+- WHY: the four levels and the logger are pinned by value as well as by type.
+  `TestTheFourLogLevelsOfThePublicSurfaceAreTheOnesTheyName` asserts each constant's `String()` against the
+  literal word the issue names and asserts the four strictly ascending, which is what makes a threshold a
+  threshold; `TestTheLoggerThePublicSurfaceNamesOpensThroughTheCheckOptions` opens a `*archunit.Logger`
+  through `CheckOptions.Logger()` and compares one byte-exact record. The `var _` block at the top of the
+  file pins the rest at compile time — `LogLevel` against each of its four constants, `*LogOptions` with
+  every field of it set, `CheckOptions.Logging`, and `Logger()`'s signature as a function value — because a
+  re-export aliasing the wrong thing is a compile error nowhere else.
+- WHY: `TestEveryTerminalOfThisLibraryGoesThroughTheKernelsLoggedCheckDoor` is a sibling of the empty-test
+  guard's rule and is argued the same way: the three records every family writes identically are written by
+  one decorator, so a terminal that returns violations without going through it logs nothing and no other
+  test in the suite notices. Both rules read the same predicate, and the new one counts what it matched
+  against `terminalCheckDeclarations = 9`, so a `declaresTerminalCheck` that quietly stopped matching — or a
+  tenth terminal that lands without a logging step — fails instead of scoping the rules down to nothing.
+- WHY: `TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard` in `archunit_test.go` now asks
+  `declaresTerminalCheck(file.Source)` instead of `strings.Contains(file.Source, ") Check(")`. The new helper
+  looks for the same signature on a line that starts at the left margin, which is what a method declaration
+  is. `common/fluentapi/logged_check.go` shows a terminal author their own `Check` in its doc comment, and the
+  substring alone read that piece of documentation as an implementation and demanded the guard from a file
+  that has no rule to guard. This makes the predicate say what its own comment already claimed it said —
+  every `Check` of this library is declared at the left margin, so nothing that used to be caught stops being
+  caught, and a terminal in `layers/`, `metrics/` or `graph/` that forgets the guard still fails the rule.
+  `TestDeclaresTerminalCheckReadsAMethodDeclarationAndNotADocComment` holds the helper to both halves of that
+  claim on its own — true for a real signature, false for the same signature indented inside a doc comment —
+  because a predicate that two dogfooding rules narrow their scope by is the one place where matching nothing
+  reads as everything passing.
+- WHY: what each step *came to* is pinned one level down from `archunit_test.go`, in three new files —
+  `files/fluentapi/logged_progress_test.go`, `layers/fluentapi/logged_progress_test.go` and
+  `metrics/fluentapi/logged_progress_test.go` — over the fixture projects those packages already write, whose
+  file, edge, cycle, layer, clause and measurement counts a test fixes rather than the next commit to this
+  repository. Each row compares the whole `debug progress: <step>: <count>` line byte for byte, and the
+  metrics one every `info  metric:` record beside it, so zeroing any `len(...)` argument, reporting two
+  adjacent populations the wrong way round, or hoisting a `LogMetric` out of its loop fails — each of those
+  mutations was made in turn and the failures observed. `progressSteps` in `archunit_test.go` still strips the
+  counts off for the reason its doc comment gives (a count of this repository moves with every commit), and
+  that comment now names where the counts are pinned instead.
+- WHY: each of the three files carries its own `loggedRecords` helper rather than one shared one. The three
+  test packages are `fluentapi_test` in three modules and rule 2 forbids a domain module depending on another;
+  a shared helper would have to land in `common` as non-test code, which is a testing utility in the public
+  surface of the kernel.
+- WHY: the counts of each row are deliberately distinct where a mutation could confuse two of them — the
+  cycles family is asserted over two projects (4/3/0 files, dependencies, cycles for the acyclic fixture and
+  3/3/1 for the cyclic one) because one row alone cannot tell "dependencies" from "cycles"; `depend on files`
+  selects 2 files against 3 objects, so its two adjacent populations cannot be swapped; and the layer policy
+  declares 3 layers with 2 clauses, which is what the `len(clauses)` → `len(declaredLayers())` mutation
+  changes.
+- WHY: one item of the finding is rejected. `len(files)` → `len(selected)` for `adhere to`'s `source files
+  read` is not a behaviour change and no test can catch it:
+  `files/extraction.ExtractFileInfo` returns exactly one `FileInfo` per identifier it is given or an error, so
+  `len(files) == len(selected)` holds for every project — the two spellings are the same program. The record is
+  still asserted byte for byte, which is what pins it against being zeroed or hard-coded; making the two
+  numbers differ would mean inventing a "some files were not read" path that the extraction deliberately does
+  not have.

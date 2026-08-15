@@ -37,6 +37,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	filesextraction "github.com/LukasNiessen/ArchUnitGo/files/extraction"
@@ -59,6 +60,45 @@ type ProjectLocator = extraction.ProjectLocator
 // CheckOptions is the one options bag a terminal takes: everything about how a rule is run, as opposed
 // to what it says. A nil *CheckOptions means the defaults.
 type CheckOptions = fluentapi.CheckOptions
+
+// LogOptions is the log one check writes while it runs: where it goes, how much of it is written, and — when
+// a build wants to keep it — the file it is archived as. It is what CheckOptions.Logging holds, and it is the
+// whole of how logging is turned on.
+//
+//	violations, err := rule.Check(&archunit.CheckOptions{
+//		Logging: &archunit.LogOptions{Writer: os.Stderr, Level: archunit.LogLevelDebug},
+//	})
+//
+// Logging is off by default and there is no way to turn it on globally: the destination is injected per
+// check, a nil *LogOptions logs nothing, and a bag with neither a writer nor a file in it logs nothing
+// either. That is what lets one test assert on a log while the rest of the suite runs beside it.
+type LogOptions = logging.Options
+
+// LogLevel is how much of what a check has to say reaches the log. A record is written when its own level is
+// at or above the level the bag holds, so the bag's level names the quietest thing worth seeing.
+type LogLevel = logging.Level
+
+const (
+	// LogLevelDebug adds the step-by-step: one record per stage of a check, saying what it resolved and how
+	// much of the project that came to. It is the level to ask for when a rule reports something surprising.
+	LogLevelDebug = logging.LevelDebug
+	// LogLevelInfo is what a check says about itself when it is working — the rule, its outcome and the
+	// numbers a metrics rule measured — and it is the default, because every default in this library is a
+	// zero value.
+	LogLevelInfo = logging.LevelInfo
+	// LogLevelWarn is violations alone: the log of a suite that should be reporting nothing at all.
+	LogLevelWarn = logging.LevelWarn
+	// LogLevelError is the checks that could not be run at all. The failure itself still travels as the error
+	// Check returns; a log line is never how this library reports something.
+	LogLevelError = logging.LevelError
+)
+
+// Logger is an open log, and the five records a check writes to it: start check, end check, log progress, log
+// violation, log metric. CheckOptions.Logger is how a caller assembling something of its own opens one, and
+// closing it is that caller's job because a log file is a file.
+//
+// Every rule this library offers logs through it already, so a user writing rules never has to touch one.
+type Logger = logging.Logger
 
 // Mood is which of the two moods a rule was written in, `should` or `should not`. It is what the mood
 // stage of a chain reports, and the flag the library's assertions take so that a rule and its negation

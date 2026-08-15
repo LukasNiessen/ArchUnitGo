@@ -2,6 +2,7 @@ package assertion
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 )
@@ -35,6 +36,32 @@ func NewEmptyTestViolation(subject string, selectors ...matching.Filter) EmptyTe
 // Kind is KindEmptyTest.
 func (EmptyTestViolation) Kind() ViolationKind {
 	return KindEmptyTest
+}
+
+// String renders the violation as what the rule was selecting and the selectors that came to nothing —
+// `files: path without filename matches "internal/apis/**" -> nothing` — for a log line or a test
+// failure.
+//
+// It is the shape every violation in the library renders itself in: the subject that disagreed with the
+// rule first, because it is the thing to go and look at, then the requirement in the words the rule was
+// written in, then what was found. Here the requirement is the selection and what was found is nothing,
+// which is the whole of what this violation says.
+//
+// The user-facing message is still the testing layer's to build, from Subject and Selectors — it is the
+// one violation whose report also has to explain why an empty selection is a failure at all.
+func (v EmptyTestViolation) String() string {
+	subject := v.Subject
+	if subject == "" {
+		subject = "the rule's subject"
+	}
+	if len(v.Selectors) == 0 {
+		return subject + " -> nothing"
+	}
+	clauses := make([]string, 0, len(v.Selectors))
+	for _, selector := range v.Selectors {
+		clauses = append(clauses, selector.String())
+	}
+	return subject + ": " + strings.Join(clauses, ", ") + " -> nothing"
 }
 
 // EmptyTestOptions are the knobs on the empty-test guard: what the rule was selecting, what it

@@ -1,6 +1,7 @@
 package archunit_test
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"math"
@@ -315,6 +316,28 @@ var (
 	}
 )
 
+// And the logging surface in full, because turning a log on is something a user writes: the bag with every field
+// of it, the four levels a threshold is one of, the field on the check options that holds the bag, and the door a
+// caller assembling something of its own opens a log through together with the logger it hands back. Checked at
+// compile time, because a type alias that named the wrong thing would fail nowhere else — what the four levels
+// actually *are* is a value rather than a type, so it is pinned by
+// TestTheFourLogLevelsOfThePublicSurfaceAreTheOnesTheyName below.
+var (
+	_ archunit.LogLevel    = archunit.LogLevelDebug
+	_ archunit.LogLevel    = archunit.LogLevelInfo
+	_ archunit.LogLevel    = archunit.LogLevelWarn
+	_ archunit.LogLevel    = archunit.LogLevelError
+	_ *archunit.LogOptions = &archunit.LogOptions{
+		Writer:    os.Stderr,
+		Level:     archunit.LogLevelError,
+		File:      "build/archunit.log",
+		Overwrite: true,
+		Timestamp: time.Date(2026, time.August, 15, 9, 30, 0, 0, time.UTC),
+	}
+	_ archunit.CheckOptions            = archunit.CheckOptions{Logging: &archunit.LogOptions{Writer: os.Stderr}}
+	_ func() (*archunit.Logger, error) = (&archunit.CheckOptions{}).Logger
+)
+
 func TestProjectFilesSelectsTheFilesOfThisRepository(t *testing.T) {
 	// The whole chain through the public surface, dogfooding on this library: no locator, so the project
 	// is the one this test is in, and the scope is a folder of it.
@@ -594,7 +617,7 @@ func TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard(t *testing.T) {
 		// A file that declares no terminal has nothing to guard. The method declaration is what is looked
 		// for and not the word `Check`, so the interface in common/fluentapi — which declares the contract
 		// rather than implementing it — is not asked to satisfy its own requirement.
-		if !strings.Contains(file.Source, ") Check(") {
+		if !declaresTerminalCheck(file.Source) {
 			return true
 		}
 		return strings.Contains(file.Source, "GatherEmptyTestViolations(")
@@ -606,6 +629,83 @@ func TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard(t *testing.T) {
 	}
 	for _, violation := range violations {
 		t.Errorf("%s: %s", rule, violation)
+	}
+}
+
+func TestEveryTerminalOfThisLibraryGoesThroughTheKernelsLoggedCheckDoor(t *testing.T) {
+	// The logged-check door held to the word `every`, the same way the empty-test guard is above: a file that
+	// declares a terminal's Check method has to run the check through CheckOptions.LoggedCheck. That door is what
+	// writes the three records every family writes identically — the rule, its violations, its outcome — so a
+	// terminal that ran its own body inline would log nothing about itself at all, and neither the log of its own
+	// family nor any other rule of this repository would say so.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	terminals := 0
+	rule := archunit.ProjectFiles(nil).Should().AdhereTo(func(file archunit.FileInfo) bool {
+		if !declaresTerminalCheck(file.Source) {
+			return true
+		}
+		terminals++
+		return strings.Contains(file.Source, "LoggedCheck(")
+	}, "go through the kernel's logged-check door, if it declares a terminal's Check method")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, violation)
+	}
+	// And the predicate is held to having seen them, which is what the count above is for: a helper that stopped
+	// matching the real signatures would leave this rule and the guard's rule above both reporting nothing, and
+	// zero violations reads exactly like a repository where every terminal logs and asks the guard.
+	if terminals != terminalCheckDeclarations {
+		t.Errorf("the rule read %d terminals of this library, want %d", terminals, terminalCheckDeclarations)
+	}
+}
+
+// terminalCheckDeclarations is how many files of this library declare a terminal's Check method: the five of
+// files/, the one of layers/ and the three of metrics/. The two dogfooding rules above are written over a
+// predicate rather than a pattern, and a predicate that matched nothing would leave both of them green, so the
+// population they read is pinned as a number as well.
+//
+// A rule family that lands is expected to move this by one, in the commit that adds its terminal.
+const terminalCheckDeclarations = 9
+
+// declaresTerminalCheck says whether a file declares a terminal's Check method, which is the question the two
+// rules above — the empty-test guard's and the logged-check door's — ask of every file of this repository.
+//
+// A method declaration is a line of its own that starts at the left margin, and that is what tells one apart
+// from the same signature written inside a doc comment — as common/fluentapi/logged_check.go writes it, to
+// show a terminal author what their Check is supposed to look like. Every Check of this library is declared
+// that way, so reading the line rather than the whole file loses nothing and stops a piece of documentation
+// from being read as an implementation.
+func declaresTerminalCheck(source string) bool {
+	for line := range strings.Lines(source) {
+		if strings.HasPrefix(line, "func (") && strings.Contains(line, ") Check(") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDeclaresTerminalCheckReadsAMethodDeclarationAndNotADocComment(t *testing.T) {
+	// The predicate the two dogfooding rules above hang from, tested on its own, because it is the one part of
+	// them a failing run cannot point at: a helper that stopped matching the real signatures would leave both
+	// rules reporting nothing at all, and both tests would pass while the guard and the logged-check door of every
+	// terminal in the library were held to nothing.
+	declaration := "func (c FilesCyclesCondition) Check(options *kernel.CheckOptions) " +
+		"([]assertion.Violation, error) {\n"
+
+	if !declaresTerminalCheck("package fluentapi\n\nimport \"strings\"\n\n" + declaration + "}\n") {
+		t.Errorf("declaresTerminalCheck says no to %q, want a terminal's own method declaration", declaration)
+	}
+	// The same signature as common/fluentapi/logged_check.go writes it: indented inside a doc comment, showing a
+	// terminal author what theirs is supposed to look like. A file that documents a Check has no rule to guard.
+	documented := "// LoggedCheck runs a rule's own Check under this bag's logging options:\n//\n//\t" +
+		declaration + "//\t}\n"
+	if declaresTerminalCheck(documented) {
+		t.Errorf("declaresTerminalCheck says yes to %q, want a doc comment read as documentation", documented)
 	}
 }
 
@@ -2733,6 +2833,438 @@ func TestAnExclusionNarrowsWhatTheOtherFamiliesLookAtThroughThePublicSurface(t *
 	if slices.Contains(drawn, "common/matching/filter.go") {
 		t.Errorf("the report drew %v, want the excepted folder out of it", drawn)
 	}
+}
+
+func TestARuleOfThisRepositoryLogsWhatItDidThroughThePublicSurface(t *testing.T) {
+	// The whole of turning logging on, as a user writes it: one bag on the options a rule is checked with. The
+	// rule is written with two stale globs on purpose, because a log whose counts are zero is a log this test
+	// can assert byte for byte — and because the log of a rule that selected nothing is exactly the log
+	// somebody opens when a rule reports something they did not expect.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	log := &bytes.Buffer{}
+	rule := archunit.ProjectFiles(nil).
+		InFolder("internal/apis/**").
+		ShouldNot().
+		DependOnFiles().
+		InFolder("internal/db/**")
+
+	violations, err := rule.Check(&archunit.CheckOptions{
+		Logging: &archunit.LogOptions{Writer: log, Level: archunit.LogLevelDebug},
+	})
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(violations) != 2 {
+		t.Fatalf("%s reported %v, want the two empty populations", rule, violations)
+	}
+	// The five records of the fixed vocabulary, in the order a check writes them: the rule, the steps it took
+	// and how much of the project each came to, what it found, and what came of it.
+	want := strings.Join([]string{
+		"info  start check: " + rule.String(),
+		"debug progress: selected files: 0",
+		"debug progress: files to depend on: 0",
+		`warn  violation: empty-test: files: path without filename matches "internal/apis/**" -> nothing`,
+		`warn  violation: empty-test: files to depend on: path without filename matches "internal/db/**" -> nothing`,
+		"info  end check: " + rule.String() + ": 2 violations",
+		"",
+	}, "\n")
+	if log.String() != want {
+		t.Errorf("the log holds\n%s\nwant\n%s", log.String(), want)
+	}
+}
+
+func TestTheNumbersAMetricsRuleMeasuredReachTheLogThroughThePublicSurface(t *testing.T) {
+	// The one record a rule family writes that the kernel cannot: a metrics rule's own numbers. It is the
+	// answer to "what should this limit be", which is the question a threshold rule is written to ask.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.Metrics(nil).InPath("common/logging/level.go").Count().LinesOfCode().ShouldBeBelow(400)
+
+	log := &bytes.Buffer{}
+	if _, err := rule.Check(&archunit.CheckOptions{Logging: &archunit.LogOptions{Writer: log}}); err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	// The number itself is left out of the expectation, because this file is edited: what the log has to hold
+	// is the measurement of the file the rule measured, under the metric it read.
+	if !strings.Contains(log.String(), "info  metric: common/logging/level.go: lines of code = ") {
+		t.Errorf("the log holds\n%s\nwant a metric record naming the file the rule measured", log)
+	}
+
+	// And the level is what decides: a log turned down to violations alone must not pay for one line per
+	// package of a project-wide metrics rule.
+	quiet := &bytes.Buffer{}
+	if _, err := rule.Check(&archunit.CheckOptions{
+		Logging: &archunit.LogOptions{Writer: quiet, Level: archunit.LogLevelWarn},
+	}); err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if strings.Contains(quiet.String(), "metric:") {
+		t.Errorf("the log at warn holds\n%s\nwant no metric record", quiet)
+	}
+}
+
+func TestALogFileOfThisRepositoryIsTheArtifactACiJobWouldArchive(t *testing.T) {
+	// The CI half of the feature, end to end through the public surface: a folder nobody has created, a
+	// filename stamped with the run, and one file holding every rule of the suite in the order they ran.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	folder := filepath.Join(t.TempDir(), "build", "reports")
+	artifact := &archunit.LogOptions{
+		File:      filepath.Join(folder, "archunit.log"),
+		Timestamp: time.Date(2026, time.August, 15, 9, 30, 0, 0, time.UTC),
+	}
+	suite := []archunit.FilesCyclesCondition{
+		archunit.ProjectFiles(nil).InFolder("internal/apis/**").Should().HaveNoCycles(),
+		archunit.ProjectFiles(nil).InFolder("internal/dbs/**").Should().HaveNoCycles(),
+	}
+
+	for _, rule := range suite {
+		if _, err := rule.Check(&archunit.CheckOptions{Logging: artifact}); err != nil {
+			t.Fatalf("%s failed: %v", rule, err)
+		}
+	}
+
+	// The name a build has to collect is the bag's own Path, so a test archiving the log does not have to
+	// reimplement the insertion to find out what the file was called.
+	stamped := filepath.Join(folder, "archunit-2026-08-15T09-30-00.log")
+	if artifact.Path() != stamped {
+		t.Fatalf("Path() = %q, want %q", artifact.Path(), stamped)
+	}
+	appended := readLog(t, stamped)
+	for _, rule := range suite {
+		if !strings.Contains(appended, "start check: "+rule.String()) {
+			t.Errorf("the archived log holds\n%s\nwant the records of %s", appended, rule)
+		}
+	}
+	// A log file is opened once per check and appended to, which is what makes a suite's rules one readable
+	// artifact — and what lets two checks running in parallel share a file without cutting into each other.
+	if got := strings.Count(appended, "start check: "); got != len(suite) {
+		t.Errorf("the archived log holds %d start records, want one per rule of the suite", got)
+	}
+
+	// Overwrite is the other half of the switch, and it truncates once per check: a suite that sets it keeps
+	// only its last rule's records, which is why appending is the default.
+	artifact.Overwrite = true
+	for _, rule := range suite {
+		if _, err := rule.Check(&archunit.CheckOptions{Logging: artifact}); err != nil {
+			t.Fatalf("%s failed: %v", rule, err)
+		}
+	}
+	overwritten := readLog(t, stamped)
+	if got := strings.Count(overwritten, "start check: "); got != 1 {
+		t.Errorf("the overwritten log holds\n%s\nwant the last rule's records alone", overwritten)
+	}
+	if !strings.Contains(overwritten, "start check: "+suite[len(suite)-1].String()) {
+		t.Errorf("the overwritten log holds\n%s\nwant the last rule of the suite", overwritten)
+	}
+}
+
+func TestARuleThatWasNotAskedToLogWritesNothingThroughThePublicSurface(t *testing.T) {
+	// Off by default, and never through a global: a rule handed a bag with a log in it writes one, and the
+	// very next check of the very same rule writes nothing anywhere. That is what lets one test of a suite
+	// assert on a log while the rest of the suite runs beside it.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	path := filepath.Join(t.TempDir(), "archunit.log")
+	rule := archunit.ProjectFiles(nil).InFolder("internal/apis/**").Should().HaveNoCycles()
+
+	logged, err := rule.Check(&archunit.CheckOptions{Logging: &archunit.LogOptions{File: path}})
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	archived := readLog(t, path)
+	if archived == "" {
+		t.Fatal("the rule was asked to log to a file and wrote nothing")
+	}
+
+	for _, options := range []*archunit.CheckOptions{nil, {}, {Logging: &archunit.LogOptions{}}} {
+		quiet, err := rule.Check(options)
+		if err != nil {
+			t.Fatalf("%s failed: %v", rule, err)
+		}
+		// Nothing about a check changes when logging is off beyond the writing.
+		if len(quiet) != len(logged) {
+			t.Errorf("%s reported %v unlogged and %v logged; logging must not change the answer", rule, quiet, logged)
+		}
+		if got := readLog(t, path); got != archived {
+			t.Errorf("a check that was not asked to log wrote to the log file:\n%s", got)
+		}
+	}
+}
+
+func TestTheFourLogLevelsOfThePublicSurfaceAreTheOnesTheyName(t *testing.T) {
+	// The four constants pinned by value and not only by type: a re-export that named the debug level
+	// LogLevelInfo would compile, and a suite that asked for info would then hold the step-by-step of every check
+	// in it. The words are what a log line spells and what `grep '^warn '` matches, so each is asserted against
+	// the literal it has to be rather than against the package the surface re-exports it from.
+	for _, level := range []struct {
+		level archunit.LogLevel
+		word  string
+	}{
+		{level: archunit.LogLevelDebug, word: "debug"},
+		{level: archunit.LogLevelInfo, word: "info"},
+		{level: archunit.LogLevelWarn, word: "warn"},
+		{level: archunit.LogLevelError, word: "error"},
+	} {
+		if got := level.level.String(); got != level.word {
+			t.Errorf("the level reads %q, want %q", got, level.word)
+		}
+	}
+
+	// And the order the four are in, because a threshold is a comparison: they have to run strictly from the
+	// loudest log to the quietest, which is the property two constants naming one level breaks without changing
+	// any single word above.
+	ascending := []archunit.LogLevel{
+		archunit.LogLevelDebug, archunit.LogLevelInfo, archunit.LogLevelWarn, archunit.LogLevelError,
+	}
+	for i := 1; i < len(ascending); i++ {
+		if ascending[i-1] >= ascending[i] {
+			t.Errorf("the levels are %v, want them ascending from debug to error", ascending)
+		}
+	}
+}
+
+func TestTheLoggerThePublicSurfaceNamesOpensThroughTheCheckOptions(t *testing.T) {
+	// The door a caller assembling something of its own goes through, and the type it hands back, both named on
+	// the surface so that a helper of a user's own logs the way this library's rules do. One record is written
+	// through it and read back byte for byte, because that line is the whole contract of the type: the level in
+	// its column, the word of the fixed vocabulary, and what the record has to say.
+	written := &bytes.Buffer{}
+	options := &archunit.CheckOptions{Logging: &archunit.LogOptions{Writer: written}}
+
+	// Declared as the surface's own name for the type rather than inferred, so that a Logger aliased to
+	// something else fails to compile here as well as in the pin at the top of this file.
+	var log *archunit.Logger
+	var err error
+
+	if log, err = options.Logger(); err != nil {
+		t.Fatalf("opening the log of %v failed: %v", options.Logging, err)
+	}
+	log.StartCheck("a rule of a caller's own")
+	if err := log.Close(); err != nil {
+		t.Fatalf("closing the log failed: %v", err)
+	}
+
+	if want := "info  start check: a rule of a caller's own\n"; written.String() != want {
+		t.Errorf("the log holds %q, want %q", written.String(), want)
+	}
+}
+
+func TestTheLevelALogWasAskedForDecidesWhichRecordsACheckWritesThroughThePublicSurface(t *testing.T) {
+	// What the levels above are each for, read off one rule that reports something: a violation is warn, so a log
+	// turned down to it holds the two violation records and neither the rule nor its outcome — and a log turned
+	// down to error holds nothing at all, because a check that ran and disagreed with the code is not a failure.
+	// The rule is written with two stale globs so that what it reports does not move with this repository.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).
+		InFolder("internal/apis/**").
+		ShouldNot().
+		DependOnFiles().
+		InFolder("internal/db/**")
+
+	warned := &bytes.Buffer{}
+	violations, err := rule.Check(&archunit.CheckOptions{
+		Logging: &archunit.LogOptions{Writer: warned, Level: archunit.LogLevelWarn},
+	})
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(violations) != 2 {
+		t.Fatalf("%s reported %v, want the two empty populations", rule, violations)
+	}
+	want := strings.Join([]string{
+		`warn  violation: empty-test: files: path without filename matches "internal/apis/**" -> nothing`,
+		`warn  violation: empty-test: files to depend on: path without filename matches "internal/db/**" -> nothing`,
+		"",
+	}, "\n")
+	if warned.String() != want {
+		t.Errorf("the log at warn holds\n%s\nwant\n%s", warned, want)
+	}
+
+	quiet := &bytes.Buffer{}
+	if _, err := rule.Check(&archunit.CheckOptions{
+		Logging: &archunit.LogOptions{Writer: quiet, Level: archunit.LogLevelError},
+	}); err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if quiet.String() != "" {
+		t.Errorf("the log at error holds\n%s\nwant nothing at all: a check that ran is not a failure", quiet)
+	}
+}
+
+func TestEveryRuleFamilyOfThisRepositoryLogsItsOwnStepsThroughThePublicSurface(t *testing.T) {
+	// One row per terminal this library has, each over a scope of this repository that is deliberately *not*
+	// empty, which is what makes the second half of a check's log reachable: the empty-test guard returns before
+	// the steps after it, so a rule with a stale glob would leave every one of those records unwritten. Each row
+	// asserts the whole of what its own terminal logs — the kernel's start and end records around the steps the
+	// terminal named itself, in the order it named them — so dropping the logged-check door, or any single
+	// LogProgress or LogMetric call in any of the nine, fails here.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	for _, family := range []struct {
+		name   string
+		rule   loggedRule
+		steps  []string
+		metric string
+	}{
+		{
+			name:  "have no cycles",
+			rule:  archunit.ProjectFiles(nil).InFolder("common/logging/**").Should().HaveNoCycles(),
+			steps: []string{"selected files", "dependencies between the selected files", "cycles"},
+		},
+		{
+			name: "depend on files",
+			rule: archunit.ProjectFiles(nil).InFolder("common/logging/**").
+				ShouldNot().DependOnFiles().InFolder("files/**"),
+			steps: []string{
+				"selected files", "files to depend on", "dependencies from the selected files to the object's",
+			},
+		},
+		{
+			name:  "have name",
+			rule:  archunit.ProjectFiles(nil).InFolder("common/logging/**").Should().HaveName("*.go"),
+			steps: []string{"selected files"},
+		},
+		{
+			name:  "adhere to",
+			rule:  archunit.ProjectFiles(nil).InFolder("common/logging/**").Should().AdhereTo(isGoFile, "be a Go file"),
+			steps: []string{"selected files", "source files read"},
+		},
+		{
+			name: "depend on external modules",
+			rule: archunit.ProjectFiles(nil).InFolder("common/logging/**").
+				ShouldNot().DependOnExternalModules().Matching("gopkg.in/**"),
+			steps: []string{
+				"selected files",
+				"external modules matched",
+				"dependencies from the selected files to those modules",
+			},
+		},
+		{
+			name: "may only depend on layers",
+			rule: archunit.ProjectLayers(nil).
+				Layer("kernel").DefinedByFolder("common/**").
+				Layer("files").DefinedByFolder("files/**").
+				WhereLayer("files").MayOnlyDependOnLayers("kernel"),
+			steps: []string{"declared layers", "clauses", "dependencies between the layers"},
+		},
+		{
+			name:   "should be below",
+			rule:   archunit.Metrics(nil).InPath("common/logging/level.go").Count().LinesOfCode().ShouldBeBelow(400),
+			steps:  []string{"measurements"},
+			metric: "info  metric: common/logging/level.go: lines of code = ",
+		},
+		{
+			name: "should satisfy",
+			rule: archunit.Metrics(nil).InPath("common/logging/level.go").Count().LinesOfCode().
+				ShouldSatisfy(func(measurement archunit.Measurement, _ archunit.MetricsClassInfo) bool {
+					return measurement.Value > 0
+				}, "hold at least one line of code"),
+			steps:  []string{"measurements"},
+			metric: "info  metric: common/logging/level.go: lines of code = ",
+		},
+		{
+			name:  "should not be in zone of uselessness",
+			rule:  archunit.Metrics(nil).InFolder("common/logging/**").Distance().ShouldNotBeInZoneOfUselessness(),
+			steps: []string{"selected components"},
+		},
+	} {
+		t.Run(family.name, func(t *testing.T) {
+			log := &bytes.Buffer{}
+			violations, err := family.rule.Check(&archunit.CheckOptions{
+				Logging: &archunit.LogOptions{Writer: log, Level: archunit.LogLevelDebug},
+			})
+			if err != nil {
+				t.Fatalf("%s failed: %v", family.rule, err)
+			}
+			for _, violation := range violations {
+				// A scope of this repository that has gone stale would report the guard's own violation and log
+				// none of the steps after it, which is a broken test rather than a rule this row is about.
+				if violation.Kind() == archunit.KindEmptyTest {
+					t.Fatalf("%s selected nothing: %s", family.rule, violation)
+				}
+			}
+
+			lines := strings.Split(strings.TrimSuffix(log.String(), "\n"), "\n")
+			if want := "info  start check: " + family.rule.String(); lines[0] != want {
+				t.Errorf("the log opens with %q, want %q", lines[0], want)
+			}
+			end := "info  end check: " + family.rule.String() + ": " + checkOutcome(len(violations))
+			if last := lines[len(lines)-1]; last != end {
+				t.Errorf("the log ends with %q, want %q", last, end)
+			}
+			if steps := progressSteps(lines); !slices.Equal(steps, family.steps) {
+				t.Errorf("the log holds the steps %v, want %v", steps, family.steps)
+			}
+			if family.metric == "" {
+				return
+			}
+			if !slices.ContainsFunc(lines, func(line string) bool { return strings.HasPrefix(line, family.metric) }) {
+				t.Errorf("the log holds\n%s\nwant a metric record reading %q", log, family.metric)
+			}
+		})
+	}
+}
+
+// loggedRule is a rule as the table above needs one: checkable, and able to say which rule it is. Every terminal
+// of this library is both, because the start and end records of a check name the rule's own sentence — which is
+// what the surface's Checkable alone does not promise, since a helper looping over a suite's rules only ever runs
+// them.
+type loggedRule interface {
+	archunit.Checkable
+	fmt.Stringer
+}
+
+// progressSteps are the steps a check said it took, in the order it took them: the step of every `progress`
+// record of a log, with the count it came to left off.
+//
+// The counts are left out on purpose. What each of them comes to moves with every commit to this repository,
+// while which steps a terminal reports is the thing the rule families are being held to — and a step that is
+// missing from this list is a LogProgress call that was deleted or never reached.
+//
+// What each step *came to* is pinned a level down instead, over fixture projects whose shape a test fixes
+// rather than the repository: `logged_progress_test.go` in files/fluentapi, layers/fluentapi and
+// metrics/fluentapi compares the whole `debug progress: <step>: <count>` line, and the metrics one every
+// `info  metric:` record beside it.
+func progressSteps(lines []string) []string {
+	steps := make([]string, 0, len(lines))
+	for _, line := range lines {
+		record, ok := strings.CutPrefix(line, "debug progress: ")
+		if !ok {
+			continue
+		}
+		step, _, _ := strings.Cut(record, ": ")
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+// checkOutcome is how an `end check` record states what a rule reported: the count, and the word a reader of a
+// log is looking for. It is spelled out here rather than read off the library so that the wording of a log line
+// is asserted against a literal.
+func checkOutcome(violations int) string {
+	switch violations {
+	case 0:
+		return "no violations"
+	case 1:
+		return "1 violation"
+	default:
+		return strconv.Itoa(violations) + " violations"
+	}
+}
+
+// readLog is the log file a build would archive, read back as the text it is.
+func readLog(t *testing.T, path string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the log file %q failed: %v", path, err)
+	}
+	return string(content)
 }
 
 // recorder is a test framework's handle that records what it was told instead of failing, which is the only way

@@ -6,6 +6,7 @@ import (
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 )
 
@@ -118,6 +119,10 @@ func (b MetricBuilder) ShouldSatisfy(predicate metricsassertion.Satisfaction, re
 // classes and packages they make up, read the metric off every subject, ask the user's function about each
 // number — and the only stage of the chain that reads anything or calls the predicate.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the
+// count each of those steps came to, every number it measured, every violation and the outcome. With no log
+// asked for, which is the default, nothing is written and nothing else about the check changes.
+//
 // The metric is read only once the project has been selected, and the predicate is asked only once the
 // selection is known to have produced a number: a rule whose glob matches nothing calls the user's function
 // not at all and is reported as the empty test it is.
@@ -127,23 +132,34 @@ func (b MetricBuilder) ShouldSatisfy(predicate metricsassertion.Satisfaction, re
 // EmptyTestViolation of a rule that measured nothing.
 //
 // The error is technical or the user's — a missing function or message, a pattern a scope verb could not
-// compile, a locator naming no Go project, a project that will not load — and never a failing rule. When it
-// is non-nil the violations say nothing.
+// compile, a locator naming no Go project, a project that will not load, a log this check was asked for that
+// could not be opened, written or closed — and never a failing rule. When it is non-nil the violations say
+// nothing.
 func (c MetricsSatisfactionCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	subjects, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		subjects, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
 
-	measurements := c.rule.readings(subjects)
-	if empty := options.GatherEmptyTestViolations(c.population(len(measurements))); len(empty) > 0 {
-		// A rule with no number is reported instead of being judged: no measurement means no measurement
-		// the predicate says no about, so every such rule would otherwise pass forever.
-		return empty, nil
-	}
+		measurements := c.rule.readings(subjects)
+		log.LogProgress("measurements", len(measurements))
+		for _, measurement := range measurements {
+			// Every number the predicate was asked about, for the reason MetricsThresholdCondition.Check logs
+			// its own: a rule written around a closure is the one whose numbers a reader cannot work out from
+			// the sentence.
+			log.LogMetric(measurement)
+		}
 
-	return metricsassertion.GatherSatisfactionViolations(
-		measurements, subjects.Classes, c.predicate, c.requirement, assertion.Should), nil
+		if empty := options.GatherEmptyTestViolations(c.population(len(measurements))); len(empty) > 0 {
+			// A rule with no number is reported instead of being judged: no measurement means no measurement
+			// the predicate says no about, so every such rule would otherwise pass forever.
+			return empty, nil
+		}
+
+		return metricsassertion.GatherSatisfactionViolations(
+			measurements, subjects.Classes, c.predicate, c.requirement, assertion.Should), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `metrics, classname matches "*Service",
