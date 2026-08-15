@@ -17,6 +17,11 @@
 // three describe files and the last describes classes, and what a scope means, given a project, is
 // metrics/projection.SelectFiles followed by metrics/projection.SelectSubjects.
 //
+// Each of them takes an exclusion, which is `except` and its four targeted forms in except.go: it qualifies
+// the verb it follows, so `in folder "app/**", except "**/generated"` is one clause and not an inverted rule.
+// Because this family's scope describes two populations, an exclusion is about the same one as the verb it
+// qualifies — that is the one thing except.go says which no other module has to.
+//
 // After the scope comes the group the metric is chosen out of: `count` groups the eight counts this library
 // can take of a file or a class, and `distance` the five numbers it takes of a package. One verb of the
 // group closes it, and Measure is the resolution door of what that describes — the numbers themselves, one

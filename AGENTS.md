@@ -188,6 +188,7 @@ the name.
 | Mood | exactly 1, except where the predicate carries it | a positive or negated predicate builder |
 | Predicate | exactly 1 | a terminal, or an object builder if the predicate is relational |
 | Object | 1..n, chainable | a terminal |
+| Exclusion | 0..n after any selector, qualifying the one it follows | whatever the selector returned |
 | Terminal | exactly 1 | violations, or a rendered artifact |
 
 The one exception to the mood stage is the pair of layer predicates below: `may only depend on layers`
@@ -206,6 +207,15 @@ an optional project locator; omitted means auto-detect. Never make it required.
 `in file`, `for classes matching`, `defined by`, `defined by regex`, `defined by folder`, `layer`,
 `where layer`. The last two are the layer policy's pair: `layer(name)`, closed by a `defined by` verb,
 declares who exists, and `where layer(name)` picks the one a clause is about.
+
+**Exclusions** are the `except` family, and every selector takes one — a scope verb, an object verb, a
+layer declaration, a pattern modifier. `except` alone reads its patterns against the same part of an
+identifier as the selector it follows; `except with name`, `except in folder`, `except in path` and
+`except classes matching` name a target of their own, and a family offers exactly the ones its own
+selectors already name. An exclusion qualifies the selector in front of it and nothing else, it is
+repeatable, and `except` with no selector in front of it is a user error rather than a rule about
+everything. This is what keeps *everything under `app/`, but not the generated folder* one clause
+instead of an inverted rule about the generated folder.
 
 **Mood** is exactly two words, `should` and `should not`. No synonyms, ever.
 

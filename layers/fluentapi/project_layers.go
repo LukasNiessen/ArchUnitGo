@@ -19,6 +19,12 @@
 // depend on layers`, says what they may do. The second half is where the policy becomes a Checkable, which
 // is why a chain that declares layers and no clause cannot be checked: it is not yet a rule about anything.
 //
+// A declaration takes an exclusion, which is `except` and its two targeted forms in except.go: it qualifies
+// the declaration it follows, so `layer "api" defined by folder "internal/api/**", except "**/generated"` is
+// one declaration and not a list of the sibling folders that are in the layer. A file taken out of a layer
+// that way is in no layer, so every dependency it is an end of is ignored — the same rule as for a file no
+// pattern ever claimed.
+//
 // This module is a convenience skin over the files module's vocabulary and it says nothing a pile of
 // file-level rules could not — it exists because expressing an N-layer policy as N² pairwise rules is
 // miserable, and because a report about `api` and `db` reads better than one about two folder globs. The
@@ -95,6 +101,10 @@ type LayersBuilder struct {
 	// declaration of a name already here widens that layer instead of adding another. Order is what
 	// resolves an overlap, per projection.LayerOf, so it is the user's and never sorted.
 	layers []projection.Layer
+	// declared is the name of the layer the chain declared most recently, which is the one an `except`
+	// qualifies. It is a name rather than an index into the layers above because a name declared twice
+	// widens the layer it already named, so the layer just declared is not always the last of them.
+	declared string
 	// clauses are the policy's clauses, in the order they were written. All of them are in force; the
 	// order they are evaluated in is assertion.GatherDependencyViolations's, not this one.
 	clauses []layersassertion.Clause
@@ -271,6 +281,7 @@ func (b LayersBuilder) rejected() string {
 // populations, a clause's lookup — can take one layer per name for granted.
 func (b LayersBuilder) declaring(name string, selector matching.Filter) LayersBuilder {
 	declared := b
+	declared.declared = name
 	declared.layers = slices.Clone(b.layers)
 	for index, layer := range declared.layers {
 		if layer.Name() == name {

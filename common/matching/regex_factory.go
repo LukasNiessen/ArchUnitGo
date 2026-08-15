@@ -6,6 +6,11 @@
 // regular expression, and nothing downstream ever sees a glob again. A Pattern plus a MatchTarget
 // is a Filter, and Filter.Matches is the library's single matching function: filename, path, folder
 // and classname rules all come through it.
+//
+// A Filter also carries its exclusions, which is what the fluent API's `except` companion compiles to:
+// Excepting is the one place that says an exclusion qualifies the selector it follows, and
+// Filter.Excluding and Filter.ExcludingMatchers are its two forms — a bare pattern read against the
+// qualified selector's own target, and one that names a target of its own.
 package matching
 
 import (

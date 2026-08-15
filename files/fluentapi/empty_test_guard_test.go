@@ -33,6 +33,23 @@ func TestEveryTerminalOfThisModuleGuardsAgainstAnEmptyTest(t *testing.T) {
 		}
 	}
 
+	// The same guard held to the third level of the walk, which the list above cannot see: every name in it
+	// is a predicate the first level finds, so a third level that found nothing — or one whose `except`
+	// verbs were folded back into the second — would leave the sweep saying nothing about the companion an
+	// exclusion is. An exclusion is only valid after a verb that selected something, so each of them has to
+	// be reachable through an object verb and nowhere else.
+	for _, sentence := range []string{
+		"DependOnFiles.InFolder.Except",
+		"DependOnFiles.InFolder.ExceptWithName",
+		"DependOnFiles.InFolder.ExceptInFolder",
+		"DependOnFiles.InFolder.ExceptInPath",
+		"DependOnExternalModules.Matching.Except",
+	} {
+		if !slices.ContainsFunc(terminals, func(found terminal) bool { return found.sentence == sentence }) {
+			t.Fatalf("the walk found %d terminals and none of them is %s: it has gone blind, and the sweep below proves nothing", len(terminals), sentence)
+		}
+	}
+
 	for _, found := range terminals {
 		t.Run(found.sentence, func(t *testing.T) {
 			violations, err := found.checkable.Check(nil)
@@ -76,23 +93,41 @@ type terminal struct {
 	checkable kernel.Checkable
 }
 
-// terminalsOf are every Checkable reachable from these stages: each stage's predicates, and the object verbs
+// terminalsOf are every Checkable reachable from these stages: each stage's predicates, the object verbs
 // chained onto whichever of those are both a terminal and an object stage — `depend on files` is a sentence
-// the moment it is typed and still narrows, so it is a terminal at two depths and both are swept.
+// the moment it is typed and still narrows, so it is a terminal at two depths and both are swept — and the
+// `except` companion of each of those object verbs.
 //
-// Two levels is where it stops, because an object verb hands back its own type and a deeper walk would never
-// end. A third level would only repeat the same three verbs over a Checkable that is already in the list.
+// Three levels is where it stops, and the third exists for one reason: an exclusion qualifies the selector
+// it follows, so `depend on files, except "**"` is a misuse the fluent API rejects rather than a step in the
+// chain, and the only valid place to type an exclusion is after a verb that selected something. Deeper than
+// that an object verb hands back its own type and the walk would never end, while repeating the same verbs
+// over a Checkable already in the list proves nothing new.
 func terminalsOf(t *testing.T, stages ...any) []terminal {
 	t.Helper()
 
 	var terminals []terminal
 	for _, stage := range stages {
-		for _, found := range reachableTerminals(t, "", stage) {
-			terminals = append(terminals, found)
-			terminals = append(terminals, reachableTerminals(t, found.sentence, found.checkable)...)
+		for _, predicate := range reachableTerminals(t, "", stage, narrowing) {
+			terminals = append(terminals, predicate)
+			for _, object := range reachableTerminals(t, predicate.sentence, predicate.checkable, narrowing) {
+				terminals = append(terminals, object)
+				terminals = append(terminals, reachableTerminals(t, object.sentence, object.checkable, excluding)...)
+			}
 		}
 	}
 	return terminals
+}
+
+// narrowing and excluding are the two halves of a stage's method set: the verbs that select, and the `except`
+// companions that qualify what a verb selected. The walk needs them apart because the order they are typed in
+// is part of the grammar — everything else about a stage it discovers by reflection.
+func narrowing(method string) bool {
+	return !excluding(method)
+}
+
+func excluding(method string) bool {
+	return strings.HasPrefix(method, "Except")
 }
 
 // reachableTerminals calls every method of one stage that takes the grammar a step further and returns the
@@ -101,8 +136,9 @@ func terminalsOf(t *testing.T, stages ...any) []terminal {
 //
 // A method with anything other than one result is not a step in the chain — `Check` answers with violations
 // and an error, `SelectFiles` reads the project — and a result that is not a Checkable is a stage the walk
-// leaves to the mood tests. Arguments are synthesized by argumentOf.
-func reachableTerminals(t *testing.T, prefix string, stage any) []terminal {
+// leaves to the mood tests. wanted is which half of the method set this level is after, as terminalsOf
+// describes. Arguments are synthesized by argumentOf.
+func reachableTerminals(t *testing.T, prefix string, stage any, wanted func(string) bool) []terminal {
 	t.Helper()
 
 	var terminals []terminal
@@ -111,7 +147,7 @@ func reachableTerminals(t *testing.T, prefix string, stage any) []terminal {
 
 	for index := range value.NumMethod() {
 		method := value.Type().Method(index)
-		if method.Type.NumOut() != 1 || !method.Type.Out(0).Implements(checkable) {
+		if method.Type.NumOut() != 1 || !method.Type.Out(0).Implements(checkable) || !wanted(method.Name) {
 			continue
 		}
 
@@ -129,8 +165,9 @@ func reachableTerminals(t *testing.T, prefix string, stage any) []terminal {
 }
 
 // argumentsFor is one synthesized argument per parameter the method declares, so that the walk can type a
-// chain it knows nothing about. A variadic method is called with none of its variadic arguments, which is
-// the chain a user types when they pass only what a verb requires.
+// chain it knows nothing about. A variadic method is called with exactly one variadic argument, because the
+// verbs of this module that take a variadic list — the `except` companions — require it: a verb the user typed
+// that narrows nothing is reported rather than ignored, and that rejection is not what this sweep is about.
 func argumentsFor(t *testing.T, method reflect.Method) []reflect.Value {
 	t.Helper()
 
@@ -140,28 +177,45 @@ func argumentsFor(t *testing.T, method reflect.Method) []reflect.Value {
 		parameters--
 	}
 
-	arguments := make([]reflect.Value, 0, parameters)
+	pattern := selectsEverything
+	if excluding(method.Name) {
+		pattern = excludesNothing
+	}
+
+	arguments := make([]reflect.Value, 0, parameters+1)
 	for index := 1; index <= parameters; index++ {
-		arguments = append(arguments, argumentOf(t, method.Type.In(index)))
+		arguments = append(arguments, argumentOf(t, method.Type.In(index), pattern))
+	}
+	if method.Type.IsVariadic() {
+		// reflect.Value.Call takes the variadic arguments spread, so the element type is what to synthesize.
+		arguments = append(arguments, argumentOf(t, method.Type.In(method.Type.NumIn()-1).Elem(), pattern))
 	}
 	return arguments
 }
 
-// argumentOf is the one argument of a kind the grammar of this library takes: a pattern, which is the glob
-// that matches everything, or a user's own function, which answers whatever its zero value is because the
-// guard has to fire before it is ever called.
+// The two patterns the walk types, and both are there so that no verb it synthesized is the reason nothing
+// matched: the empty selection under test is the scope's stale folder and only that.
+const (
+	// selectsEverything is what a selecting verb is given.
+	selectsEverything = "**"
+	// excludesNothing is what an `except` companion is given: a pattern no identifier can match, because an
+	// exclusion narrows from the other side and `**` there would empty the selection the verb before it made.
+	excludesNothing = "not the name of any file in any project"
+)
+
+// argumentOf is the one argument of a kind the grammar of this library takes: pattern, which is the one the
+// verb being called should be given, or a user's own function, which answers whatever its zero value is
+// because the guard has to fire before it is ever called.
 //
 // Anything else is a deliberate failure rather than a zero value, because a verb taking a new kind of
 // argument is a verb whose meaning the walk cannot guess — a zero one might quietly turn the rule into a
 // sentence nobody meant, and the sweep would then hold the guard to nothing.
-func argumentOf(t *testing.T, parameter reflect.Type) reflect.Value {
+func argumentOf(t *testing.T, parameter reflect.Type, pattern string) reflect.Value {
 	t.Helper()
 
 	switch parameter.Kind() {
 	case reflect.String:
-		// The pattern that selects everything, so that no verb of the chain is the reason nothing matched:
-		// the empty selection under test is the scope's stale folder and only that.
-		return reflect.ValueOf("**").Convert(parameter)
+		return reflect.ValueOf(pattern).Convert(parameter)
 	case reflect.Func:
 		return reflect.MakeFunc(parameter, func([]reflect.Value) []reflect.Value {
 			results := make([]reflect.Value, 0, parameter.NumOut())

@@ -2128,3 +2128,88 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   stylesheet of its own, and asserted to fetch nothing. It asserts on the headings, the subjects and the page's
   self-containment rather than on any count a commit can move; the arithmetic of a page is pinned in
   `metrics/rendering/render_html_test.go` against hand-built measurements.
+
+## Issue #38 — Pattern exclusions: the `except` companion
+
+- WHY: the semantics live once, in `common/matching/exclusion.go`, as one function — `Excepting(selectors,
+  factory, patterns, build)` — and every family spells only the verb. `Filter` already carried an
+  `exclusions` field and `ExcludingMatchers`, so this issue added no second `Filter`, no second glob
+  compilation and no new matching primitive: what was missing was the rule about *which* selector an
+  exclusion attaches to and the words for it.
+- WHY: an exclusion qualifies the **last** selector of the chain rather than the whole selection. `in folder
+  "app/**", except "**/generated"` is one clause and a chain of selectors is a chain of clauses, so a scope
+  narrowed twice and then excepted once still means what it reads as — which is also what makes the verb
+  repeatable without a second stage to hold the exclusions in.
+- WHY: a plain `except` inherits the target of the selector it qualifies, so the same pattern is a folder
+  after `in folder` and a name after `with name`. The targeted forms exist for the other half of the verb,
+  which is not sugar: `in folder "app/**", except with name "*_gen.go"` cannot be written as a pattern of
+  either verb alone.
+- WHY: each family offers `except` plus exactly the targeted forms its own selectors already name — four in
+  the files module (`with name`, `in folder`, `in path`), five in metrics (those plus `except classes
+  matching`), three in layers (`in folder`, `in path`, the two `defined by` verbs), and in the graph module the
+  plain verb alone, because every pattern there is matched against the whole identifier and `except in path`
+  would be a second spelling of `except`. `in file` is a path selector compiled from a literal, so
+  `except in path` is its targeted form and no fifth spelling was added.
+- WHY: `ErrExclusionOfAnotherPopulation` is a third sentinel the issue does not ask for, and it guards the one
+  family whose scope describes two populations: `for classes matching "*Service", except in folder
+  "internal/legacy"` would ask for the folder of `internal/api.UserService`. That is a question with a wrong
+  answer rather than no answer, so it is refused where the user typed it instead of quietly matching nothing.
+  The guard is in the kernel because the kernel is where an exclusion's target meets its selector's.
+- WHY: `Filter.String()` repeats the word `excluding` before an exclusion that names its own target —
+  `path matches "app/**", excluding "**/generated", excluding filename matches "*_gen.go"` — and joins
+  *consecutive* plain ones into one list. Without the repetition a targeted exclusion reads as a second
+  selector of the chain, and a plain one written after a targeted one reads as a second pattern of it: `in
+  folder "app/**", except with name "*_gen.go", except "**/generated"` would otherwise render the folder
+  pattern as a second filename to exclude.
+- WHY: in the graph module `except` binds to the most recent *pattern* modifier, tracked in an unexported
+  `qualified patternModifier` field, because the four of them append to four different fields of
+  `SnapshotOptions` and nothing in a resolved query says which was written last. `titled`, `including ...`
+  and `with check options` do not clear it: they are not selectors, so an exclusion after one of them still
+  qualifies the pattern it reads as following. `lastSelector` is a free function taking `*SnapshotOptions`
+  rather than a method, because writing through it needs a pointer and `recvcheck` — rightly — forbids
+  `GraphBuilder` having one receiver of each kind.
+- WHY: in the layers module `except` binds to the most recently *declared* layer, tracked by name in an
+  unexported `declared` field, because `declaring` merges a repeated name into the layer already declared
+  under it — so `b.layers[len-1]` is the wrong layer as soon as a policy declares `domain` twice. Within that
+  layer the exclusion qualifies the declaration it follows and not the layer's whole membership, which is the
+  same rule one level down: a layer declared twice is the only place in this library where chaining widens.
+- WHY: a file excluded from a layer is in no layer, and that is stated rather than worked around — every
+  dependency it is an end of is ignored, exactly as for a file no pattern ever claimed. Moving it somewhere
+  else or reporting it would be inventing a third rule for the projection.
+- WHY: on the third-party rule `except` qualifies the `matching` alternative it follows and not the list of
+  them. Those objects are combined with OR, so an exclusion of the list would be a different rule — and the
+  useful sentence is `matching "*.*/**", except "golang.org/x/tools/**"`, one alternative with one hole.
+- WHY: `files/fluentapi/empty_test_guard_test.go`'s reflection walk was extended rather than exempted. It
+  types every terminal of the module from the builder's method set, and an `except` before any object verb is
+  a chain the grammar rejects, so the walk now goes three levels deep — scope, predicate, object — offers
+  `Except*` verbs only where a selector precedes them, gives a variadic verb exactly one argument, and passes
+  a pattern that excludes nothing so that the guard still sees the population the rule was about. Nothing was
+  skipped, deleted or loosened.
+- WHY: zero matches after an exclusion is not special-cased. A scope excepted down to nothing is the
+  empty-test guard's own failure and is reported as one, which is the point of the guard: an exclusion that
+  went stale is exactly the mistake it exists to catch.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. The `except` verbs are methods,
+  which that list cannot guard. This follows #27, #28, #32, #33, #34, #35, #36 and #37.
+- WHY: no `//nolint` was added anywhere in this issue.
+- WHY: the prose the change made false was updated in the same diff — `common/matching`'s `Filter` and
+  `RegexFactory` docs, `files/fluentapi`'s package doc and its `depend on files` and `depend on external
+  modules` docs (the OR paragraph), `metrics/fluentapi`'s package doc (the scope-verb paragraph),
+  `layers/fluentapi`'s package doc (the two halves of the chain), `graph/fluentapi`'s package doc (the nine
+  modifiers), and in `archunit.go` the package doc plus the `ProjectFiles`, `ProjectLayers`, `Metrics` and
+  `ProjectGraph` docs, each of which counted or bounded the verbs a family takes.
+- WHY: `AGENTS.md` gained the word: an **Exclusions** paragraph beside the scope verbs and a row in the stage
+  table. The grammar is the file's own subject, and a verb every selector in every family takes cannot be
+  documented only in the port that implemented it first.
+- WHY: the integration tests are in `archunit_test.go`, dogfooding on this library:
+  `TestTheThirdPartyPolicyOfThisRepositoryIsOneRuleWithOneDocumentedHole` replaces this repository's eleven
+  folder-by-folder third-party rules with the one sentence they invert — nothing depends on a third-party
+  module, except the extractor on the loader — and asserts that the exclusion is load-bearing by checking the
+  same rule without it; `TestADomainModuleOfThisRepositoryDependsOnTheKernelAndOnNoOtherModule` puts the
+  exclusion on a rule's object; and `TestAnExclusionNarrowsWhatTheOtherFamiliesLookAtThroughThePublicSurface`
+  takes one folder of the kernel back out of a measured scope, a declared layer and a drawn report.
+- WHY: two dogfooding tests in `archunit_test.go` had the file list of `common/matching` written out in them —
+  `TestANamingRuleThisRepositoryBreaksReportsTheOffendingFiles` and
+  `TestTheAssertHelperFailsTheTestWithTheReportOfARuleThisRepositoryBreaks`, both about the one folder whose
+  files are not named `*_factory.go` — so `common/matching/exclusion.go` joining the folder made their
+  expectations false. They now name three offenders and count `3 violations:`. That is updating data this
+  change made stale, not loosening the assertion: both still pin the exact list, in order.

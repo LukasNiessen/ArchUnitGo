@@ -34,6 +34,7 @@ func (b GraphBuilder) FocusOn(pattern string, depth int) GraphBuilder {
 		return b.rejecting("focus on", pattern, err)
 	}
 	focused := b.modifying()
+	focused.qualified = focusedOn
 	focused.query.Focus = append(focused.query.Focus, projection.Focus{Selector: selector, Depth: depth})
 	return focused
 }
@@ -61,6 +62,7 @@ func (b GraphBuilder) ReachableFrom(pattern string) GraphBuilder {
 		return b.rejecting("reachable from", pattern, err)
 	}
 	reaching := b.modifying()
+	reaching.qualified = reachedFrom
 	reaching.query.ReachableFrom = append(reaching.query.ReachableFrom, selector)
 	return reaching
 }
@@ -88,6 +90,7 @@ func (b GraphBuilder) DependentsOf(pattern string) GraphBuilder {
 		return b.rejecting("dependents of", pattern, err)
 	}
 	depending := b.modifying()
+	depending.qualified = dependedOnBy
 	depending.query.DependentsOf = append(depending.query.DependentsOf, selector)
 	return depending
 }

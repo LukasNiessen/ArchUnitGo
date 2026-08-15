@@ -69,6 +69,7 @@ func (b GraphBuilder) CollapseByPattern(label, pattern string) GraphBuilder {
 		return b.rejecting("collapse by pattern", pattern, err)
 	}
 	collapsed := b.modifying()
+	collapsed.qualified = collapsedByPattern
 	group := projection.CollapseGroup{Label: label, Selector: selector}
 	collapsed.query.CollapseGroups = append(collapsed.query.CollapseGroups, group)
 	return collapsed

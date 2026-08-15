@@ -674,7 +674,7 @@ func TestANamingRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.T) {
 		offenders = append(offenders, naming.File)
 	}
 
-	want := []string{"common/matching/filter.go", "common/matching/match_target.go"}
+	want := []string{"common/matching/exclusion.go", "common/matching/filter.go", "common/matching/match_target.go"}
 	if !slices.Equal(offenders, want) {
 		t.Errorf("%s reports %v, want the folder's other files, %v", rule, offenders, want)
 	}
@@ -2414,10 +2414,14 @@ func TestTheAssertHelperFailsTheTestWithTheReportOfARuleThisRepositoryBreaks(t *
 	if lines[0] != rule.String() {
 		t.Errorf("the failure begins %q, want the rule as it was written, %q", lines[0], rule.String())
 	}
-	if lines[1] != "2 violations:" {
-		t.Errorf("the failure counts them as %q, want %q", lines[1], "2 violations:")
+	if lines[1] != "3 violations:" {
+		t.Errorf("the failure counts them as %q, want %q", lines[1], "3 violations:")
 	}
-	for number, offender := range []string{"common/matching/filter.go", "common/matching/match_target.go"} {
+	for number, offender := range []string{
+		"common/matching/exclusion.go",
+		"common/matching/filter.go",
+		"common/matching/match_target.go",
+	} {
 		want := "  " + strconv.Itoa(number+1) + ". " + offender +
 			`: should, filename matches "regex_factory.go"; it does not`
 		if lines[number+2] != want {
@@ -2603,6 +2607,131 @@ func TestASuiteWithNoRulesInItFailsThroughThePublicSurface(t *testing.T) {
 	if framework.helpers != 2 {
 		t.Errorf("the suite marked %d frames as helpers, want the re-export and the helper it delegates to",
 			framework.helpers)
+	}
+}
+
+func TestTheThirdPartyPolicyOfThisRepositoryIsOneRuleWithOneDocumentedHole(t *testing.T) {
+	// The `except` companion end to end through the public surface, and the argument for it in one line: the
+	// eleven folder-by-folder rules this repository keeps its third-party policy with are the inverted form of
+	// one sentence — nothing here depends on a third-party module, except the extractor on the loader. Written
+	// that way the exception is visible in the rule instead of being the absence of a rule, and a new folder is
+	// covered the day it lands rather than the day somebody remembers to add a line.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectFiles(nil).
+		ShouldNot().
+		DependOnExternalModules().
+		Matching("*.*/**").
+		Except("golang.org/x/tools/**")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, violation)
+	}
+	// And the hole is a hole in one rule rather than in the policy: without it the same sentence reports the
+	// one file that reaches through it, so a reader can see that the exclusion is load-bearing.
+	unexcepted := archunit.ProjectFiles(nil).ShouldNot().DependOnExternalModules().Matching("*.*/**")
+	reported, err := unexcepted.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", unexcepted, err)
+	}
+	if len(reported) == 0 {
+		t.Errorf("%s reported nothing, want the dependency the exclusion above takes back out", unexcepted)
+	}
+	for _, violation := range reported {
+		offender, ok := violation.(archunit.FileExternalDependencyViolation)
+		if !ok {
+			t.Fatalf("the violation is a %T, want a FileExternalDependencyViolation", violation)
+		}
+		if offender.File != "common/extraction/extract_graph.go" {
+			t.Errorf("%s reported %q, want the one file the policy excepts", unexcepted, offender.File)
+		}
+	}
+}
+
+func TestADomainModuleOfThisRepositoryDependsOnTheKernelAndOnNoOtherModule(t *testing.T) {
+	// The exclusion on the object of a rule rather than on its scope, dogfooding the layout AGENTS.md states:
+	// a domain module may reach the shared kernel and itself, and no other module. `in folder "*/**", except
+	// "common/**", "metrics/**"` is that sentence, and the alternative is one rule per pair of modules — which
+	// is the N² writing this repository's own layers policy exists to avoid.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rules := []archunit.FilesDependencyCondition{
+		archunit.ProjectFiles(nil).InFolder("files/**").ShouldNot().
+			DependOnFiles().InFolder("*/**").Except("common/**", "files/**"),
+		archunit.ProjectFiles(nil).InFolder("layers/**").ShouldNot().
+			DependOnFiles().InFolder("*/**").Except("common/**", "layers/**"),
+		archunit.ProjectFiles(nil).InFolder("metrics/**").ShouldNot().
+			DependOnFiles().InFolder("*/**").Except("common/**", "metrics/**"),
+		archunit.ProjectFiles(nil).InFolder("graph/**").ShouldNot().
+			DependOnFiles().InFolder("*/**").Except("common/**", "graph/**"),
+	}
+
+	for _, rule := range rules {
+		t.Run(rule.String(), func(t *testing.T) {
+			violations, err := rule.Check(nil)
+			if err != nil {
+				t.Fatalf("%s failed: %v", rule, err)
+			}
+			for _, violation := range violations {
+				t.Errorf("%s: %s", rule, violation)
+			}
+		})
+	}
+}
+
+func TestAnExclusionNarrowsWhatTheOtherFamiliesLookAtThroughThePublicSurface(t *testing.T) {
+	// The same word in the three families whose selectors are not the files module's: a measured scope, a
+	// layer's membership and a report's focus, each with one folder of this repository taken back out of it.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	measurements, err := archunit.Metrics(nil).InFolder("common/**").Except("common/matching").
+		Count().LinesOfCode().Measure(nil)
+	if err != nil {
+		t.Fatalf("measuring the kernel without its pattern-matching package failed: %v", err)
+	}
+	measured := make([]string, 0, len(measurements))
+	for _, measurement := range measurements {
+		measured = append(measured, measurement.Subject)
+	}
+	if !slices.Contains(measured, "common/archerror/user_error.go") {
+		t.Errorf("the metrics scope measured %v, want the rest of the kernel still in it", measured)
+	}
+	if slices.Contains(measured, "common/matching/filter.go") {
+		t.Errorf("the metrics scope measured %v, want the excepted folder out of it", measured)
+	}
+
+	membership, err := archunit.ProjectLayers(nil).
+		Layer("kernel").DefinedByFolder("common/**").Except("common/matching").
+		SelectLayerFiles(nil)
+	if err != nil {
+		t.Fatalf("declaring the kernel without its pattern-matching package failed: %v", err)
+	}
+	if !slices.Contains(membership["kernel"], "common/archerror/user_error.go") {
+		t.Errorf("the kernel layer came to %v, want the rest of the kernel still in it", membership["kernel"])
+	}
+	if slices.Contains(membership["kernel"], "common/matching/filter.go") {
+		t.Errorf("the kernel layer came to %v, want the excepted folder out of it", membership["kernel"])
+	}
+
+	snapshot, err := archunit.ProjectGraph(nil).
+		FocusOn("common/**", 0).Except("common/matching/*.go").
+		Snapshot()
+	if err != nil {
+		t.Fatalf("drawing the kernel without its pattern-matching package failed: %v", err)
+	}
+	drawn := make([]string, 0, len(snapshot.Nodes()))
+	for _, node := range snapshot.Nodes() {
+		drawn = append(drawn, node.Label())
+	}
+	if !slices.Contains(drawn, "common/archerror/user_error.go") {
+		t.Errorf("the report drew %v, want the rest of the kernel still in it", drawn)
+	}
+	if slices.Contains(drawn, "common/matching/filter.go") {
+		t.Errorf("the report drew %v, want the excepted folder out of it", drawn)
 	}
 }
 
