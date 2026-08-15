@@ -92,6 +92,28 @@ var (
 		WhereLayer("files").MayNotDependOnLayers("kernel")
 )
 
+// The report family, whose chain is one stage and whose terminal is not a Checkable, because a report is not a
+// rule: the builder is named so that a described query can be stored and branched into as many focuses and
+// output formats as a suite wants, and the snapshot's four parts are named so that a caller can write a
+// renderer of their own over them. The two slices are asserted as slices because that is the only compile-time
+// way to say that these aliases name what a snapshot actually hands back.
+var (
+	_ archunit.GraphBuilder = archunit.ProjectGraph(nil).
+		IncludingExternalDependencies().
+		IncludingSelfDependencies().
+		FocusOn("common/**", 1).
+		ReachableFrom("archunit.go").
+		DependentsOf("common/extraction/**").
+		CollapseToFolderDepth(2).
+		CollapseByPattern("kernel", "common/**").
+		Titled("the modules of this library").
+		WithCheckOptions(&archunit.CheckOptions{IncludeTestFiles: true})
+	_ archunit.GraphBuilder = archunit.DependencyGraph(nil)
+	_ archunit.GraphSummary = archunit.GraphSnapshot{}.Summary()
+	_ []archunit.GraphNode  = archunit.GraphSnapshot{}.Nodes()
+	_ []archunit.GraphEdge  = archunit.GraphSnapshot{}.Edges()
+)
+
 // The violation types a rule reports are on the surface too, because a user who wants more than a pass or
 // a fail reads the violation rather than its message.
 var (
@@ -639,6 +661,8 @@ func TestThisRepositoryObeysItsOwnThirdPartyDependencyPolicy(t *testing.T) {
 		// what Go source means. Every other package is stdlib-only, so a new dependency anywhere else fails
 		// here rather than in a reviewer's reading of go.mod.
 		archunit.ProjectFiles(nil).InFolder("files/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("layers/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("graph/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("archtest").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("common/assertion").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("common/projection/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
@@ -780,14 +804,15 @@ func TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 }
 
 // theLayersOfThisRepository is the layout AGENTS.md describes, declared as a named-layer policy declares it:
-// the shared kernel, the two domain modules written so far and the report layer, one folder of this repository
-// each. It is a function rather than four repeated stages because that is the point of the declaration stage
+// the shared kernel, the three domain modules written so far and the report layer, one folder of this repository
+// each. It is a function rather than five repeated stages because that is the point of the declaration stage
 // being a value — a project's layers are typed once and every policy below branches off them.
 func theLayersOfThisRepository() archunit.LayersBuilder {
 	return archunit.ProjectLayers(nil).
 		Layer("kernel").DefinedByFolder("common/**").
 		Layer("files").DefinedByFolder("files/**").
 		Layer("layers").DefinedByFolder("layers/**").
+		Layer("graph").DefinedByFolder("graph/**").
 		Layer("report").DefinedByFolder("archtest/**")
 }
 
@@ -804,7 +829,7 @@ func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
 		t.Fatalf("SelectLayerFiles failed: %v", err)
 	}
 
-	if len(membership) != 4 {
+	if len(membership) != 5 {
 		t.Errorf("%s came to %d layers, want one key per declared layer", policy, len(membership))
 	}
 	for _, wanted := range []struct {
@@ -814,6 +839,7 @@ func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
 		{layer: "kernel", file: "common/matching/filter.go"},
 		{layer: "files", file: "files/fluentapi/project_files.go"},
 		{layer: "layers", file: "layers/fluentapi/project_layers.go"},
+		{layer: "graph", file: "graph/fluentapi/project_graph.go"},
 		{layer: "report", file: "archtest/violation_factory.go"},
 	} {
 		if !slices.Contains(membership[wanted.layer], wanted.file) {
@@ -932,8 +958,10 @@ func TestThisRepositoryObeysItsOwnLayerPolicy(t *testing.T) {
 		// which is what makes a module removable.
 		WhereLayer("files").MayOnlyDependOnLayers("kernel").
 		WhereLayer("layers").MayOnlyDependOnLayers("kernel").
-		// And the report layer reads what a rule reported: the kernel and the modules, whose pure assertion
-		// halves are the only part of them it is allowed to reach — which the file rules above say the rest of.
+		WhereLayer("graph").MayOnlyDependOnLayers("kernel").
+		// And the report layer reads what a rule reported: the kernel and the two modules that report violations,
+		// whose pure assertion halves are the only part of them it is allowed to reach — which the file rules above
+		// say the rest of. The graph module reports none, so it is left out and this clause forbids the dependency.
 		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers").
 		// The same thing the other way round, as the blocklist a team tightening one edge would write.
 		WhereLayer("files").MayNotDependOnLayers("layers")
@@ -1057,6 +1085,170 @@ func TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T)
 	if len(allowed) != 0 {
 		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", policy, allowed)
 	}
+}
+
+func TestProjectGraphDrawsThisRepositoryAsItsPackagesThroughThePublicSurface(t *testing.T) {
+	// The report family end to end through the public surface, dogfooding on this library: no locator, so the
+	// project is the one this test is in, and the modifiers are the two a diagram of a Go project is almost
+	// always drawn with — collapse the four hundred files onto the folders they live in, and leave somebody
+	// else's code out of it. A report is a value, so nothing about this is a rule and nothing is judged; what
+	// comes back is the data every renderer will be written over.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	report := archunit.ProjectGraph(nil).
+		CollapseToFolderDepth(2).
+		Titled("the packages of ArchUnitGo")
+
+	snapshot, err := report.Snapshot()
+	if err != nil {
+		t.Fatalf("%s failed: %v", report, err)
+	}
+
+	if snapshot.Title() != "the packages of ArchUnitGo" {
+		t.Errorf("%s is titled %q, want what the chain said", report, snapshot.Title())
+	}
+	labels := make([]string, 0, len(snapshot.Nodes()))
+	for _, node := range snapshot.Nodes() {
+		labels = append(labels, node.Label())
+		if node.IsExternal() {
+			t.Errorf("%s draws %v, want this repository's own packages only by default", report, node)
+		}
+	}
+	// The public surface is at the project root, so it is drawn as `.` — which is the root's own identifier.
+	for _, wanted := range []string{".", "common/matching", "common/projection", "graph/fluentapi", "graph/projection", "archtest"} {
+		if !slices.Contains(labels, wanted) {
+			t.Errorf("%s draws %v, want %q among them", report, labels, wanted)
+		}
+	}
+	if slices.Contains(labels, "archunit.go") {
+		t.Errorf("%s draws %v, want every file collapsed onto its folder", report, labels)
+	}
+	// One arrow this library's layering guarantees, and the count that keeps a collapsed diagram honest: the
+	// module's chain is written over its own projection, by more than one file.
+	found := false
+	for _, edge := range snapshot.Edges() {
+		if edge.SourceLabel() != "graph/fluentapi" || edge.TargetLabel() != "graph/projection" {
+			continue
+		}
+		found = true
+		if edge.Count() < 2 {
+			t.Errorf("%s draws %v, want every dependency behind the arrow counted", report, edge)
+		}
+		if edge.IsExternal() {
+			t.Errorf("%s draws %v as leaving the project, want it internal", report, edge)
+		}
+	}
+	if !found {
+		t.Errorf("%s draws no arrow from graph/fluentapi to graph/projection, want the one this module is built as", report)
+	}
+	summary := snapshot.Summary()
+	if summary.Nodes != len(snapshot.Nodes()) || summary.Edges != len(snapshot.Edges()) {
+		t.Errorf("%s summarizes itself as %v, want the diagram it is printed over", report, summary)
+	}
+	if summary.Dependencies < summary.Edges {
+		t.Errorf("%s summarizes itself as %v, want at least one dependency behind every arrow", report, summary)
+	}
+	if summary.ExternalNodes != 0 || summary.ExternalEdges != 0 {
+		t.Errorf("%s summarizes itself as %v, want nothing external in the default report", report, summary)
+	}
+}
+
+func TestIncludingExternalDependenciesDrawsWhatThisRepositoryDependsOn(t *testing.T) {
+	// The other report a diagram of a Go project is drawn for: not how the code is arranged but what it pulls
+	// in. This library depends on one module of its own accord, and the standard library everywhere, so the
+	// arrow asserted here is the one AGENTS.md allows and every other rule in this file is about keeping.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	report := archunit.ProjectGraph(nil).IncludingExternalDependencies().CollapseToFolderDepth(2)
+
+	snapshot, err := report.Snapshot()
+	if err != nil {
+		t.Fatalf("%s failed: %v", report, err)
+	}
+
+	toolchain := "golang.org/x/tools/go/packages"
+	drawn := false
+	for _, node := range snapshot.Nodes() {
+		if node.Label() != toolchain {
+			continue
+		}
+		drawn = true
+		if !node.IsExternal() {
+			t.Errorf("%s draws %v as this repository's own code, want it external", report, node)
+		}
+	}
+	if !drawn {
+		t.Errorf("%s draws no node for %q, want the one module this library depends on", report, toolchain)
+	}
+	want := "common/extraction -> " + toolchain + " [1 dependency] (external) [plain]"
+	descriptions := make([]string, 0, len(snapshot.Edges()))
+	for _, edge := range snapshot.Edges() {
+		descriptions = append(descriptions, edge.String())
+	}
+	if !slices.Contains(descriptions, want) {
+		t.Errorf("%s draws %v, want %q among them: the toolchain is reached from one package of one folder",
+			report, descriptions, want)
+	}
+	if summary := snapshot.Summary(); summary.ExternalNodes == 0 || summary.ExternalEdges == 0 {
+		t.Errorf("%s summarizes itself as %v, want the dependencies that leave the project counted", report, summary)
+	}
+}
+
+func TestDependencyGraphIsTheOtherNameOfProjectGraphOnThePublicSurface(t *testing.T) {
+	t.Cleanup(archunit.ClearGraphCache)
+
+	verbose, err := archunit.ProjectGraph(nil).CollapseByPattern("kernel", "common/**").Snapshot()
+	if err != nil {
+		t.Fatalf("`project graph, collapse by pattern` failed: %v", err)
+	}
+	other, err := archunit.DependencyGraph(nil).CollapseByPattern("kernel", "common/**").Snapshot()
+	if err != nil {
+		t.Fatalf("`dependency graph, collapse by pattern` failed: %v", err)
+	}
+
+	if !slices.Contains(nodeLabelsOf(verbose), "kernel") {
+		t.Errorf("`project graph, collapse by pattern` drew %v, want the group it named", nodeLabelsOf(verbose))
+	}
+	if other.String() != verbose.String() {
+		t.Errorf("`dependency graph, ...` drew\n%s\nwant what `project graph, ...` drew\n%s", other, verbose)
+	}
+}
+
+func TestTheLocatorReachesTheProjectThroughEitherGraphEntryPoint(t *testing.T) {
+	// Both wrappers thread the locator through to the extraction, so a report pointed at a directory that holds
+	// no Go project says so — rather than quietly drawing the repository this test runs in, which is what
+	// dropping the argument would look like and what no comparison of two nil-located reports would notice.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	entryPoints := []struct {
+		name   string
+		report archunit.GraphBuilder
+	}{
+		{name: "project graph", report: archunit.ProjectGraph(&archunit.ProjectLocator{Directory: t.TempDir()})},
+		{name: "dependency graph", report: archunit.DependencyGraph(&archunit.ProjectLocator{Directory: t.TempDir()})},
+	}
+
+	for _, entry := range entryPoints {
+		t.Run(entry.name, func(t *testing.T) {
+			snapshot, err := entry.report.Snapshot()
+
+			if err == nil {
+				t.Errorf("`%s` drew %v against a directory that is no project, want an error naming it", entry.name, snapshot)
+			}
+			if !snapshot.Empty() {
+				t.Errorf("`%s` drew %v, want nothing when the project cannot be located", entry.name, snapshot)
+			}
+		})
+	}
+}
+
+// nodeLabelsOf are the labels a report's nodes are drawn under, in order, for a message about what came out.
+func nodeLabelsOf(snapshot archunit.GraphSnapshot) []string {
+	labels := make([]string, 0, len(snapshot.Nodes()))
+	for _, node := range snapshot.Nodes() {
+		labels = append(labels, node.Label())
+	}
+	return labels
 }
 
 func TestTheReportOfARuleThisRepositoryBreaksNamesEveryOffender(t *testing.T) {
@@ -1305,6 +1497,7 @@ func TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests(t *testing.T) {
 			WhereLayer("kernel").MayOnlyDependOnLayers().
 			WhereLayer("files").MayOnlyDependOnLayers("kernel").
 			WhereLayer("layers").MayOnlyDependOnLayers("kernel").
+			WhereLayer("graph").MayOnlyDependOnLayers("kernel").
 			WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers"),
 	}, nil)
 }
