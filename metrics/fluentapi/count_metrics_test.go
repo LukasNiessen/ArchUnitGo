@@ -18,16 +18,16 @@ func TestEachCountVerbNamesOneOfTheEightCounts(t *testing.T) {
 		name         string
 		rule         fluentapi.MetricBuilder
 		wantSubjects []string
-		wantValues   []int
+		wantValues   []float64
 	}{
-		{name: "lines of code", rule: scope.Count().LinesOfCode(), wantSubjects: files, wantValues: []int{9, 4, 3, 3}},
-		{name: "statements", rule: scope.Count().Statements(), wantSubjects: files, wantValues: []int{3, 0, 0, 1}},
-		{name: "imports", rule: scope.Count().Imports(), wantSubjects: files, wantValues: []int{1, 0, 0, 1}},
-		{name: "functions", rule: scope.Count().Functions(), wantSubjects: files, wantValues: []int{1, 0, 1, 1}},
-		{name: "classes", rule: scope.Count().Classes(), wantSubjects: files, wantValues: []int{1, 1, 1, 0}},
-		{name: "interfaces", rule: scope.Count().Interfaces(), wantSubjects: files, wantValues: []int{0, 1, 0, 0}},
-		{name: "method count", rule: scope.Count().MethodCount(), wantSubjects: classes, wantValues: []int{2, 1, 0}},
-		{name: "field count", rule: scope.Count().FieldCount(), wantSubjects: classes, wantValues: []int{2, 0, 0}},
+		{name: "lines of code", rule: scope.Count().LinesOfCode(), wantSubjects: files, wantValues: []float64{9, 4, 3, 3}},
+		{name: "statements", rule: scope.Count().Statements(), wantSubjects: files, wantValues: []float64{3, 0, 0, 1}},
+		{name: "imports", rule: scope.Count().Imports(), wantSubjects: files, wantValues: []float64{1, 0, 0, 1}},
+		{name: "functions", rule: scope.Count().Functions(), wantSubjects: files, wantValues: []float64{1, 0, 1, 1}},
+		{name: "classes", rule: scope.Count().Classes(), wantSubjects: files, wantValues: []float64{1, 1, 1, 0}},
+		{name: "interfaces", rule: scope.Count().Interfaces(), wantSubjects: files, wantValues: []float64{0, 1, 0, 0}},
+		{name: "method count", rule: scope.Count().MethodCount(), wantSubjects: classes, wantValues: []float64{2, 1, 0}},
+		{name: "field count", rule: scope.Count().FieldCount(), wantSubjects: classes, wantValues: []float64{2, 0, 0}},
 	}
 
 	for _, test := range tests {
@@ -102,10 +102,10 @@ func TestTheCountGroupCanBeStoredAndBranchedFrom(t *testing.T) {
 	lines := measure(t, group.LinesOfCode(), nil)
 	functions := measure(t, group.Functions(), nil)
 
-	if got := valuesOf(lines); !slices.Equal(got, []int{3}) {
+	if got := valuesOf(lines); !slices.Equal(got, []float64{3}) {
 		t.Errorf("lines of code = %v, want the 3 the fixture was written with", got)
 	}
-	if got := valuesOf(functions); !slices.Equal(got, []int{1}) {
+	if got := valuesOf(functions); !slices.Equal(got, []float64{1}) {
 		t.Errorf("functions = %v, want the 1 the fixture was written with", got)
 	}
 }

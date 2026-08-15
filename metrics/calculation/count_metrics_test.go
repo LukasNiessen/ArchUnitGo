@@ -15,7 +15,7 @@ func TestEachMetricAboutAFileReadsItsOwnCount(t *testing.T) {
 
 	tests := []struct {
 		metric calculation.CountMetric
-		want   int
+		want   float64
 	}{
 		{metric: calculation.LinesOfCode(), want: 40},
 		{metric: calculation.Statements(), want: 12},
@@ -33,7 +33,7 @@ func TestEachMetricAboutAFileReadsItsOwnCount(t *testing.T) {
 				t.Fatalf("%s produced %+v, want one measurement per selected file", test.metric, measurements)
 			}
 			if measurements[0].Value != test.want {
-				t.Errorf("%s = %d, want %d", test.metric, measurements[0].Value, test.want)
+				t.Errorf("%s = %g, want %g", test.metric, measurements[0].Value, test.want)
 			}
 			if measurements[0].Subject != "internal/api/handler.go" {
 				t.Errorf("%s was reported about %q, want the file identifier", test.metric, measurements[0].Subject)
@@ -52,10 +52,10 @@ func TestEachMetricAboutAClassReadsItsOwnCount(t *testing.T) {
 
 	tests := []struct {
 		metric calculation.CountMetric
-		want   []int
+		want   []float64
 	}{
-		{metric: calculation.MethodCount(), want: []int{4, 1, 0}},
-		{metric: calculation.FieldCount(), want: []int{2, 0, 0}},
+		{metric: calculation.MethodCount(), want: []float64{4, 1, 0}},
+		{metric: calculation.FieldCount(), want: []float64{2, 0, 0}},
 	}
 
 	for _, test := range tests {
@@ -67,7 +67,7 @@ func TestEachMetricAboutAClassReadsItsOwnCount(t *testing.T) {
 			}
 			for index, want := range test.want {
 				if measurements[index].Value != want {
-					t.Errorf("%s of %q = %d, want %d", test.metric, measurements[index].Subject, measurements[index].Value, want)
+					t.Errorf("%s of %q = %g, want %g", test.metric, measurements[index].Subject, measurements[index].Value, want)
 				}
 			}
 			if measurements[0].Subject != "internal/api.Handler" {

@@ -5,20 +5,29 @@
 // tested against a hand-built extraction.FileInfo, and the arithmetic of a rule is separate from the reading
 // that fed it.
 //
-// Two families of number live here. The counts are CountMetric values — a name plus one function of a single
-// file or a single class — and they are the eight counts this library can take of a project as it is written:
-// `lines of code`, `statements`, `imports`, `functions`, `classes` and `interfaces` about one file, and
-// `method count` and `field count` about one class. A Measurement is what any of them produces.
+// Three families of number live here, and the two that a rule can be written with are Metric values — a
+// name, and a way of reading one number off one subject — so that everything downstream holds one type.
+//
+// The counts are the eight numbers this library can take of a project as it is written: `lines of code`,
+// `statements`, `imports`, `functions`, `classes` and `interfaces` about one file, and `method count` and
+// `field count` about one class. They are CountMetric values.
+//
+// The distance family is Robert C. Martin's package metrics and the coupling factor beside them —
+// `abstractness`, `instability`, `distance from the main sequence`, `normalized distance` and `coupling
+// factor` — each about one component, which is a package of the project. They are DistanceMetric values, and
+// the two corners of the plane the first two of them span are Zone values: the zone of pain and the zone of
+// uselessness, which a rule forbids its components to be in.
 //
 // The cohesion family is the eight LCOM measures — LCOM96a, LCOM96b, LCOM1, LCOM2, LCOM3, LCOM4, LCOM5 and
 // LCOMStar — each a formula over one class: over its fields, its methods, and which of the fields each of the
 // methods reaches. Their vocabulary is the literature's, so `m` is how many methods a class has, `a` how many
-// fields, and `μ(A)` how many methods reach the field A. They are plain functions rather than CountMetric
-// values because a lack of cohesion is a ratio where a Measurement carries a count; the metric value that
-// carries a ratio belongs with the threshold predicates that compare one, and lands with them.
+// fields, and `μ(A)` how many methods reach the field A. They are plain functions rather than Metric values
+// because no fluent verb names them yet; the group that does is the one that has to decide what a rule about
+// a lack of cohesion is written like.
 //
 // Comparing any of these numbers against a threshold is the assertion stage's business rather than this
-// package's.
+// package's. Whether a component is inside a Zone is the one judgement this package does make, because a
+// zone is a region of the abstractness/instability plane and that is arithmetic rather than a rule.
 package calculation
 
 import (
@@ -119,9 +128,10 @@ func (m CountMetric) Name() string {
 // Measure reads this metric off every subject it is about: one Measurement per file for a metric about a
 // file, one per class for a metric about a class, in the order the subjects arrived.
 //
-// Both populations are handed over and the metric takes the one it is about, which is what keeps the fluent
-// layer from branching on the kind of metric a user chose. The zero CountMetric measures nothing, because a
-// metric that reads neither population has no number to report about either.
+// Every population is handed over and the metric takes the one it is about, which is what keeps the fluent
+// layer from branching on the kind of metric a user chose; the components are a distance metric's population
+// and no count is about one. The zero CountMetric measures nothing, because a metric that reads neither of
+// its populations has no number to report about either.
 //
 // No subjects at all is an empty result rather than an error. Whether a rule that measured nothing is a
 // failure is the empty-test guard's question, asked where the rule is judged.
@@ -132,7 +142,7 @@ func (m CountMetric) Measure(subjects projection.Subjects) []Measurement {
 			measurements = append(measurements, Measurement{
 				Metric:  m.name,
 				Subject: class.Identifier,
-				Value:   m.class(class),
+				Value:   float64(m.class(class)),
 			})
 		}
 		return measurements
@@ -146,7 +156,7 @@ func (m CountMetric) Measure(subjects projection.Subjects) []Measurement {
 		measurements = append(measurements, Measurement{
 			Metric:  m.name,
 			Subject: file.Path,
-			Value:   m.file(file),
+			Value:   float64(m.file(file)),
 		})
 	}
 	return measurements

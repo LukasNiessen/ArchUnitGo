@@ -47,6 +47,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
+	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 )
 
 // emptyTestHint is what a report adds to an empty-test violation, and the one message in this layer that
@@ -91,6 +92,7 @@ func NewViolationFactory(options *MessageOptions) ViolationFactory {
 //	files/domain/order.go: should not, depend on external modules, path matches "*.*/**"; it depends on gorm.io/gorm
 //	common/a.go: should, have no cycles; it depends on itself through common/a.go -> common/b.go -> common/a.go
 //	layer "db": may not depend on layers "api"; it depends on api through db/conn.go -> api/handler.go
+//	component "internal/db": should not, be in zone of pain; it is, at abstractness 0 and instability 0
 //	no files matched: path without filename matches "common/renamed"; an empty rule would hold forever, ...
 //
 // The requirement is always rendered as the rule stated it, never as its negation — `should not, filename
@@ -124,6 +126,8 @@ func (f ViolationFactory) Message(violation kernel.Violation) string {
 		return f.adherence(reported)
 	case layersassertion.DependencyViolation:
 		return f.layerDependency(reported)
+	case metricsassertion.ZoneViolation:
+		return f.metricsZone(reported)
 	default:
 		return f.unphrased(violation)
 	}
@@ -258,6 +262,32 @@ func (f ViolationFactory) layerDependency(violation layersassertion.DependencyVi
 	return f.sentence(`layer "`+violation.Layer+`"`, layerClause(violation.Mood, violation.Named), finding)
 }
 
+// metricsZone phrases a package sitting in one of the two corners of the abstractness/instability plane: the
+// component, the corner it was told to stay out of, and the two numbers that put it there.
+//
+// The subject is a component rather than a file, because the rule fails per package and a reader has a folder
+// to go and look at rather than a line. It is quoted like a layer, for the same reason: a folder identifier
+// and a filename are told apart by the noun in front of them and not by their shape.
+//
+// The finding names both coordinates, and that is the whole diagnosis this layer can give: "in the zone of
+// pain" does not say whether the way out is an interface or fewer dependents, and abstractness and instability
+// are which. They are printed with as many digits as it takes to say exactly which number they are, like every
+// other number this library reports, so a reader comparing a message against a threshold rule is never shown a
+// rounded one.
+//
+// The auxiliary is `is` rather than broke's `does`, because the requirement's verb is `be`. Nothing is
+// inverted: under `should not` the component is in the zone, and under `should` it is not.
+func (f ViolationFactory) metricsZone(violation metricsassertion.ZoneViolation) string {
+	requirement := violation.Mood.String() + ", be in " + violation.Zone
+	found := "it is not"
+	if violation.Mood.Negated() {
+		found = "it is"
+	}
+	finding := found + ", at abstractness " + coordinate(violation.Abstractness) +
+		" and instability " + coordinate(violation.Instability)
+	return f.sentence(`component "`+violation.Component+`"`, requirement, finding)
+}
+
 // unphrased phrases a violation this layer has not been taught: its kind, and whatever it can say about
 // itself.
 //
@@ -345,6 +375,13 @@ func alternatives(selectors []matching.Filter) string {
 		rendered = append(rendered, selector.String())
 	}
 	return strings.Join(rendered, " or ")
+}
+
+// coordinate renders one of the numbers a report states about a package the shortest way that still says
+// exactly which float64 it is, so that a whole number reads as `0` rather than as `0.000000` and a ratio is
+// never quietly rounded into a different number in a message somebody is comparing against a threshold rule.
+func coordinate(value float64) string {
+	return strconv.FormatFloat(value, 'g', -1, 64)
 }
 
 // plural counts a noun the way a report needs it — `1 violation`, `3 violations` — because a heading that

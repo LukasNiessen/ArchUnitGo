@@ -1815,3 +1815,102 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   functions rather than `CountMetric` values; `metrics/extraction`'s package doc, which listed `FileInfo` and
   `ClassInfo` as everything it produces and now names `FieldInfo` and `MethodInfo` too; and `countFunctions`'
   doc, which named the tally as `countReceivers` after it became `collectReceiverMethods`.
+
+## Issue #34 — Metrics: distance metrics and the zone checks
+
+- WHY: `Measurement.Value` widened from `int` to `float64`, which reverses issue #33's note that the field
+  is an `int`. Four of the five metrics this issue asks for are ratios, so a `Measurement` that could not
+  carry one would mean either rounding a measurement away or a second measurement type beside the first,
+  and every reader downstream would then have to know which. Nothing else changed: a count is a whole
+  number that a `float64` holds exactly, and `Measurement.String` prints with `%g`, so `9` is still `9`.
+  This is the generalisation #33's note said a group of ratios would need.
+- WHY: `MetricBuilder.metric` is typed to a new `calculation.Metric` interface — a name and a way of reading
+  measurements off `projection.Subjects` — where issue #32 typed it to the concrete `CountMetric`. That is
+  the other half of the same generalisation: without it, `distance` would need a second builder holding a
+  second field, and the stage between a group and `Measure` would branch on which kind of metric it holds.
+  `CountMetric` and `DistanceMetric` are the two implementations, and neither knows about the other.
+- WHY: `projection.SelectSubjects` gained the graph as its first parameter, and `Subjects` a third
+  population, `Components`. A component's abstractness is read off the files it holds and its coupling off
+  the edges between folders, so the two halves come from one call for the reason issue #32 gave for
+  returning files and classes together: a rule's scope is written before its metric is chosen, and two calls
+  are two chances for the file answer and the component answer to disagree about which code the rule is
+  about. Ten call sites in the existing tests gained a leading `nil`; their assertions are unchanged.
+- WHY: a component is a **folder**, named as the identifiers are — `internal/db`, and `.` for the project
+  root — not a package clause. It is what `for classes matching`, `in folder` and issue #32's class
+  identifiers already agree on, and a package name is not unique across a project while a folder is.
+- WHY: `PerComponentEdge(selected)` keeps an edge only when *both* ends are selected files, so a component's
+  coupling is its coupling to the rest of the selection rather than to the project. That is the same
+  documented trade `PerSelectedFileEdge` makes, and it has a consequence worth stating: narrowing a scope
+  moves a package in the plane, so a rule about the corners is written over the whole project.
+  `TestADistanceMetricIsMeasuredOverThePackagesTheScopeSelected` and
+  `TestAZoneCheckIsJudgedOverThePackagesItsScopeSelected` are that consequence, pinned.
+- WHY: `coupling factor` is **per component** — `(Ca + Ce) / (2 * (n - 1))`, the share of the possible
+  couplings this one package has, and 0 for a selection of one — rather than the single system-wide MOOD
+  figure the metric is defined as. Every other verb in the group hands back one number per subject through
+  the one `Measure` door, and a metric that collapsed the whole project to a scalar would need a second
+  door, a subject nobody selected to report it against, and a threshold predicate that meant something
+  different for one verb than for the other four.
+- WHY: both `distance from the main sequence` (`|A + I - 1| / √2`, the perpendicular distance) and
+  `normalized distance` (`|A + I - 1|`, the same distance scaled so 1 is a corner) are shipped, under those
+  two names. They are one measure at two scales, like issue #33's `LCOM3`/`LCOM96a` pair, and the issue
+  asks for both; keeping both names is what lets a user arriving from either statement of the metric find
+  the one they know. `TestTheTwoDistancesAreTheSameQuestionOnTwoScales` holds them to each other.
+- WHY: the two zone checks are spelled `ShouldNotBeInZoneOfPain` and `ShouldNotBeInZoneOfUselessness`, so
+  the mood is fused into the verb and there is no mood stage before them — where the issue text writes them
+  as `not in zone of pain`. This is the layers family's shape (`may not depend on layers`) and the shape
+  `AGENTS.md` fixes for this very module: all six threshold predicates it names are spelled
+  `should be below` and friends, mood included. Only the negated mood is offered, because `should be in
+  zone of pain` is a rule asking a project to be painful.
+- WHY: `GatherZoneViolations` takes the `assertion.Mood` flag anyway and honours it, though no fluent verb
+  can pass `Should`. It is `AGENTS.md`'s step 4 and it costs one comparison — `Mood.Holds(zone.Contains(...))`
+  — where a hard-coded negation would be the second code path the mood flag exists to prevent, and would
+  have to be undone if a threshold-style verb ever wants the positive reading.
+- WHY: `zoneExtent` is 0.3, a Euclidean radius, and the library chooses it rather than taking it from the
+  issue or from a knob — no sibling port parameterises it, and a rule whose region a user could resize is a
+  rule two projects cannot compare. `zone.go`'s doc justifies the number geometrically: no point on the main
+  sequence is within 0.3 of a corner, so `not in zone of pain` is a rule about the corners rather than a
+  second, weaker spelling of the distance rule.
+- WHY: `ZoneViolation.Zone` is a `string`, not the `calculation.Zone` that judged it. `archtest` phrases the
+  violation and rule 3 allows it `common` and the modules' `assertion` packages only, so a violation
+  carrying a `calculation` type could not be phrased without widening that allow list to a package that is
+  not a violation. The zone's name is the whole of what a report says about it.
+- WHY: `metrics/assertion` imports `metrics/projection` for the `Component` it judges and
+  `metrics/calculation` for the `Zone` it judges against, which is a new edge — `files/assertion` and
+  `layers/assertion` reach into no projection. Both are pure, the import direction runs one way (neither
+  reaches back), `metrics/calculation` already depends on `metrics/projection` for the `Subjects` a metric
+  measures, and the alternative is a second `Component` declared in `assertion` for the fluent API to convert
+  into — the duplicate the kernel rules exist to prevent. The library's own dependency rules say this in the
+  words that constrain it: the pairwise rule the `files` module is held to is that an assertion may not reach
+  its module's *fluent API*, which this does not.
+- WHY: `archunit_test.go`'s layer policy now lets the `report` layer depend on `metrics`, where it named
+  `kernel`, `files` and `layers`. That is the same one-line widening as the depguard allow list below, in the
+  library's own words: the metrics module reports violations now, so the report layer phrases them. It is
+  written twice in that file — once in `TestThisRepositoryObeysItsOwnLayerPolicy` and once in the suite of
+  `TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests` — and both clauses had to move, which the
+  first fix round found by leaving the second one red.
+- WHY: `.golangci.yml`'s strict `testing-layer` allow list gained
+  `github.com/LukasNiessen/ArchUnitGo/metrics/assertion`, one line, which is what that list being strict is
+  for: the module whose violations land next is allowed in on purpose.
+- WHY: file stems are `metrics/projection/per_component_edge.go` and `select_components.go`,
+  `metrics/calculation/metric.go`, `distance_metrics.go` (beside `count_metrics.go`, the convention issue
+  #33 settled) and `zone.go`, `metrics/assertion/zone_violation.go` and `gather_zone_violations.go` — the
+  `<thing> violation` / `gather <thing> violations` pair every rule family uses — and
+  `metrics/fluentapi/distance_metrics.go` and `zone_checks.go`.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `Distance`, the five verbs and
+  the two zone checks are methods, which that list cannot guard, and `Check` returns an error `errcheck`
+  already guards. This follows #27, #28, #32 and #33.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc
+  (which now names the distance family and the two zones), `metrics/fluentapi`'s package doc (the groups and
+  the family's first checkable terminal), `metrics/projection`'s package doc and `SelectSubjects`' doc,
+  `archtest/violation_factory.go`'s doc example, `archunit.go`'s `Metrics` doc and `Measurement`/
+  `MetricBuilder` aliases, and `archunit_test.go`'s compile-time block, which said there was "no mood stage
+  to name yet". Two comments that were factually wrong when re-read were corrected with them:
+  `select_components.go`'s claim that sorting was needed because `ProjectEdges` returns an arbitrary order
+  (it returns a total order by source and target), and `zoneExtent`'s arithmetic, which put a zone 0.7 from
+  the main sequence where it is 1/√2 - 0.3.
+- WHY: the integration tests are `archunit_test.go`'s three new ones — the five distance verbs measured over
+  this repository's packages, the zone checks judging it, and the empty-test guard on the family's first
+  checkable terminal. The zone test asserts which side of the plane a reported package is on rather than
+  which packages are reported, because the shape of this library moves with every commit; the corner itself
+  is pinned in `metrics/calculation/zone_test.go` against hand-built points. The honest answer it records is
+  that this library's own kernel is in the zone of pain, which is the trade `common/` was written for.

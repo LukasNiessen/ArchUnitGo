@@ -17,10 +17,16 @@
 // three describe files and the last describes classes, and what a scope means, given a project, is
 // metrics/projection.SelectFiles followed by metrics/projection.SelectSubjects.
 //
-// After the scope comes the metric: `count` groups the eight counts this library can take, and one of them
-// closes it. Measure is the resolution door of what that describes — the numbers themselves, one per
-// subject — and the six threshold predicates that judge them against a number are the mood and the
-// predicate stages, which land with them.
+// After the scope comes the group the metric is chosen out of: `count` groups the eight counts this library
+// can take of a file or a class, and `distance` the five numbers it takes of a package. One verb of the
+// group closes it, and Measure is the resolution door of what that describes — the numbers themselves, one
+// per subject. The six threshold predicates that judge them against a number are the mood and the predicate
+// stages, and they land with them.
+//
+// The `distance` group also closes two rules of its own: `should not be in zone of pain` and `should not be
+// in zone of uselessness` are predicates about the plane its first two metrics span rather than comparisons
+// against a figure, so they spell the mood themselves and hand back a MetricsZoneCondition — the family's
+// checkable rules, as opposed to its measurements.
 package fluentapi
 
 import (
@@ -145,12 +151,13 @@ func (b MetricsBuilder) String() string {
 }
 
 // resolve is the SOURCE-and-EXTRACT-plus-scope half of every rule about numbers, in one call: the files this
-// scope names, read and counted, and the classes among them it names.
+// scope names, read and counted, the classes among them it names, and the packages those files make up.
 //
 // The two reads are one door apiece and both are needed. The graph is what says which files are the
 // project's, so the scope is resolved against the same population every other rule in the library is
-// resolved against; the root is where those identifiers are read from, which is why it is located again
-// rather than guessed from the graph.
+// resolved against, and it is also what the dependencies between the selected packages are projected from;
+// the root is where those identifiers are read from, which is why it is located again rather than guessed
+// from the graph.
 //
 // Only the files the scope selected are read, so a rule about one folder pays for one folder. The
 // consequence for a class's method count is ExtractFileInfo's to describe.
@@ -173,7 +180,7 @@ func (b MetricsBuilder) resolve(options *kernel.CheckOptions) (projection.Subjec
 	if err != nil {
 		return projection.Subjects{}, err
 	}
-	return projection.SelectSubjects(files, b.classSelectors()...), nil
+	return projection.SelectSubjects(graph, files, b.classSelectors()...), nil
 }
 
 // fileSelectors are the scope verbs that describe a file, and classSelectors the ones that describe a class.

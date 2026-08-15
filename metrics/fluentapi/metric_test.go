@@ -58,6 +58,23 @@ func TestMeasuringNothingIsNeitherAnErrorNorAViolation(t *testing.T) {
 	}
 }
 
+func TestARuleWithNoMetricMeasuresNothing(t *testing.T) {
+	// The zero MetricBuilder is public surface, and a rule with no number to read has no number to report:
+	// the answer is the empty measurement list rather than an error and rather than a call into a metric
+	// that is not there. It resolves this repository, because a zero scope is `metrics` over the project the
+	// test runs in.
+	rule := fluentapi.MetricBuilder{}
+
+	measurements, err := rule.Measure(nil)
+	if err != nil {
+		t.Fatalf("Measure failed: %v", err)
+	}
+
+	if len(measurements) != 0 {
+		t.Errorf("Measure produced %+v, want nothing measured by a rule that names no metric", measurements)
+	}
+}
+
 func TestAMetricBuildersSelectorsAreTheScopesOwn(t *testing.T) {
 	// Choosing a metric selects nothing, so the data a report needs in order to say which pattern matched
 	// nothing is the same at both stages.
@@ -97,6 +114,13 @@ func TestAMetricBuilderRendersTheWholeSentence(t *testing.T) {
 			name: "no scope verb at all",
 			rule: fluentapi.Metrics(nil).Count().Interfaces(),
 			want: "metrics, count, interfaces",
+		},
+		{
+			// The zero builder names neither group nor metric, and a part that is not there is left out
+			// rather than rendered as an empty word.
+			name: "the zero builder",
+			rule: fluentapi.MetricBuilder{},
+			want: "metrics",
 		},
 	}
 
