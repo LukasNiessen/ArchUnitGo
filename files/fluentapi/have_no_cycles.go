@@ -3,6 +3,7 @@ package fluentapi
 import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	kernelprojection "github.com/LukasNiessen/ArchUnitGo/common/projection"
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
@@ -57,27 +58,36 @@ func (b FilesShouldBuilder) HaveNoCycles() FilesCyclesCondition {
 // cycle it found as a readable path, or the one EmptyTestViolation of a scope that selected no file at
 // all.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the
+// count each of those steps came to, every violation and the outcome. With no log asked for, which is the
+// default, nothing is written and nothing else about the check changes.
+//
 // The error is technical or the user's — a pattern a scope verb could not compile, a locator naming no
-// Go project, a project that will not load — and never a failing rule. When it is non-nil the
-// violations say nothing.
+// Go project, a project that will not load, a log this check was asked for that could not be opened,
+// written or closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c FilesCyclesCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	graph, selected, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		graph, selected, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("selected files", len(selected))
 
-	if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
-		// A rule with no subject is reported instead of being judged: no file selected means no
-		// dependency between two of them, so every such rule would otherwise pass forever.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
+			// A rule with no subject is reported instead of being judged: no file selected means no
+			// dependency between two of them, so every such rule would otherwise pass forever.
+			return empty, nil
+		}
 
-	edges := kernelprojection.ProjectEdges(graph, projection.PerSelectedFileEdge(selected))
-	// The completeness flag is deliberately dropped: it bounds the size of the report and not the
-	// answer. A truncated enumeration still holds every cycle it did find, and a rule that reports
-	// cycles by the thousand is broken by the first of them.
-	circuits, _ := cycles.ProjectCircuits(edges, nil)
-	return filesassertion.GatherCycleViolations(circuits), nil
+		edges := kernelprojection.ProjectEdges(graph, projection.PerSelectedFileEdge(selected))
+		log.LogProgress("dependencies between the selected files", len(edges))
+		// The completeness flag is deliberately dropped: it bounds the size of the report and not the
+		// answer. A truncated enumeration still holds every cycle it did find, and a rule that reports
+		// cycles by the thousand is broken by the first of them.
+		circuits, _ := cycles.ProjectCircuits(edges, nil)
+		log.LogProgress("cycles", len(circuits))
+		return filesassertion.GatherCycleViolations(circuits), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `project files, path without

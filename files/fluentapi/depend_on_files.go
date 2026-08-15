@@ -5,6 +5,7 @@ import (
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	kernelprojection "github.com/LukasNiessen/ArchUnitGo/common/projection"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
@@ -115,29 +116,38 @@ func (c FilesDependencyCondition) InPath(pattern string) FilesDependencyConditio
 // only stage of the chain that reads anything. The project is extracted once and both populations are
 // resolved against that one graph, because two extractions could not be compared with each other.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the
+// count each of those steps came to, every violation and the outcome. With no log asked for, which is the
+// default, nothing is written and nothing else about the check changes.
+//
 // The violations are the files module's own assertion.DependencyViolation values, each carrying the file, the
 // object's selectors, the dependencies found and the mood, or the EmptyTestViolations of a sentence one of
 // whose halves named no file at all.
 //
 // The error is technical or the user's — a pattern a scope verb or an object verb could not compile, a locator
-// naming no Go project, a project that will not load — and never a failing rule. When it is non-nil the
-// violations say nothing.
+// naming no Go project, a project that will not load, a log this check was asked for that could not be opened,
+// written or closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c FilesDependencyCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	graph, selected, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
-	objects := projection.SelectFiles(graph, c.objects...)
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		graph, selected, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		objects := projection.SelectFiles(graph, c.objects...)
+		log.LogProgress("selected files", len(selected))
+		log.LogProgress("files to depend on", len(objects))
 
-	if empty := options.GatherEmptyTestViolations(c.populations(len(selected), len(objects))...); len(empty) > 0 {
-		// A sentence with no subject, or with no object, is reported instead of being judged: there is no
-		// dependency to find either way, so one mood of such a rule would pass forever and the other would
-		// report every file it selected.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.populations(len(selected), len(objects))...); len(empty) > 0 {
+			// A sentence with no subject, or with no object, is reported instead of being judged: there is no
+			// dependency to find either way, so one mood of such a rule would pass forever and the other would
+			// report every file it selected.
+			return empty, nil
+		}
 
-	dependencies := kernelprojection.ProjectEdges(graph, projection.PerDependencyEdge(selected, objects))
-	return filesassertion.GatherDependencyViolations(selected, dependencies, c.objects, c.rule.mood), nil
+		dependencies := kernelprojection.ProjectEdges(graph, projection.PerDependencyEdge(selected, objects))
+		log.LogProgress("dependencies from the selected files to the object's", len(dependencies))
+		return filesassertion.GatherDependencyViolations(selected, dependencies, c.objects, c.rule.mood), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `project files, path without filename

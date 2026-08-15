@@ -7,6 +7,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	filesextraction "github.com/LukasNiessen/ArchUnitGo/files/extraction"
 )
@@ -108,6 +109,10 @@ func (b FilesShouldNotBuilder) AdhereTo(predicate filesassertion.FilePredicate, 
 // not in the dependency graph, which is why this is the one rule in the module with a gathering step of its
 // own, files/extraction.ExtractFileInfo.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the
+// count each of those steps came to, every violation and the outcome. With no log asked for, which is the
+// default, nothing is written and nothing else about the check changes.
+//
 // The files are read only once the selection is known to be non-empty, so a rule whose glob matches nothing
 // opens no file at all and is reported as the empty test it is.
 //
@@ -116,27 +121,32 @@ func (b FilesShouldNotBuilder) AdhereTo(predicate filesassertion.FilePredicate, 
 // selected no file at all.
 //
 // The error is technical or the user's — a missing function or message, a pattern the scope could not
-// compile, a locator naming no Go project, a file of the project that cannot be read — and never a failing
-// rule. When it is non-nil the violations say nothing.
+// compile, a locator naming no Go project, a file of the project that cannot be read, a log this check was
+// asked for that could not be opened, written or closed — and never a failing rule. When it is non-nil the
+// violations say nothing.
 func (c FilesAdherenceCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	// The graph is deliberately dropped: this rule judges each selected file on its own contents, so the
-	// dependencies between them say nothing about it.
-	_, selected, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		// The graph is deliberately dropped: this rule judges each selected file on its own contents, so the
+		// dependencies between them say nothing about it.
+		_, selected, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("selected files", len(selected))
 
-	if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
-		// A rule with no subject is reported instead of being judged: every file of an empty selection
-		// satisfies every predicate, in either mood, so such a rule would otherwise pass forever.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
+			// A rule with no subject is reported instead of being judged: every file of an empty selection
+			// satisfies every predicate, in either mood, so such a rule would otherwise pass forever.
+			return empty, nil
+		}
 
-	files, err := c.rule.readSources(selected)
-	if err != nil {
-		return nil, err
-	}
-	return filesassertion.GatherAdherenceViolations(files, c.predicate, c.requirement, c.rule.mood), nil
+		files, err := c.rule.readSources(selected)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("source files read", len(files))
+		return filesassertion.GatherAdherenceViolations(files, c.predicate, c.requirement, c.rule.mood), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `project files, path without filename

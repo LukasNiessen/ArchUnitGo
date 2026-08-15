@@ -1,11 +1,11 @@
 package fluentapi
 
 import (
-	"io"
 	"slices"
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 )
 
@@ -25,13 +25,15 @@ type CheckOptions struct {
 	// changes what a rule reports, which is why it is the flag every terminal has to thread into the
 	// empty-test guard; EmptyTestOptions is how.
 	AllowEmptyTests bool
-	// Logging is where the check writes its progress log: which files were parsed, how many edges
-	// were extracted, how long a stage took. Nil — the default — means it logs nothing at all.
+	// Logging is the log this check writes while it runs — the rule, the steps it took, the numbers it
+	// measured, the violations it found. Nil, the default, means it logs nothing at all.
 	//
-	// A library must not own a process-global logger, so the destination is injected rather than
-	// configured: any io.Writer will do, log/slog over that writer is fine, and a test can pass a
-	// bytes.Buffer. A technical failure is still an error returned from Check, never a log line.
-	Logging io.Writer
+	// A library must not own a process-global logger, so the whole of switching logging on is filling in
+	// this bag: the destination is injected, the level is the bag's, and a check that was handed no bag
+	// is silent however loudly the rule beside it was asked to log. logging.Options is where the knobs
+	// are, including the log file a CI job archives. A technical failure is still the error Check
+	// returns, never a log line.
+	Logging *logging.Options
 	// ClearCache makes the check extract the project from source again instead of reusing a graph an
 	// earlier check produced in the same process. Extraction is the expensive half of a check and
 	// every rule in a test suite asks about the same project, so caching is how a suite stays fast.
@@ -88,6 +90,11 @@ type CheckOptions struct {
 // Both slices are cloned, for the reason EmptyTestOptions clones its selectors: a struct copy shares the
 // slice's backing array, so a terminal appending a tag to its resolved bag would reach into the user's
 // own options — which a stored half-built rule shares — and into every other copy.
+//
+// The logging bag is not cloned. It is read once, when the check opens its log, and never written to, and
+// its whole point is that the destination in it is the caller's own: a copy of a *logging.Options would
+// still be a copy pointing at the same writer, so cloning it would buy nothing and cost the identity a
+// caller may well be comparing.
 func (o *CheckOptions) WithDefaults() CheckOptions {
 	if o == nil {
 		return CheckOptions{}
@@ -98,13 +105,26 @@ func (o *CheckOptions) WithDefaults() CheckOptions {
 	return resolved
 }
 
-// LogWriter is where the check should write its progress log, or nil when it should not log — which
-// is the default, and what a nil options bag means.
-func (o *CheckOptions) LogWriter() io.Writer {
-	if o == nil {
-		return nil
-	}
-	return o.Logging
+// Logger opens the log this check writes, which is a logger that writes nothing when no destination was
+// asked for — a nil options bag, a nil logging bag, or a bag with neither a writer nor a file in it.
+//
+// The caller owns it and has to close it, because a log file is a file:
+//
+//	log, err := options.Logger()
+//	if err != nil {
+//		return nil, err
+//	}
+//	defer log.Close()
+//
+// LoggedCheck is that call, plus the start and end records, plus the closing, and it is what every
+// terminal in the library goes through instead. This is the door for a caller assembling something else
+// — a report of its own, a harness that runs a suite through one log file.
+//
+// The error is a TechnicalError naming the log file: a folder that cannot be created, a path that is not
+// writable. A check that cannot open the log it was asked for fails rather than running quietly.
+func (o *CheckOptions) Logger() (*logging.Logger, error) {
+	resolved := o.WithDefaults()
+	return logging.NewLogger(resolved.Logging)
 }
 
 // IgnoresImportKind reports whether an import of this flavor should be left out of the graph. It is

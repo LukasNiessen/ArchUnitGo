@@ -7,6 +7,7 @@ import (
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
 )
@@ -140,6 +141,10 @@ func (b MetricBuilder) ShouldBeAboveOrEqual(limit float64) MetricsThresholdCondi
 // classes and packages they make up, read the metric off every subject, compare each number against the figure —
 // and the only stage of the chain that reads anything.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the count
+// each of those steps came to, every number it measured, every violation and the outcome. With no log asked for,
+// which is the default, nothing is written and nothing else about the check changes.
+//
 // The metric is read only once the project has been selected, and the numbers are judged only once the selection
 // is known to have produced one: a rule whose glob matches nothing compares nothing at all and is reported as the
 // empty test it is.
@@ -149,22 +154,32 @@ func (b MetricBuilder) ShouldBeAboveOrEqual(limit float64) MetricsThresholdCondi
 // EmptyTestViolation of a rule that measured nothing.
 //
 // The error is technical or the user's — a figure that is not a number, a pattern a scope verb could not compile,
-// a locator naming no Go project, a project that will not load — and never a failing rule. When it is non-nil the
-// violations say nothing.
+// a locator naming no Go project, a project that will not load, a log this check was asked for that could not be
+// opened, written or closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c MetricsThresholdCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	subjects, err := c.rule.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		subjects, err := c.rule.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
 
-	measurements := c.rule.readings(subjects)
-	if empty := options.GatherEmptyTestViolations(c.population(len(measurements))); len(empty) > 0 {
-		// A rule with no number is reported instead of being judged: no measurement means no measurement on the
-		// wrong side of the figure, so every such rule would otherwise pass forever.
-		return empty, nil
-	}
+		measurements := c.rule.readings(subjects)
+		log.LogProgress("measurements", len(measurements))
+		for _, measurement := range measurements {
+			// Every number the rule read, and not only the ones it reported: a threshold that fires nowhere is
+			// as often a metric measuring the wrong subjects as it is a project that is in good shape, and the
+			// numbers are the only thing that tells the two apart.
+			log.LogMetric(measurement)
+		}
 
-	return metricsassertion.GatherThresholdViolations(measurements, c.threshold, assertion.Should), nil
+		if empty := options.GatherEmptyTestViolations(c.population(len(measurements))); len(empty) > 0 {
+			// A rule with no number is reported instead of being judged: no measurement means no measurement on the
+			// wrong side of the figure, so every such rule would otherwise pass forever.
+			return empty, nil
+		}
+
+		return metricsassertion.GatherThresholdViolations(measurements, c.threshold, assertion.Should), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `metrics, path without filename matches

@@ -3,6 +3,7 @@ package fluentapi
 import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	kernelprojection "github.com/LukasNiessen/ArchUnitGo/common/projection"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/layers/projection"
@@ -44,28 +45,38 @@ type LayersPolicyCondition struct {
 // project the dependencies between the layers, judge them against the clauses — and the only stage of the
 // chain that reads anything.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a policy that was asked for a log writes the rule, the
+// count each of those steps came to, every violation and the outcome. With no log asked for, which is the
+// default, nothing is written and nothing else about the check changes.
+//
 // The violations are the layers module's own assertion.DependencyViolation values, each carrying the two
 // layers, the clause that was broken and the concrete file dependencies that broke it, or the
 // EmptyTestViolations of a policy one of whose layers no file is in.
 //
 // The error is technical or the user's — a pattern a `defined by` verb could not compile, a clause naming a
 // layer the policy never declared, a blocklist naming nothing, a locator naming no Go project, a project that
-// will not load — and never a failing rule. When it is non-nil the violations say nothing.
+// will not load, a log this check was asked for that could not be opened, written or closed — and never a
+// failing rule. When it is non-nil the violations say nothing.
 func (c LayersPolicyCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	graph, membership, err := c.policy.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		graph, membership, err := c.policy.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("declared layers", len(c.policy.declaredLayers()))
+		log.LogProgress("clauses", len(c.policy.clauses))
 
-	if empty := options.GatherEmptyTestViolations(c.policy.populations(membership)...); len(empty) > 0 {
-		// A layer no file is in is reported instead of being judged. Every clause about it would be vacuous —
-		// it is at neither end of any projected dependency — so a policy whose folders have been renamed
-		// would otherwise be green forever, which is the one failure this library refuses to pass silently.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.policy.populations(membership)...); len(empty) > 0 {
+			// A layer no file is in is reported instead of being judged. Every clause about it would be vacuous —
+			// it is at neither end of any projected dependency — so a policy whose folders have been renamed
+			// would otherwise be green forever, which is the one failure this library refuses to pass silently.
+			return empty, nil
+		}
 
-	dependencies := kernelprojection.ProjectEdges(graph, projection.PerLayerEdge(c.policy.declaredLayers()...))
-	return layersassertion.GatherDependencyViolations(c.policy.clauses, dependencies), nil
+		dependencies := kernelprojection.ProjectEdges(graph, projection.PerLayerEdge(c.policy.declaredLayers()...))
+		log.LogProgress("dependencies between the layers", len(dependencies))
+		return layersassertion.GatherDependencyViolations(c.policy.clauses, dependencies), nil
+	})
 }
 
 // String renders the whole policy as the sentence the user typed, as `project layers, layer "api" defined by

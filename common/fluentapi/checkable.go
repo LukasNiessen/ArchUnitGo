@@ -11,6 +11,11 @@
 // one module — nothing downstream knows or asks whether a Checkable came from files, layers, slices
 // or metrics.
 //
+// Two things every terminal goes through live here rather than in the families, so that no family can be
+// quietly lenient about either: the empty-test guard, which is why a rule that selected nothing is a
+// violation, and LoggedCheck, which is why every check writes the same three records to the log a user
+// asked for. Both hang off CheckOptions, because both are decisions the user's own bag makes.
+//
 // Each domain module has its own fluentapi package, holding the builders the user types. This one
 // holds only what all of them have in common.
 package fluentapi

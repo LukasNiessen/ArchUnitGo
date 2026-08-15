@@ -3,7 +3,6 @@ package fluentapi_test
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +13,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 )
 
@@ -46,8 +46,8 @@ func TestNilCheckOptionsMeansTheDefaults(t *testing.T) {
 	if defaults.IgnoreScopes != nil {
 		t.Errorf("IgnoreScopes defaults to %v, want no scoped ignore directive honored", defaults.IgnoreScopes)
 	}
-	if got := options.LogWriter(); got != nil {
-		t.Errorf("LogWriter() = %v, want nil: a library logs nowhere until a writer is injected", got)
+	if defaults.Logging != nil {
+		t.Errorf("Logging defaults to %+v, want nil: a library logs nowhere until a bag is injected", defaults.Logging)
 	}
 	if options.IgnoresImportKind(extraction.ImportKindBlank) {
 		t.Error("a nil options bag ignores blank imports; it should ignore nothing")
@@ -59,7 +59,7 @@ func TestCheckOptionsWithDefaultsIsACopy(t *testing.T) {
 	// slices are the fields a struct copy does not separate: the copy shares their backing arrays.
 	options := &fluentapi.CheckOptions{
 		AllowEmptyTests:    true,
-		Logging:            &bytes.Buffer{},
+		Logging:            &logging.Options{Writer: &bytes.Buffer{}, Level: logging.LevelDebug},
 		ClearCache:         true,
 		IgnoreScopes:       []string{"layers"},
 		IncludeTestFiles:   true,
@@ -73,6 +73,12 @@ func TestCheckOptionsWithDefaultsIsACopy(t *testing.T) {
 	// not just the ones a default happens to be spelled out for.
 	if !reflect.DeepEqual(resolved, *options) {
 		t.Errorf("WithDefaults() = %+v, want the caller's own options %+v", resolved, *options)
+	}
+
+	// The logging bag is deliberately not cloned: it is read once, when the check opens its log, and its
+	// whole point is that the destination in it is the caller's own.
+	if resolved.Logging != options.Logging {
+		t.Errorf("Logging = %p, want the caller's own bag %p", resolved.Logging, options.Logging)
 	}
 
 	resolved.BuildTags[0] = "e2e"
@@ -124,23 +130,71 @@ func TestCheckOptionsWithDefaultsCopiesAreIndependentOfEachOther(t *testing.T) {
 	}
 }
 
-func TestCheckOptionsLogWriterIsTheInjectedWriter(t *testing.T) {
+func TestCheckOptionsLoggerWritesToTheInjectedWriter(t *testing.T) {
 	log := &bytes.Buffer{}
-	options := &fluentapi.CheckOptions{Logging: log}
+	options := &fluentapi.CheckOptions{Logging: &logging.Options{Writer: log}}
 
-	writer := options.LogWriter()
-	if writer != io.Writer(log) {
-		t.Fatalf("LogWriter() = %v, want the injected writer", writer)
+	logger, err := options.Logger()
+	if err != nil {
+		t.Fatalf("Logger() failed: %v", err)
 	}
-	if _, err := io.WriteString(writer, "extracted 3 edges"); err != nil {
-		t.Fatalf("writing to the log writer failed: %v", err)
-	}
-	if log.String() != "extracted 3 edges" {
-		t.Errorf("the buffer holds %q, want what was written to the log writer", log.String())
+	logger.StartCheck("project files, should not, depend on files")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("closing the log failed: %v", err)
 	}
 
-	if got := (&fluentapi.CheckOptions{}).LogWriter(); got != nil {
-		t.Errorf("LogWriter() = %v on options with no writer, want nil", got)
+	want := "info  start check: project files, should not, depend on files\n"
+	if log.String() != want {
+		t.Errorf("the buffer holds %q, want %q", log.String(), want)
+	}
+}
+
+func TestCheckOptionsLoggerIsSilentUntilADestinationIsAskedFor(t *testing.T) {
+	// Three ways of saying the same silence: no bag at all, an empty bag, and a logging bag with no
+	// destination in it. A library logs nowhere until it is told where.
+	tests := []struct {
+		name    string
+		options *fluentapi.CheckOptions
+	}{
+		{name: "nil options", options: nil},
+		{name: "no logging bag", options: &fluentapi.CheckOptions{}},
+		{name: "a logging bag with no destination", options: &fluentapi.CheckOptions{Logging: &logging.Options{}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logger, err := test.options.Logger()
+			if err != nil {
+				t.Fatalf("Logger() failed: %v", err)
+			}
+			// Never nil, so a terminal has no branch to write, and it writes nothing anyway.
+			if logger == nil {
+				t.Fatal("Logger() = nil, want a logger that writes nothing")
+			}
+			logger.StartCheck("project files, should have no cycles")
+			logger.LogProgress("selected files", 3)
+			if err := logger.Close(); err != nil {
+				t.Errorf("closing a log with no destination failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckOptionsLoggerRejectsALogFileItCannotOpen(t *testing.T) {
+	// A check that cannot open the log it was asked for fails rather than running quietly: a log asked for
+	// and not delivered makes the run look like it was watched. The path is a file where a folder has to be.
+	notAFolder := filepath.Join(t.TempDir(), "occupied")
+	writeFixtureFile(t, filepath.Dir(notAFolder), filepath.Base(notAFolder), "not a folder\n")
+	options := &fluentapi.CheckOptions{Logging: &logging.Options{File: filepath.Join(notAFolder, "archunit.log")}}
+
+	logger, err := options.Logger()
+
+	if logger != nil {
+		t.Errorf("Logger() = %v beside an error, want no logger", logger)
+	}
+	var technical *archerror.TechnicalError
+	if !errors.As(err, &technical) {
+		t.Fatalf("Logger() error = %v, want a *archerror.TechnicalError", err)
 	}
 }
 

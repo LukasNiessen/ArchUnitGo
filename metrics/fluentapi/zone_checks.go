@@ -5,6 +5,7 @@ import (
 
 	"github.com/LukasNiessen/ArchUnitGo/common/assertion"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
 	"github.com/LukasNiessen/ArchUnitGo/metrics/calculation"
 )
@@ -76,27 +77,34 @@ func (b MetricsDistanceBuilder) ShouldNotBeInZoneOfUselessness() MetricsZoneCond
 // that read anything. The violations are the metrics module's own assertion.ZoneViolation values, or the one
 // EmptyTestViolation of a scope that selected no file at all.
 //
+// It runs under kernel.CheckOptions.LoggedCheck, so a check that was asked for a log writes the rule, the count
+// each of those steps came to, every violation and the outcome. With no log asked for, which is the default,
+// nothing is written and nothing else about the check changes.
+//
 // A package's numbers are about the files the scope selected, so a rule about one folder measures that folder's
 // dependencies on the rest of the selection and no others: a scope narrow enough to hide a package's dependents
 // makes it look stable, and metrics/projection.PerComponentEdge is that reading written out. `metrics` with no
 // scope verb is the whole project, which is the rule this predicate is usually written as.
 //
 // The error is technical or the user's — a pattern a scope verb could not compile, a locator naming no Go
-// project, a project that will not load — and never a failing rule. When it is non-nil the violations say
-// nothing.
+// project, a project that will not load, a log this check was asked for that could not be opened, written or
+// closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c MetricsZoneCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
-	subjects, err := c.scope.resolve(options)
-	if err != nil {
-		return nil, err
-	}
+	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
+		subjects, err := c.scope.resolve(options)
+		if err != nil {
+			return nil, err
+		}
+		log.LogProgress("selected components", len(subjects.Components))
 
-	if empty := options.GatherEmptyTestViolations(c.population(len(subjects.Components))); len(empty) > 0 {
-		// A rule with no subject is reported instead of being judged: no package selected means no package
-		// in a zone, so every such rule would otherwise pass forever.
-		return empty, nil
-	}
+		if empty := options.GatherEmptyTestViolations(c.population(len(subjects.Components))); len(empty) > 0 {
+			// A rule with no subject is reported instead of being judged: no package selected means no package
+			// in a zone, so every such rule would otherwise pass forever.
+			return empty, nil
+		}
 
-	return metricsassertion.GatherZoneViolations(subjects.Components, c.zone, assertion.ShouldNot), nil
+		return metricsassertion.GatherZoneViolations(subjects.Components, c.zone, assertion.ShouldNot), nil
+	})
 }
 
 // String renders the whole rule as the sentence the user typed, as `metrics, path without filename matches
