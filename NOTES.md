@@ -1742,3 +1742,76 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   so a re-export that dropped it would silently measure the repository the test runs in, and only a rule
   pointed at a directory holding no `go.mod` can see that. It is one entry point rather than a pair, because
   `metrics` has no short alias. Verified by making `Metrics` return `metricsapi.Metrics(nil)`.
+
+## Issue #33 — Metrics: the LCOM family
+
+- WHY: the eight formulas live in `metrics/calculation/lcom_metrics.go` as the issue says, but the input the
+  issue calls "extracted class information — the methods each field is accessed by, and the fields each method
+  accesses" did not exist: `extraction.ClassInfo` carried `FieldCount` and `MethodCount` and no relation. So
+  `metrics/extraction` was extended with `FieldInfo` and `MethodInfo`, and `ClassInfo` gained `Fields` and
+  `Methods`. The alternative was formulas over data nothing produces, or a second input type declared in
+  `calculation` — which would be the duplicate the kernel rules exist to prevent, and would contradict
+  `extract_file_info.go`'s own promise that everything a metric could want is read once while the syntax tree is
+  in hand. The import direction is unchanged: `calculation` already depends on `extraction`.
+- WHY: the relation is built in the same two passes `MethodCount` already needed — the fields are known from the
+  type's own declaration, the accesses from every method of the folder — and both directions are written down in
+  one place, `attributeAccesses`, so they are one fact rather than two that could disagree. The family asks it
+  both ways: `μ(A)` is `len(FieldInfo.AccessedBy)`, and the pair measures ask which fields two methods have in
+  common.
+- WHY: an access is a selection on the method's own named receiver and nothing else, at any depth
+  (`h.inner.deep` reaches `inner`), counted once per method however often the body spells it. A name selected on
+  the receiver that is not one of the class's declared fields is dropped — a method call, a field promoted from
+  an embedded type — and a receiver shadowed inside the body reads as the receiver. Telling those apart needs a
+  resolved type, and this package parses a file rather than type-checking a package, which is the trade
+  `metrics/extraction` already made for every count it takes.
+- WHY: an embedded field is named by the embedded type without its package qualifier, its pointer star or its
+  type arguments — `Reader`, of `*io.Reader` — because that is the name a method selects on the receiver.
+  `baseTypeName` gained the `*ast.SelectorExpr` case for it; it already unwrapped the star and the type
+  arguments for receivers.
+- WHY: an interface's members are counted by `MethodCount` and are not in `Methods`: a member has no body, so
+  there is no field for it to reach and no cohesion to read off it. A method that does not name its receiver, or
+  names it `_`, is one of the class's methods and reaches nothing.
+- WHY: one guard, `measurable` — at least one field and more than one method — answers "no evidence" for the
+  whole family, where the sibling guards each formula against its own division by zero. Two methods are needed
+  to share a field or fail to, and a class with no fields has nothing to share, so scoring one would report
+  every Go interface and every `type ID string` as maximally incohesive for something no user could fix. The
+  no-evidence answer is 0 for the seven measures whose 0 is perfect cohesion and 1 for `LCOM4`, whose scale
+  starts at one component — and 0 for `LCOM4` too when there are no methods at all, because there is nothing
+  there to fall apart.
+- WHY: `LCOM3` and `LCOM2` are one-line delegations to `LCOM96a` and `LCOM96b`. They are the same expressions
+  from different papers — negate LCOM96a's numerator and denominator for LCOM3, expand LCOM96b's average for
+  LCOM2 — and both names are kept because a user arriving from either paper searches for the one they know.
+  `TestTheTwoPairsOfNamesThatAreOneNumberStayInStep` is what stops a change moving only half of a twin.
+- WHY: `LCOM5` divides by `(a - 1)` where ArchUnitTS divides by `(a - m)`. The sibling's denominator makes the
+  measure degenerate for every class with as many fields as methods — the numerator vanishes with it, so the
+  answer is 0, "perfect cohesion", for a class that may share nothing — and `(a - 1)` is the normalisation the
+  1996 definition states and the one that makes 0 perfect cohesion and 1 a class whose methods each keep a field
+  to themselves. A class with a single field is 0: there is no spread over fields left to normalise.
+- WHY: `LCOM4`'s graph is the shared-field one alone, where Hitz & Montazeri also join a method to a method it
+  calls. `extraction.ClassInfo` keeps only the field relation, and the sibling ports count the components of the
+  same graph, so a class scores the same in all of them. It makes the number an upper bound on the paper's — a
+  class the paper calls one piece can be two here, never the other way round — and `LCOM4`'s doc says so.
+- WHY: `LCOM1` and `LCOM4` return `int` and the other six `float64`, because a count of method pairs and a count
+  of components are counts, and rounding a ratio to report it as one would throw the measurement away. The test
+  table reads all eight as `float64` so that one table can hold the family.
+- WHY: no fluent verb and no new public surface. `Measurement.Value` is an `int` and `MetricBuilder.metric` is
+  typed to `calculation.CountMetric`, so a `metrics().lcom()` group would mean generalising both — a refactor of
+  #32's passing code, and a pre-emption of the threshold-predicate issue that has to decide how a ratio is
+  compared and reported. The eight are exported functions of one `extraction.ClassInfo`, which is what the issue
+  asks for and what the fluent stage will call.
+- WHY: there is therefore no integration test for this issue: nothing of it is reachable from the public
+  surface yet. The tests are unit tests at both levels instead — `metrics/calculation/lcom_metrics_test.go`
+  against hand-built classes, with one case per scale and a table that fails if it names fewer than eight
+  measures, and seven new cases in `metrics/extraction/extract_class_info_test.go` for the relation, including
+  one that holds its two directions to each other.
+- WHY: the file stem is `lcom_metrics.go` beside `count_metrics.go`, where the sibling's is `lcom.ts`. The stem
+  convention inside this package is `<family>_metrics.go`, and `metrics/fluentapi/count_metrics.go` is its
+  sibling stem here; matching the package a reader is already in beats matching the port's filename.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. The eight are functions returning a
+  number that no caller can usefully discard, and they are not chain methods, so the list is unchanged for the
+  reason #32, #27 and #28 left it unchanged.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc, which
+  now names both families and the `m`/`a`/`μ(A)` vocabulary and says why the cohesion measures are plain
+  functions rather than `CountMetric` values; `metrics/extraction`'s package doc, which listed `FileInfo` and
+  `ClassInfo` as everything it produces and now names `FieldInfo` and `MethodInfo` too; and `countFunctions`'
+  doc, which named the tally as `countReceivers` after it became `collectReceiverMethods`.

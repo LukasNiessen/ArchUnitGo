@@ -1,14 +1,24 @@
 // Package calculation is the metrics module's numeric half: it says which number a metric is, and reads
 // that number off every subject a rule selected.
 //
-// It is pure. A metric is a name plus one function of a single file or a single class — nothing here opens
-// a file, parses Go or decides what a rule is about — so the eight count metrics can be tested against a
-// hand-built extraction.FileInfo, and the arithmetic of a rule is separate from the reading that fed it.
+// It is pure. Nothing here opens a file, parses Go or decides what a rule is about, so every number can be
+// tested against a hand-built extraction.FileInfo, and the arithmetic of a rule is separate from the reading
+// that fed it.
 //
-// The eight are the counts this library can take of a project as it is written: `lines of code`,
-// `statements`, `imports`, `functions`, `classes` and `interfaces` about one file, and `method count` and
-// `field count` about one class. A Measurement is what any of them produces, and comparing one against a
-// threshold is the assertion stage's business rather than this package's.
+// Two families of number live here. The counts are CountMetric values — a name plus one function of a single
+// file or a single class — and they are the eight counts this library can take of a project as it is written:
+// `lines of code`, `statements`, `imports`, `functions`, `classes` and `interfaces` about one file, and
+// `method count` and `field count` about one class. A Measurement is what any of them produces.
+//
+// The cohesion family is the eight LCOM measures — LCOM96a, LCOM96b, LCOM1, LCOM2, LCOM3, LCOM4, LCOM5 and
+// LCOMStar — each a formula over one class: over its fields, its methods, and which of the fields each of the
+// methods reaches. Their vocabulary is the literature's, so `m` is how many methods a class has, `a` how many
+// fields, and `μ(A)` how many methods reach the field A. They are plain functions rather than CountMetric
+// values because a lack of cohesion is a ratio where a Measurement carries a count; the metric value that
+// carries a ratio belongs with the threshold predicates that compare one, and lands with them.
+//
+// Comparing any of these numbers against a threshold is the assertion stage's business rather than this
+// package's.
 package calculation
 
 import (

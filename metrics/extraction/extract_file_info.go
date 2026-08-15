@@ -3,14 +3,15 @@
 //
 // The dependency graph says nothing about the size or the shape of a file — it is edges between
 // identifiers — so a rule about a number needs a second gathering step, the way the files module needs
-// one for a user's own predicate. FileInfo and ClassInfo are what it produces, ExtractFileInfo is the one
-// door to it, and metrics/calculation is what turns those facts into a measurement.
+// one for a user's own predicate. FileInfo and the ClassInfo, FieldInfo and MethodInfo under it are what
+// it produces, ExtractFileInfo is the one door to it, and metrics/calculation is what turns those facts
+// into a measurement.
 //
 // This is the one impure package of the module, as common/extraction is of the kernel: it opens files and
-// it parses Go. Everything a metric could ever want to know about a file is counted here, once, while the
+// it parses Go. Everything a metric could ever want to know about a file is read here, once, while the
 // syntax tree is in hand — how many of its lines carry code, how many statements they are, its imports,
-// its functions and the types it declares — so that the numeric half stays pure and can be tested against
-// a hand-built FileInfo.
+// its functions, the types it declares, and which fields each of a type's methods reaches — so that the
+// numeric half stays pure and can be tested against a hand-built FileInfo.
 //
 // Nothing downstream of this package knows what a statement or a receiver is, which is the same promise
 // common/extraction makes about imports: the vocabulary of Go stops here.
@@ -103,8 +104,9 @@ type FileInfo struct {
 // identifier was minted by making the path relative to that same root in the first place.
 //
 // The files are described together rather than one at a time for one reason: a method is declared beside
-// the type it belongs to rather than inside it, so how many methods a type has is a question about a
-// whole package. The methods of every file handed in are attributed to the classes of the same folder,
+// the type it belongs to rather than inside it, so how many methods a type has — and which of its fields
+// each of them reaches — is a question about a whole package. The methods of every file handed in are
+// attributed to the classes of the same folder,
 // which has a consequence worth knowing — a scope that selects some files of a package measures the
 // methods it selected, the way a scope that selects some files of a project measures the dependencies
 // between them. Widening the scope is what makes the rest visible.
@@ -147,7 +149,7 @@ type source struct {
 // a method belongs to is only known once every file of the folder has been read.
 func describeSources(sources []source) ([]FileInfo, error) {
 	files := make([]FileInfo, 0, len(sources))
-	methods := make(map[receiver]int, len(sources))
+	methods := make(map[receiver][]declaredMethod, len(sources))
 	for _, read := range sources {
 		file, err := describeSource(read, methods)
 		if err != nil {
@@ -159,9 +161,9 @@ func describeSources(sources []source) ([]FileInfo, error) {
 	return files, nil
 }
 
-// describeSource parses one file and counts everything a metric can ask about it, adding the methods it
+// describeSource parses one file and reads everything a metric can ask about it, adding the methods it
 // declares to methods on the way — the tally describeSources hands to attributeMethods afterwards.
-func describeSource(read source, methods map[receiver]int) (FileInfo, error) {
+func describeSource(read source, methods map[receiver][]declaredMethod) (FileInfo, error) {
 	fileSet := token.NewFileSet()
 	// Comments are wanted because they are what LinesOfCode has to leave out, and object resolution is
 	// not: nothing here follows an identifier to its declaration.
@@ -172,7 +174,7 @@ func describeSource(read source, methods map[receiver]int) (FileInfo, error) {
 
 	identifier := extraction.NormalizeIdentifier(read.identifier)
 	directory := path.Dir(identifier)
-	countReceivers(methods, directory, parsed)
+	collectReceiverMethods(methods, directory, parsed)
 	return FileInfo{
 		Path:           identifier,
 		Directory:      directory,
@@ -243,8 +245,9 @@ func countStatements(file *ast.File) int {
 // countFunctions counts the functions this file declares at package level.
 //
 // A declaration with a receiver is a method and is left out: it is counted on the type it belongs to, by
-// countReceivers, so that a package's functions and its types' methods add up to its declarations instead
-// of overlapping. A function literal is not a declaration at all and is part of the statement holding it.
+// collectReceiverMethods, so that a package's functions and its types' methods add up to its declarations
+// instead of overlapping. A function literal is not a declaration at all and is part of the statement
+// holding it.
 func countFunctions(file *ast.File) int {
 	count := 0
 	for _, declaration := range file.Decls {
