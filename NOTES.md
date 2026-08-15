@@ -1618,3 +1618,64 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   the dependency is the statement. Verified by mutation: an import of `files/projection` from
   `graph/projection/project_snapshot.go` fails both layer policies, and one of
   `golang.org/x/tools/go/packages` from `graph/fluentapi/snapshot.go` fails the third-party rule.
+
+## Issue #29 — Graph reports: the six output formats
+
+- WHY: the renderers live in a new `graph/rendering` package, which is a sixth directory beside the per-module
+  shape `AGENTS.md` lists. It is the second of the two steps `graph/projection`'s own doc names, and it needs a
+  home where it can be pure: `projection` is the first step and a format is not a projection of anything,
+  `fluentapi` would put the whole surface behind the chain and lose the seam that lets every format be tested
+  against a hand-built snapshot, and `common/rendering` would claim a generality that six graph formats do not
+  have. `.golangci.yml`'s `pure-packages` gained `**/rendering/**` so the purity is enforced mechanically
+  rather than by this note.
+- WHY: all six renderers are `func(projection.Snapshot) string` — no error in the signature. A renderer reads a
+  value that is already sorted, counted and validated, and there is nothing left in it to refuse, so the twelve
+  terminals are two helpers (`rendered`, `exported`) rather than twelve bodies. The two places that forced a
+  choice are named below.
+- WHY: `RenderCSV` writes RFC 4180 quoting by hand instead of using `encoding/csv`. A `csv.Writer` over a
+  `strings.Builder` cannot fail, so going through it would mean an `if err != nil` branch no test can reach —
+  and an unreachable branch in a renderer is worse than eleven lines of quoting with a test that parses the
+  result back with `encoding/csv`.
+- WHY: `RenderJSON` returns `""` on a `json.MarshalIndent` error, which is unreachable: the DTOs are strings,
+  ints, bools and slices of those. It is written that way rather than propagated because the alternative is an
+  error on all six signatures for one branch that cannot happen; the comment at the branch says so.
+- WHY: CSV is the one format that does not carry the report's title, and the only one with no headline
+  fallback of its own. A line above the header row would stop the file being a table a spreadsheet or a script
+  can read. JSON carries the title but omits the key when there is none, so a consumer asking whether the
+  report was titled gets the answer rather than a name this library invented — the four formats a person reads
+  supply `dependency graph`.
+- WHY: the HTML page states the report as a list of nodes and a table of dependencies and embeds the DOT and
+  Mermaid sources in `<details>` blocks, rather than laying the graph out. Laying it out means shipping a
+  layout engine or fetching one, and "self-contained" is the format's whole point: no `<script>`, no `<link>`,
+  no URL, one inline `<style>`. The embedded sources are the very documents the other two formats export, so a
+  page cannot disagree with a diagram exported beside it.
+- WHY: Mermaid and D2 draw nodes under synthetic ids (`n0`, `n1`) with the label as an attribute, DOT uses the
+  label itself as the quoted identifier. DOT quotes anything; a Mermaid node id and a D2 key cannot hold a `/`
+  or a `.` without becoming a subgraph path, and a label is whatever a folder may be called.
+- WHY: an arrow carries its count only when it stands for more than one dependency. Every arrow in an
+  uncollapsed report would otherwise be labelled `1`, which is noise on the diagram a user reads most.
+- WHY: external nodes are dashed in DOT and D2 and stadium-shaped in Mermaid, rather than dashed in all three.
+  Mermaid's dashed-link syntax collides with a piped edge label, and a shape says the same thing about a node
+  without a syntax that has to be got exactly right.
+- WHY: `archunit.go` re-exports the twelve terminals only as methods of `GraphBuilder` — the six `Render*`
+  functions stay in `graph/rendering`. The issue asks for a chain that renders; a user reaching for a renderer
+  directly already has `GraphSnapshot`, which is re-exported for exactly that.
+- WHY: `export as <format>` creates the folders of the path it was given and overwrites an existing file. A
+  report exported into `docs/` should not fail because nobody had made `docs/` yet, and a report is the current
+  answer about the project, so a stale one left beside it would read as a second answer. Nothing touches the
+  disk until the whole document is rendered, so a failing query leaves no half-written diagram — asserted by a
+  test that the folder itself was never created.
+- WHY: an empty path is `ErrMissingExportPath`, a `UserError` naming which of the six terminals to fix. The
+  working directory is a folder rather than a file, so there is nothing the empty string could have meant, and
+  it is the API used wrongly rather than the disk refusing.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed: all twelve terminals are methods,
+  which that list cannot guard, and they return a value that `errcheck` already guards.
+- WHY: the prose the change made false was updated in the same diff — `graph/projection/snapshot.go`'s package
+  doc and `String` (which named rendering as "the issue after this one"), `graph/fluentapi/snapshot.go` and
+  `project_graph.go` (which said the terminal was `Snapshot`, singular, and that a rendered diagram "will be"
+  one), and `archunit.go`'s package doc and `GraphBuilder`/`GraphSnapshot` aliases.
+- WHY: the integration tests are `archunit_test.go`'s new one, which renders and exports this repository in all
+  six formats through the public surface and asserts the exported file equals the string form byte for byte,
+  plus `graph/fluentapi`'s `to_format_test.go` and `export_as_format_test.go` against fixture projects on
+  disk. `graph/rendering`'s own suite is unit tests against hand-built snapshots, with a whole-document golden
+  assertion per format and one cross-format file for the promises all six share.

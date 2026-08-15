@@ -23,15 +23,16 @@ var ErrEmptySnapshot = errors.New("no node in the snapshot")
 //	snapshot, err := archunit.ProjectGraph(nil).CollapseToFolderDepth(2).Snapshot()
 //	fmt.Println(snapshot.Summary())
 //
-// It is the terminal of this module and the only stage of the chain that reads anything: the project is
-// located, extracted and projected here, and by nothing else. `with check options` is how it is told to do
-// that differently, which is why it takes no argument of its own — a rendered diagram and a file written to
-// disk will be terminals over the same query, and the bag they share belongs on the chain rather than
-// repeated at each of them.
+// It is the data terminal of this module, and the stage every other terminal goes through to read anything:
+// the project is located, extracted and projected here, and nowhere else. `with check options` is how it is
+// told to do that differently, which is why it takes no argument of its own — the twelve `to <format>` and
+// `export as <format>` terminals are terminals over the same query, and the bag they share belongs on the
+// chain rather than repeated at each of them.
 //
 // It is also the seam every output format is written against. Rendering is a function of the returned
 // projection.Snapshot alone, so a format added later needs nothing from this package, and a modifier added to
-// this package needs nothing from a format.
+// this package needs nothing from a format. Reach for this terminal when the report is an answer a test
+// asserts on; reach for ToDot and its five siblings when it is a document somebody reads.
 //
 // The error is technical or the user's — a pattern a modifier could not compile, a group without a name, a
 // folder depth below one, a locator naming no Go project, a project that will not load — or ErrEmptySnapshot

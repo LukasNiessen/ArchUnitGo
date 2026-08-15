@@ -3,6 +3,8 @@ package archunit_test
 import (
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,10 +94,10 @@ var (
 		WhereLayer("files").MayNotDependOnLayers("kernel")
 )
 
-// The report family, whose chain is one stage and whose terminal is not a Checkable, because a report is not a
+// The report family, whose chain is one stage and whose terminals are not Checkables, because a report is not a
 // rule: the builder is named so that a described query can be stored and branched into as many focuses and
 // output formats as a suite wants, and the snapshot's four parts are named so that a caller can write a
-// renderer of their own over them. The two slices are asserted as slices because that is the only compile-time
+// renderer of their own over them beside the six the library ships. The two slices are asserted as slices because that is the only compile-time
 // way to say that these aliases name what a snapshot actually hands back.
 var (
 	_ archunit.GraphBuilder = archunit.ProjectGraph(nil).
@@ -112,6 +114,25 @@ var (
 	_ archunit.GraphSummary = archunit.GraphSnapshot{}.Summary()
 	_ []archunit.GraphNode  = archunit.GraphSnapshot{}.Nodes()
 	_ []archunit.GraphEdge  = archunit.GraphSnapshot{}.Edges()
+)
+
+// The report's other twelve terminals — six output formats, each in the string form and the file form — as
+// method values rather than calls, because what they render is the graph module's own business and reading the
+// project is not this file's. What is said here is that all twelve are on the public surface, under these
+// names and in these two shapes.
+var (
+	_ func() (string, error) = archunit.ProjectGraph(nil).ToDot
+	_ func() (string, error) = archunit.ProjectGraph(nil).ToMermaid
+	_ func() (string, error) = archunit.ProjectGraph(nil).ToD2
+	_ func() (string, error) = archunit.ProjectGraph(nil).ToCSV
+	_ func() (string, error) = archunit.ProjectGraph(nil).ToJSON
+	_ func() (string, error) = archunit.ProjectGraph(nil).ToHTML
+	_ func(string) error     = archunit.ProjectGraph(nil).ExportAsDot
+	_ func(string) error     = archunit.ProjectGraph(nil).ExportAsMermaid
+	_ func(string) error     = archunit.ProjectGraph(nil).ExportAsD2
+	_ func(string) error     = archunit.ProjectGraph(nil).ExportAsCSV
+	_ func(string) error     = archunit.ProjectGraph(nil).ExportAsJSON
+	_ func(string) error     = archunit.ProjectGraph(nil).ExportAsHTML
 )
 
 // The violation types a rule reports are on the surface too, because a user who wants more than a pass or
@@ -1092,7 +1113,7 @@ func TestProjectGraphDrawsThisRepositoryAsItsPackagesThroughThePublicSurface(t *
 	// project is the one this test is in, and the modifiers are the two a diagram of a Go project is almost
 	// always drawn with — collapse the four hundred files onto the folders they live in, and leave somebody
 	// else's code out of it. A report is a value, so nothing about this is a rule and nothing is judged; what
-	// comes back is the data every renderer will be written over.
+	// comes back is the data all six output formats are written over.
 	t.Cleanup(archunit.ClearGraphCache)
 
 	report := archunit.ProjectGraph(nil).
@@ -1237,6 +1258,83 @@ func TestTheLocatorReachesTheProjectThroughEitherGraphEntryPoint(t *testing.T) {
 			}
 			if !snapshot.Empty() {
 				t.Errorf("`%s` drew %v, want nothing when the project cannot be located", entry.name, snapshot)
+			}
+		})
+	}
+}
+
+func TestTheSixOutputFormatsRenderAndExportThisRepositoryThroughThePublicSurface(t *testing.T) {
+	// The REPORT stage end to end through the public surface, dogfooding on this library: one described report,
+	// rendered as all six formats and written to disk as all six, and the file is the string byte for byte. That
+	// last part is what a user relies on when a diagram is committed beside the code — a test asserts on the
+	// string form, and the file a build exports is the same document.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	report := archunit.ProjectGraph(nil).
+		CollapseToFolderDepth(2).
+		Titled("the packages of ArchUnitGo")
+	folder := t.TempDir()
+
+	formats := []struct {
+		name     string
+		file     string
+		rendered func() (string, error)
+		exported func(string) error
+		want     string
+	}{
+		{
+			name: "dot", file: "architecture.dot", rendered: report.ToDot, exported: report.ExportAsDot,
+			want: `digraph "the packages of ArchUnitGo" {`,
+		},
+		{
+			name: "mermaid", file: "architecture.mmd", rendered: report.ToMermaid, exported: report.ExportAsMermaid,
+			want: "flowchart LR",
+		},
+		{
+			name: "d2", file: "architecture.d2", rendered: report.ToD2, exported: report.ExportAsD2,
+			want: "direction: right",
+		},
+		{
+			name: "csv", file: "dependencies.csv", rendered: report.ToCSV, exported: report.ExportAsCSV,
+			want: "kind,source,target,dependencies,external,import kinds",
+		},
+		{
+			name: "json", file: "dependencies.json", rendered: report.ToJSON, exported: report.ExportAsJSON,
+			want: `"title": "the packages of ArchUnitGo"`,
+		},
+		{
+			name: "html", file: "architecture.html", rendered: report.ToHTML, exported: report.ExportAsHTML,
+			want: "<h1>the packages of ArchUnitGo</h1>",
+		},
+	}
+
+	for _, format := range formats {
+		t.Run(format.name, func(t *testing.T) {
+			document, err := format.rendered()
+			if err != nil {
+				t.Fatalf("rendering %s as %s failed: %v", report, format.name, err)
+			}
+			if !strings.Contains(document, format.want) {
+				t.Errorf("%s rendered as %s does not hold %q:\n%s", report, format.name, format.want, document)
+			}
+			// Every format names this library's own packages, whatever else it says about them.
+			for _, label := range []string{"graph/fluentapi", "graph/rendering"} {
+				if !strings.Contains(document, label) {
+					t.Errorf("%s rendered as %s does not draw %q:\n%s", report, format.name, label, document)
+				}
+			}
+
+			path := filepath.Join(folder, "reports", format.file)
+			if err := format.exported(path); err != nil {
+				t.Fatalf("exporting %s as %s failed: %v", report, format.name, err)
+			}
+			exported, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading the exported %s report failed: %v", format.name, err)
+			}
+			if string(exported) != document {
+				t.Errorf("the exported %s report holds\n%s\nwant the document its string form renders\n%s",
+					format.name, exported, document)
 			}
 		})
 	}
