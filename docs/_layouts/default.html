@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="{{ site.lang | default: 'en' }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if page.url == '/' %}{{ site.title }} — {{ site.description }}{% else %}{{ page.title }} · {{ site.title }}{% endif %}</title>
+    <meta name="description" content="{{ page.description | default: site.description }}">
+    <link rel="canonical" href="{{ page.url | absolute_url }}">
+    <link rel="stylesheet" href="{{ '/assets/docs.css' | relative_url }}">
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to the page</a>
+
+    <header class="banner">
+      <div class="banner-inner">
+        <a class="wordmark" href="{{ '/' | relative_url }}">{{ site.title }}</a>
+        <p class="tagline">{{ site.description }}</p>
+        <p class="elsewhere">
+          <a href="{{ site.repository_url }}">Source</a>
+          <a href="{{ site.api_reference_url }}">API reference</a>
+          {% for sibling in site.siblings %}<a href="{{ sibling.url }}">{{ sibling.name }}</a>{% endfor %}
+        </p>
+      </div>
+    </header>
+
+    <div class="page">
+      {%- comment -%}
+        The navigation is every page that gives itself a nav_order, sorted by it. No page is named here:
+        a page added to docs/ appears in the navigation because it has front matter, and docs_test.go is
+        what holds every page to having it. A hardcoded list would be the one part of this site that
+        could silently disagree with what is in the folder.
+      {%- endcomment -%}
+      {%- assign chapters = site.pages | where_exp: 'chapter', 'chapter.nav_order' | sort: 'nav_order' -%}
+      <nav class="chapters" aria-label="Documentation">
+        <ol>
+          {%- for chapter in chapters %}
+          <li>
+            <a href="{{ chapter.url | relative_url }}"{% if chapter.url == page.url %} aria-current="page"{% endif %}>{{ chapter.title }}</a>
+          </li>
+          {%- endfor %}
+        </ol>
+      </nav>
+
+      <main id="content" class="prose">
+        {{ content }}
+      </main>
+    </div>
+
+    <footer class="colophon">
+      <p>
+        ArchUnitGo is the Go member of ArchUnitEverything, one architecture-testing library per language.
+      </p>
+      <p>
+        <a href="{{ site.repository_url }}/blob/main/docs/{{ page.path }}">Edit this page</a> ·
+        <a href="{{ site.repository_url }}/blob/main/AGENTS.md">AGENTS.md</a> ·
+        <a href="{{ site.api_reference_url }}">pkg.go.dev</a>
+      </p>
+    </footer>
+  </body>
+</html>

@@ -63,9 +63,9 @@ type helper interface {
 // that did not. A rule that does not hold is one t.Error, carrying the rule as the user wrote it and then
 // the whole report — the count, and the violations numbered from one:
 //
-//	project files, in folder "internal/api/**", should not, depend on files, in folder "internal/db/**"
+//	project files, path without filename matches "internal/api/**", should not, depend on files, path without filename matches "internal/db/**"
 //	1 violation:
-//	  1. internal/api/handler.go: should not, depend on files, path without filename matches "internal/db"; it depends on internal/db/conn.go
+//	  1. internal/api/handler.go: should not, depend on files, path without filename matches "internal/db/**"; it depends on internal/db/conn.go
 //
 // The rule's own sentence is the first line because a test that asserts several rules, or asserts one in a
 // loop, otherwise reports a list of files with nothing saying which sentence they broke. It is left out when
