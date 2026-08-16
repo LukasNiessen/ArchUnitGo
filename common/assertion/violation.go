@@ -6,6 +6,9 @@
 // and gathers them with a `gather <thing> violations` function; this package is what they all have
 // in common.
 //
+// Mood is the other half of that common ground: the `should` / `should not` flag every gather
+// function takes, so that a rule and its negation are one walk over the structure rather than two.
+//
 // Two conventions matter more than the code:
 //
 //   - A violation is data, never prose. Message construction lives in the testing layer, so that

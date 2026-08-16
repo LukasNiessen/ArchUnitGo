@@ -35,6 +35,48 @@ func TestEmptyTestViolationCarriesTheSelectorsThatMatchedNothing(t *testing.T) {
 	}
 }
 
+func TestEmptyTestViolationRendersItselfForALogLine(t *testing.T) {
+	// Every violation type in the library renders itself for a log line and a test failure, and this is the
+	// shape they share: the subject that disagreed with the rule, the requirement in the words the rule was
+	// written in, then what was found.
+	tests := []struct {
+		name      string
+		violation EmptyTestViolation
+		want      string
+	}{
+		{
+			name:      "the selection that came to nothing",
+			violation: NewEmptyTestViolation("files", matching.FolderMatcher(mustGlob(t, "internal/apis/**"))),
+			want:      `files: path without filename matches "internal/apis/**" -> nothing`,
+		},
+		{
+			name: "every selector, in the order the user chained them",
+			violation: NewEmptyTestViolation("files",
+				matching.FolderMatcher(mustGlob(t, "internal/**")),
+				matching.FilenameMatcher(mustGlob(t, "*_repository.go"))),
+			want: `files: path without filename matches "internal/**", filename matches "*_repository.go" -> nothing`,
+		},
+		{
+			name:      "a rule the guard was told nothing about the selection of",
+			violation: NewEmptyTestViolation("files"),
+			want:      "files -> nothing",
+		},
+		{
+			name:      "and one it was told nothing at all about",
+			violation: NewEmptyTestViolation(""),
+			want:      "the rule's subject -> nothing",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.violation.String(); got != test.want {
+				t.Errorf("String() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestEmptyTestViolationCopiesItsSelectors(t *testing.T) {
 	// Spreading a slice into a variadic parameter hands over the caller's backing array, so without
 	// the clone the caller can still rewrite a violation it has already reported. Spare capacity is
