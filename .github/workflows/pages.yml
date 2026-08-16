@@ -13,6 +13,14 @@
 #
 # `main` alone is the trigger, unlike ci.yml, which watches every branch: publishing is not a check, and a
 # branch's half-written page is not what the site should show.
+#
+# Whether there is anywhere to publish *to* is not this file's decision. Pages is a repository setting only
+# an administrator can turn on, and until somebody does, the API this workflow asks for the site answers 404.
+# So the build runs either way and the publish waits: the site is built on every push to main, which is the
+# half of this that can be checked without a setting, and the deployment is skipped with a notice saying why.
+# The moment Pages is enabled — Settings → Pages → Source: GitHub Actions — the next push publishes with no
+# edit to this file. Skipping is deliberately not the same as a step that cannot fail: one of those reports
+# a site that was built and not published, and the other reports a published site on a repository with none.
 
 name: Docs
 
@@ -39,12 +47,35 @@ jobs:
     permissions:
       contents: read
       pages: read
+    # What the deploy job below waits on. A job's `if` cannot read another job's steps, only its outputs, so
+    # the one question this build asks the API is answered here and passed on.
+    outputs:
+      pages_enabled: ${{ steps.site.outputs.enabled }}
     steps:
       - uses: actions/checkout@v7
+      # Is there a site to publish to? `pages: read` above is exactly the permission this asks with, and a
+      # repository with Pages switched off answers 404 rather than an error — so the absence of a site is a
+      # fact this workflow can read, not a failure it has to hide.
+      - id: site
+        name: Ask whether this repository has a Pages site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pages" --silent 2>/dev/null; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Pages is not enabled::The site was built but not published. Turn it on at" \
+              "Settings → Pages → Source: GitHub Actions, and the next push to main publishes it." \
+              "Enabling Pages on a private repository needs a paid plan, and publishes the site publicly."
+          fi
       # What baseurl the site is served under is Pages' answer, not this file's: the site is
       # https://lukasniessen.github.io/ArchUnitGo/, so every asset and every internal link has to be
-      # written relative to a prefix docs/_config.yml states and this step confirms.
-      - uses: actions/configure-pages@v6
+      # written relative to a prefix docs/_config.yml states and this step confirms. It is part of the
+      # publish and skipped with it — asked of a repository without a site, it is the 404 that used to be
+      # the whole of this workflow's output.
+      - if: steps.site.outputs.enabled == 'true'
+        uses: actions/configure-pages@v6
       # The site source is docs/ and not the repository root, so README.md is not a page of it. The two
       # documents have different jobs — the README is what a reader skims before deciding, the site is what
       # they read while writing rules — and docs/index.md links to the README for the parts that are only
@@ -70,9 +101,11 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    # Belt and braces on top of the `main`-only trigger, because the manual one has no branch filter: a
-    # workflow_dispatch from a branch builds the site and stops, and only main is ever published.
-    if: github.ref == 'refs/heads/main'
+    # Two conditions, and the first is belt and braces on top of the `main`-only trigger, because the manual
+    # one has no branch filter: a workflow_dispatch from a branch builds the site and stops, and only main is
+    # ever published. The second is the setting: there is nothing to deploy to until an administrator turns
+    # Pages on, and skipping is the honest report of that where a failed deployment is not.
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.pages_enabled == 'true'
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5

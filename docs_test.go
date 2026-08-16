@@ -594,6 +594,12 @@ func TestTheLayoutOfTheDocsSiteNamesNoPageOfIt(t *testing.T) {
 // branch, because a page that names a verb this library does not have is wrong before it is published
 // rather than after. The publish workflow watches main alone — so if it were also the check, the check
 // would run after the merge, which is the definition of not being a gate.
+//
+// It also pins the split between building the site and publishing it. Pages is a repository setting, and
+// this repository does not have it turned on; the workflow reads that rather than failing on it, so the
+// build runs on every push and the deployment waits for the setting. What the test holds is that the
+// waiting is spelled as a condition on the deploy alone — not as a step that cannot fail, and not as a
+// build that never runs.
 func TestThePagesWorkflowPublishesTheDocsFolderAndChecksNothing(t *testing.T) {
 	workflow := collapsed(readDocument(t, pagesWorkflow))
 
@@ -608,6 +614,11 @@ func TestThePagesWorkflowPublishesTheDocsFolderAndChecksNothing(t *testing.T) {
 		// A publish is not a check, and a branch's half-written page is not what the site should show.
 		"branches: [main]",
 		"if: github.ref == 'refs/heads/main'",
+		// Whether Pages is switched on is a setting no workflow can set, so the build asks and the publish
+		// waits on the answer. Both halves are pinned: the question the build passes on, and the condition
+		// the deployment reads it as.
+		"pages_enabled: ${{ steps.site.outputs.enabled }}",
+		"needs.build.outputs.pages_enabled == 'true'",
 		// A half-published site is worse than a stale one, so a deployment is never canceled mid-upload.
 		"group: pages",
 		"cancel-in-progress: false",
@@ -626,6 +637,15 @@ func TestThePagesWorkflowPublishesTheDocsFolderAndChecksNothing(t *testing.T) {
 			t.Errorf("%s uses %q: a step that cannot fail publishes a site nobody built", pagesWorkflow,
 				switchedOff)
 		}
+	}
+
+	// The setting gates the publish and nothing else. A build behind it would mean the one part of this
+	// workflow that can be checked without an administrator — that GitHub's Jekyll renders docs/ at all —
+	// only ran once it no longer mattered.
+	if strings.Contains(workflow, "enabled == 'true' uses: actions/jekyll-build-pages@v") {
+		t.Errorf("%s builds the site only when Pages is enabled: the build is the half of this workflow that "+
+			"needs no setting, and skipping it leaves a broken site undiscovered until the day it is published",
+			pagesWorkflow)
 	}
 	for _, floating := range []string{"@main", "@master"} {
 		if strings.Contains(workflow, floating) {
