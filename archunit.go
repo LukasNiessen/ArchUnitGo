@@ -744,8 +744,10 @@ func Metrics(locator *ProjectLocator) MetricsBuilder {
 //
 // The nine modifiers are all optional, chainable and order-independent — `including external dependencies`,
 // `including self dependencies`, `focus on`, `reachable from`, `dependents of`, `collapse to folder depth`,
-// `collapse by pattern`, `titled` and `with check options` — and each of them narrows what the diagram draws
-// or says how it is labeled. The default report is one node per file of the project's own code.
+// `collapse by pattern`, `titled` and `with check options` — and each of them narrows what the diagram draws,
+// adds the code outside the project or a node's dependency on itself, or says how it is labeled. The default
+// report is one node per file of the project's own code, so the two `including` verbs are the two that widen
+// it.
 //
 // The four that take a pattern each take `except`, which qualifies the one the chain wrote most recently: it is
 // how a diagram leaves out the generated packages, and how `collapse by pattern "third party" "**"` keeps one

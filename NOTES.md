@@ -2638,3 +2638,105 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: the second layer policy in `TestTheSuiteHelperRunsOneSubtestPerRuleUnderTheNameItWasGiven` still has no
   `WhereLayer("metrics")` clause of its own, which is the metrics host's own omission and not the merge's. It is
   left as it was found: a merge that quietly adds a rule neither side wrote is a merge nobody can review.
+
+## Issue #41 — README someone can actually start from
+
+- WHY: `readme_test.go` exists because the trap the issue names — a sibling port's README documenting a slice API
+  that does not exist — is not a mistake somebody made while typing. It is what any hand-checked document becomes
+  after a few months of a moving API, and this repository already decided how to answer that: `ci_test.go` holds a
+  non-Go artifact to a spec as text rather than trusting that somebody re-reads it. So every Go name the README
+  uses is looked up in this module's own syntax tree, every `go` block in it is parsed, and the sentences that say
+  a thing is *absent* are checked against the absence. Six tests, one parse of the tree, no new dependency.
+- WHY: the guard reads the library with `go/parser` and not with `reflect`. Reflection cannot see a package-level
+  function, a method nobody calls or a struct field's name, and those are most of what a README says: `Files`,
+  `ShouldBeBelowOrEqual`, `CheckOptions.AllowEmptyTests`. Parsing sees all three, and it sees the packages behind
+  the surface too, which is what lets the `LCOM*` sentence name functions that are deliberately not re-exported.
+- WHY: nothing in the guard type-checks the examples, and that is a decision rather than a gap. An example is
+  written for the reader's project — `internal/api`, `docs/architecture.puml`, a predicate over their own files —
+  so making one compile means inventing a project around it, and then the document is being checked against a
+  fixture instead of against the library. What can be checked exactly is checked exactly: `archunit.X` against
+  archunit.go's exports, and every method of a chain rooted at `archunit` against the methods this module
+  declares. Every snippet was compiled once while it was written, in a scratch `package archunit_test` file that
+  `go vet` accepted and that was then deleted; the permanent guard is the parse.
+- WHY: a chain's methods are checked against *every* exported method in the module rather than against the
+  receiver each one is really on. Following `ProjectFiles(nil).InFolder(…).ShouldNot().DependOnFiles()` through
+  its four builder types by hand is type-checking, badly. The looser check still catches the whole class of
+  mistake a README makes — a renamed verb, a predicate that moved to the other mood, a terminal that never
+  existed — because such a name exists nowhere in the tree.
+- WHY: `namesOfTheReadersProject` is one entry long, `Handler`, and it is a list rather than a pattern. The
+  match-target table has to walk one identifier through five selectors, and the declared type of
+  `internal/api/handler.go` is `Handler` — a name from the reader's code that this module correctly does not have.
+  Anything added to that list is a name nothing checks any more, so it is worth the friction of being explicit.
+- WHY: the graph section spells out all six `ExportAs*` names where the first draft said "`ExportAsDot` and its
+  five siblings". Both sentences are true, but only one of them can be checked, and only one of them answers the
+  question a reader actually has — *is Mermaid in there?* — without making them go and read the source. Same
+  reason the metrics section now names `ShouldNotBeInZoneOfUselessness` beside `ShouldNotBeInZoneOfPain`: the
+  document says the zone checks are two, so it has to say which two.
+- WHY: the two counting sentences AGENTS.md warns about are kept, not avoided. "Nine modifiers" and "Thirteen
+  terminals" are what makes the report family readable as a closed set instead of a sample, and
+  `TestTheReadmeCountsTheGraphFamilyCorrectly` recomputes both off `graph/fluentapi` — a modifier hands back a
+  `GraphBuilder`, a terminal hands back a report or an `error`, `Except` is neither because an exclusion qualifies
+  the modifier in front of it. A tenth modifier fails that test in the commit that adds it, which is the only
+  form in which a counted sentence is safe to write.
+- WHY: every row of "What is not implemented yet" was checked against the tree rather than remembered, and each
+  one has a test in `TestTheReadmeIsHonestAboutWhatIsMissing` that fails when somebody implements the thing: no
+  tag on any commit; the eight LCOM measures are plain functions in `metrics/calculation` with no fluent verb; the
+  slices family is the only one of the five with no `Except` (four spellings in files, five in metrics, three in
+  layers, the plain verb in graph); `SliceByFileSuffix` and `Identity` are `MapFunction` values with no slicing
+  verb; `ImportKind` appears nowhere in archunit.go, so `CheckOptions.IgnoredImportKinds` still needs an import of
+  `common/extraction`; diagrams are parsed in one format and rendered in seven. A section listing what is missing
+  is the section most certain to go stale in the happiest possible way, and a stale one tells a reader not to look
+  for a verb that is sitting right there.
+- WHY: the empty-test guard has **two shapes and the README now says both**, which the first draft got wrong by
+  writing "every terminal reports an `EmptyTestViolation`". A terminal that returns violations does; a report
+  terminal has no violation list to put one in and so fails with `ErrEmptySnapshot`, `ErrEmptyReport` or
+  `ErrNothingToDraw`, exactly as those three sentinels' own comments say — and `Measure` reports emptiness
+  neither way, because it judges nothing. `AllowEmptyTests` opts out of all of them. The graph section gained
+  the same clause, since a query describing nothing is refused there too and the section never said so.
+- WHY: "every modifier narrows it" is gone from the graph section, and from `archunit.go`'s `ProjectGraph` doc,
+  which said the same thing one clause differently. Two of the nine modifiers widen the default report —
+  `IncludingExternalDependencies` adds the code outside the project, `IncludingSelfDependencies` adds a node's
+  dependency on itself — and `Titled`/`WithCheckOptions` narrow nothing. The doc comment is the second copy of
+  one false sentence, so fixing only the README would have left the next copy to be made from the wrong one.
+- WHY: the `fmt.Stringer` sentence is about "every stage of a chain that can describe itself", not every
+  builder. `LayerPolicyBuilder` — what `WhereLayer` returns — is the one exported stage with no `String`, and it
+  is named as the exception rather than given a method: a clause that has named a layer and not yet said
+  anything about it has no sentence of its own, and the policy it will join renders the whole thing anyway.
+  `readme_test.go`'s own comment about why `String` is exempt from the graph list was reworded to match.
+- WHY: the failure block shows the rendering the library actually produces — `path without filename matches
+  "internal/api/**"`, and the object pattern quoted as the user typed it, `"internal/db/**"` — because that
+  block is the one section a reader compares their own terminal against. A selector renders as the part of an
+  identifier it was matched against and never as the verb that spelled it, which is issue #16's decision, so
+  the section now says that in one clause instead of showing a heading the library cannot print. The same slip
+  sat in `archtest/assert_passes.go` and `archtest/assert_all_pass.go`, where this copy came from, and both are
+  fixed so the next copy is right; the second was also missing `depend on files` from the violation line.
+- WHY: the prose guard reads a pointer and a qualifier through instead of discarding them, which is what made
+  it a guard at all: the names that appear *only* in the prose are mostly written `archunit.KindEmptyTest`,
+  `*ProjectLocator` or `CheckOptions.IgnoredImportKinds`, and matching bare words alone left every one of them
+  checked by nothing. `archunit.X` is now held to archunit.go's exports rather than to the module, because that
+  spelling promises a user reaches it without importing anything else. A qualifier that does not read as an
+  exported identifier ends the word — `AGENTS.md`, `go.mod`, `t.Error` are not names of this library — and the
+  three the document writes with a foreign qualifier (`fmt.Stringer`, `extraction.ImportKindSet`,
+  `internal/api.Handler`) are a short explicit list beside `namesOfTheReadersProject`, for the same reason that
+  list is explicit. Verified by mutation: `archunit.KindEmptyTestX`, `CheckOptions.IgnoredImportKindsX` and
+  `*ProjectLocatorX` each fail now and each passed before.
+- WHY: the closed-set test checks **exact membership** against the set of names the README actually names —
+  its prose identifiers plus its examples' selections — instead of `strings.Contains`. A substring search
+  cannot fail for a prefix, so `ShouldBe`, `ShouldBeAbove` and `ShouldBeBelow` were each satisfied by a longer
+  verb and three of the six threshold predicates were pinned by nothing. It also recomputes the two counts the
+  document states off `method.receiver`, which was collected and never read: six `Should*` on `MetricBuilder`
+  against "Threshold predicates are exactly six", two on `MetricsDistanceBuilder` against "the two zone
+  checks", so a verb added or deleted there fails in the commit that does it, the way
+  `TestTheReadmeCountsTheGraphFamilyCorrectly` already makes nine and thirteen do. Verified by mutation both
+  ways: deleting `ShouldBe` from the README fails, and a seventh threshold verb fails twice over.
+- WHY: `metrics/extraction` is named beside `common/extraction` in "The map". The first draft said
+  `common/extraction` is the only part that knows Go, and the metrics module's own extractor imports `go/ast`,
+  `go/parser` and `go/token` and says in its package comment that it opens files and parses Go. The honest
+  statement is the one `AGENTS.md` makes about the stage rather than the package: SOURCE-and-EXTRACT is where
+  Go stops, and nothing downstream of either extractor knows what an import or a statement is.
+- WHY: the install section's "the only direct dependency is `golang.org/x/tools`" is a sentence somebody chooses
+  this library on, so it is read out of `go.mod` — every requirement not marked `// indirect` has to be named in
+  the README. The first draft said "no third-party dependency beyond `golang.org/x/tools`", which quietly reads as
+  *nothing else gets into your module graph* while `golang.org/x/mod` and `golang.org/x/sync` come along
+  indirectly. The module path and the Go version are read out of `go.mod` for the same reason, one line lower down:
+  an install instruction naming a path this module does not have stops a reader at the first thing they type.
