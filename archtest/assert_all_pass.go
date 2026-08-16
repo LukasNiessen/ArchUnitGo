@@ -62,9 +62,9 @@ type TestingRunner interface {
 //
 //	--- FAIL: TestTheArchitectureHolds (0.62s)
 //	    --- FAIL: TestTheArchitectureHolds/the_api_does_not_touch_the_database (0.59s)
-//	        project files, in folder "internal/api/**", should not, depend on files, in folder "internal/db/**"
+//	        project files, path without filename matches "internal/api/**", should not, depend on files, path without filename matches "internal/db/**"
 //	        1 violation:
-//	          1. internal/api/handler.go: should not, path without filename matches "internal/db"; it depends on internal/db/conn.go
+//	          1. internal/api/handler.go: should not, depend on files, path without filename matches "internal/db/**"; it depends on internal/db/conn.go
 //
 // The suite is a map from the name to the rule, and its rules are asserted in the sorted order of their
 // names. A map is what keeps a name and the rule it belongs to together at the call site, and what makes two
