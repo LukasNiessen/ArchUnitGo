@@ -275,7 +275,7 @@ const (
 // It is a function rather than a package-level variable for the reason every list in this library is one:
 // a caller may sort it, append to it or hand it on without reaching into a value the next test also reads.
 func domainModulesOfThisRepository() []string {
-	return []string{"files", "graph", "layers", "metrics"}
+	return []string{"files", "graph", "layers", "metrics", "slices"}
 }
 
 // architectureRulesOfThisRepository is the architecture of this library as rules: the four dependency
