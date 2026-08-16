@@ -73,6 +73,23 @@ func TestFilterExcludingUsesTheFiltersOwnTarget(t *testing.T) {
 	}
 }
 
+func TestFilterExcludingMatchersUsesTheExclusionsOwnTarget(t *testing.T) {
+	// The other half of an exclusion: a folder selector qualified by an exclusion about filenames, which
+	// is `in folder "internal/**" except with name "*_test.go"`.
+	filter := FolderMatcher(mustGlob(t, "internal/**", nil)).
+		ExcludingMatchers(FilenameMatcher(mustGlob(t, "*_test.go", nil)))
+
+	if !filter.Matches("internal/api/handler.go") {
+		t.Error("internal/api/handler.go should match")
+	}
+	if filter.Matches("internal/api/handler_test.go") {
+		t.Error("internal/api/handler_test.go should be excluded by its filename")
+	}
+	if filter.Matches("internal/legacy/handler_test.go") {
+		t.Error("an exclusion is read against the whole identifier, whatever folder the file is in")
+	}
+}
+
 func TestFilterNotMatching(t *testing.T) {
 	filter := FilenameMatcher(mustGlob(t, "*_test.go", nil)).NotMatching()
 
@@ -130,7 +147,7 @@ func TestSiblingFiltersDoNotShareAnExclusionArray(t *testing.T) {
 	// precondition directly through the unexported field — creating the hazard is the whole point,
 	// and an in-package test is the only thing that can.
 	parent := FilenameMatcher(mustGlob(t, "*.go", nil))
-	parent.exclusions = append(make([]Pattern, 0, 4), mustGlob(t, "zz_generated.go", nil))
+	parent.exclusions = append(make([]Filter, 0, 4), FilenameMatcher(mustGlob(t, "zz_generated.go", nil)))
 
 	left := parent.Excluding(mustGlob(t, "*_test.go", nil))
 	right := parent.Excluding(mustGlob(t, "mock_*.go", nil))
@@ -209,6 +226,34 @@ func TestFilterString(t *testing.T) {
 			name:   "with exclusions",
 			filter: PathMatcher(mustGlob(t, "**", nil)).Excluding(mustGlob(t, "**/legacy/**", nil), mustGlob(t, "doc.go", nil)),
 			want:   `path matches "**", excluding "**/legacy/**", "doc.go"`,
+		},
+		{
+			name: "with a targeted exclusion",
+			filter: FolderMatcher(mustGlob(t, "app/**", nil)).
+				ExcludingMatchers(FilenameMatcher(mustGlob(t, "*_gen.go", nil))),
+			want: `path without filename matches "app/**", excluding filename matches "*_gen.go"`,
+		},
+		{
+			// A bare pattern written after a targeted exclusion has to repeat the word too, or the folder
+			// pattern below reads as a second filename the `*_gen.go` exclusion is about.
+			name: "with a bare exclusion after a targeted one",
+			filter: FolderMatcher(mustGlob(t, "app/**", nil)).
+				ExcludingMatchers(FilenameMatcher(mustGlob(t, "*_gen.go", nil))).
+				Excluding(mustGlob(t, "**/generated", nil)),
+			want: `path without filename matches "app/**", ` +
+				`excluding filename matches "*_gen.go", excluding "**/generated"`,
+		},
+		{
+			// And the bare patterns on either side of it are still each listed once: the word is repeated
+			// where the kind of exclusion changes and nowhere else.
+			name: "with bare exclusions on both sides of a targeted one",
+			filter: FolderMatcher(mustGlob(t, "app/**", nil)).
+				Excluding(mustGlob(t, "**/legacy", nil), mustGlob(t, "**/vendor", nil)).
+				ExcludingMatchers(FilenameMatcher(mustGlob(t, "*_gen.go", nil))).
+				Excluding(mustGlob(t, "**/generated", nil), mustGlob(t, "**/mocks", nil)),
+			want: `path without filename matches "app/**", ` +
+				`excluding "**/legacy", "**/vendor", excluding filename matches "*_gen.go", ` +
+				`excluding "**/generated", "**/mocks"`,
 		},
 	}
 

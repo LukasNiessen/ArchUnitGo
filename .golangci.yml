@@ -151,7 +151,8 @@ linters:
             - slices.Values
             - sort.Reverse
             # --- ours: package-level entry points only, for the reason in trap 1 above ---
-            # - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
+            - github.com/LukasNiessen/ArchUnitGo.ProjectFiles
+            - github.com/LukasNiessen/ArchUnitGo.Files
 
     staticcheck:
       # Set explicitly: golangci-lint's own default silences ST1000 and ST1020-ST1022, which are
@@ -271,8 +272,11 @@ linters:
               desc: "AGENTS.md rule 1: common must not depend on a domain module"
             - pkg: github.com/LukasNiessen/ArchUnitGo/graph
               desc: "AGENTS.md rule 1: common must not depend on a domain module"
-            - pkg: github.com/LukasNiessen/ArchUnitGo/testing
-              desc: "AGENTS.md rule 1: common must not depend on testing"
+            # The testing layer of AGENTS.md's layout table is the directory archtest/: a package named
+            # testing shadows the stdlib testing in exactly the file that needs both, so the layout's
+            # `testing/` is spelled the way `common/error` became common/archerror.
+            - pkg: github.com/LukasNiessen/ArchUnitGo/archtest
+              desc: "AGENTS.md rule 1: common must not depend on the testing layer"
 
         # Rule 2, the one AGENTS.md says decays first: domain modules must not depend on each
         # other. The shared helper belongs in common/projection.
@@ -342,28 +346,54 @@ linters:
             - pkg: github.com/LukasNiessen/ArchUnitGo/metrics
               desc: "AGENTS.md rule 2: put the shared helper in common/, not a sibling module"
 
+        # Rule 3: the testing layer depends on common and on the domain modules' violation types. Nothing
+        # else — it turns what a rule reported into words, so reaching into a module's fluentapi,
+        # projection or extraction would mean it was phrasing something other than a violation.
+        #
+        # Strict rather than a list of denials, so that it fails closed: the module whose violations land
+        # next has to be allowed in here on purpose, in one line, instead of being caught by a deny list
+        # nobody remembered to extend. `!$test` because a test of a report legitimately builds the fixture
+        # a projection would have produced.
+        testing-layer:
+          list-mode: strict
+          files: ["**/archtest/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/LukasNiessen/ArchUnitGo/common
+            - github.com/LukasNiessen/ArchUnitGo/files/assertion
+            - github.com/LukasNiessen/ArchUnitGo/layers/assertion
+            - github.com/LukasNiessen/ArchUnitGo/metrics/assertion
+            - github.com/LukasNiessen/ArchUnitGo/slices/assertion
+
         # AGENTS.md: "assertion, projection and calculation are pure — no filesystem, no clock, no
         # globals." extraction is deliberately absent: it is the layer that reads the filesystem.
         # The clock half of this rule is forbidigo's `time.Now`, below; denying `time` outright
         # would also ban time.Duration.
+        #
+        # rendering is here for the same reason though AGENTS.md does not name it: a renderer is a
+        # pure function from a projection.Snapshot to a document, and writing that document to a file
+        # is the fluent API's `export as <format>` terminal. A renderer that reached for os would
+        # take the seam that makes every output format testable against a hand-built snapshot with
+        # it.
         pure-packages:
           list-mode: lax
           files:
             - "**/assertion/**"
             - "**/projection/**"
             - "**/calculation/**"
+            - "**/rendering/**"
             - "!$test"
           deny:
             - pkg: os
-              desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure — no filesystem"
             - pkg: io/fs
-              desc: "AGENTS.md: assertion/projection/calculation are pure — no filesystem"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure — no filesystem"
             - pkg: path/filepath
               desc: "pure packages take normalised identifiers, not paths; path helpers belong in their own named package under common/, never a common/util"
             - pkg: net
-              desc: "AGENTS.md: assertion/projection/calculation are pure — no network"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure — no network"
             - pkg: os/exec
-              desc: "AGENTS.md: assertion/projection/calculation are pure"
+              desc: "AGENTS.md: assertion/projection/calculation/rendering are pure"
             - pkg: go/packages
               desc: "pure packages work on an extracted Graph, not on the toolchain"
             - pkg: golang.org/x/tools

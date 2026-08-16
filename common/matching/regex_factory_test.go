@@ -660,6 +660,227 @@ func TestRegexFactorySelectsNodesOfAFixtureGraph(t *testing.T) {
 	}
 }
 
+func TestNewGlobCapturePatternNamesWhatItMatched(t *testing.T) {
+	tests := []struct {
+		name      string
+		glob      string
+		candidate string
+		want      string
+	}{
+		{
+			name:      "the folder under a prefix",
+			glob:      "internal/(**)/**",
+			candidate: "internal/api/handler.go",
+			want:      "api",
+		},
+		{
+			name:      "a capture is as short as it can be, so a nested file still names its folder",
+			glob:      "internal/(**)/**",
+			candidate: "internal/api/sub/deep/handler.go",
+			want:      "api",
+		},
+		{
+			name:      "the folder itself is under the folder, so it names itself",
+			glob:      "internal/(**)/**",
+			candidate: "internal/api",
+			want:      "api",
+		},
+		{
+			name:      "the top-level folder",
+			glob:      "(*)/**",
+			candidate: "files/fluentapi/mood.go",
+			want:      "files",
+		},
+		{
+			name:      "the filename",
+			glob:      "**/(*)",
+			candidate: "internal/api/handler.go",
+			want:      "handler.go",
+		},
+		{
+			// A leading `**/` crosses zero segments here, exactly as it does in a plain glob: a file at the
+			// root of the project is named by the same pattern that names one in a folder.
+			name:      "the filename of a file no folder is under",
+			glob:      "**/(*)",
+			candidate: "main.go",
+			want:      "main.go",
+		},
+		{
+			// And a crossing `/**/` crosses zero segments too, so the file one folder down is named by the
+			// same pattern as the one three folders down.
+			name:      "the folder of a file directly under it",
+			glob:      "internal/(*)/**/order.go",
+			candidate: "internal/api/order.go",
+			want:      "api",
+		},
+		{
+			name:      "a capture spanning segments when that is what was asked for",
+			glob:      "internal/(**)",
+			candidate: "internal/api/handler.go",
+			want:      "api/handler.go",
+		},
+		{
+			name:      "separators are normalised in the glob as well as the candidate",
+			glob:      `internal\(**)\**`,
+			candidate: `internal\api\handler.go`,
+			want:      "api",
+		},
+		{
+			name:      "the capture may sit inside a segment",
+			glob:      "**/(*)_test.go",
+			candidate: "internal/api/handler_test.go",
+			want:      "handler",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pattern := mustGlobCapture(t, test.glob, nil)
+
+			got, ok := pattern.Capture(test.candidate)
+			if !ok {
+				t.Fatalf("(%s).Capture(%q) named nothing, want %q", pattern, test.candidate, test.want)
+			}
+			if got != test.want {
+				t.Errorf("(%s).Capture(%q) = %q, want %q", pattern, test.candidate, got, test.want)
+			}
+			if !pattern.Matches(test.candidate) {
+				t.Errorf("(%s) named %q in %q but does not match it", pattern, got, test.candidate)
+			}
+		})
+	}
+}
+
+func TestCaptureNamesNothingWhenThereIsNoNameToRead(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern Pattern
+		// candidate is the identifier the pattern is asked about.
+		candidate string
+	}{
+		{
+			name:      "the zero pattern",
+			pattern:   Pattern{},
+			candidate: "internal/api/handler.go",
+		},
+		{
+			name:      "a pattern the candidate does not match",
+			pattern:   mustGlobCapture(t, "internal/(**)/**", nil),
+			candidate: "cmd/server/main.go",
+		},
+		{
+			name:      "a pattern compiled without a capture",
+			pattern:   mustGlob(t, "internal/**", nil),
+			candidate: "internal/api/handler.go",
+		},
+		{
+			name:      "a capture that matched the empty string",
+			pattern:   mustGlobCapture(t, "(**)_test.go", nil),
+			candidate: "_test.go",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := test.pattern.Capture(test.candidate)
+			if ok || got != "" {
+				t.Errorf("Capture(%q) = %q, %v, want an unnamed candidate", test.candidate, got, ok)
+			}
+		})
+	}
+}
+
+func TestACapturePatternWantsExactlyOneCapture(t *testing.T) {
+	tests := []struct {
+		name    string
+		glob    string
+		regex   string
+		wantErr error
+	}{
+		{"a glob with no capture", "internal/**", "internal/.*", ErrOneCapture},
+		{"a glob with two captures", "(*)/(*)/**", "([^/]*)/([^/]*)/.*", ErrOneCapture},
+		{"an empty pattern", "", "", ErrInvalidPattern},
+		{"a pattern that does not compile", "(a[b)", "(a[b)", ErrInvalidPattern},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewGlobCapturePattern(test.glob, nil); !errors.Is(err, test.wantErr) {
+				t.Errorf("NewGlobCapturePattern(%q) error = %v, want %v", test.glob, err, test.wantErr)
+			}
+			if _, err := NewRegexCapturePattern(test.regex, nil); !errors.Is(err, test.wantErr) {
+				t.Errorf("NewRegexCapturePattern(%q) error = %v, want %v", test.regex, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestNewGlobPatternKeepsParenthesesLiteral(t *testing.T) {
+	// Captures are opt-in, because a filename may contain a parenthesis and the glob a user writes about
+	// it is not suddenly a naming pattern.
+	pattern := mustGlob(t, "internal/api/handler(1).go", nil)
+
+	if !pattern.Matches("internal/api/handler(1).go") {
+		t.Error("a parenthesis in a plain glob stands for itself")
+	}
+	if pattern.Matches("internal/api/handler1.go") {
+		t.Error("a plain glob must not group: `(1)` is two literal parentheses around a literal 1")
+	}
+}
+
+func TestNewRegexCapturePatternTakesTheExpressionAsWritten(t *testing.T) {
+	pattern, err := NewRegexCapturePattern(`internal/([a-z]+)/(?:.*/)?[a-z]+\.go`, nil)
+	if err != nil {
+		t.Fatalf("NewRegexCapturePattern: %v", err)
+	}
+
+	got, ok := pattern.Capture("internal/api/sub/handler.go")
+	if !ok || got != "api" {
+		t.Errorf("Capture = %q, %v, want %q: a non-capturing group does not count as the capture", got, ok, "api")
+	}
+	if pattern.Source() != `internal/([a-z]+)/(?:.*/)?[a-z]+\.go` {
+		t.Errorf("Source() = %q, want the expression as written", pattern.Source())
+	}
+}
+
+func TestCapturePatternFollowsTheFactorySyntaxAndOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		options *RegexFactoryOptions
+		pattern string
+	}{
+		{"glob by default", nil, "internal/(**)/**"},
+		{"regex when asked", &RegexFactoryOptions{Syntax: SyntaxRegex}, `internal/(.*?)(?:/.*)?`},
+		{
+			name:    "case-insensitively when asked",
+			options: &RegexFactoryOptions{CaseInsensitive: true},
+			pattern: "INTERNAL/(**)/**",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			factory := NewRegexFactory(test.options)
+
+			pattern, err := factory.CapturePattern(test.pattern)
+			if err != nil {
+				t.Fatalf("CapturePattern(%q): %v", test.pattern, err)
+			}
+			if got, ok := pattern.Capture("internal/api/handler.go"); !ok || got != "api" {
+				t.Errorf("CapturePattern(%q).Capture = %q, %v, want %q", test.pattern, got, ok, "api")
+			}
+		})
+	}
+}
+
+func TestCapturePatternRejectsAnUnknownSyntax(t *testing.T) {
+	unknown := RegexFactory{syntax: PatternSyntax(7)}
+
+	if _, err := unknown.CapturePattern("(*)/**"); !errors.Is(err, ErrInvalidPattern) {
+		t.Errorf("CapturePattern with an unknown syntax error = %v, want ErrInvalidPattern", err)
+	}
+}
+
 func mustMatch(t *testing.T, matcher func(string) (Filter, error), pattern string) Filter {
 	t.Helper()
 	filter, err := matcher(pattern)
@@ -674,6 +895,15 @@ func mustGlob(t *testing.T, glob string, options *PatternOptions) Pattern {
 	pattern, err := NewGlobPattern(glob, options)
 	if err != nil {
 		t.Fatalf("NewGlobPattern(%q): %v", glob, err)
+	}
+	return pattern
+}
+
+func mustGlobCapture(t *testing.T, glob string, options *PatternOptions) Pattern {
+	t.Helper()
+	pattern, err := NewGlobCapturePattern(glob, options)
+	if err != nil {
+		t.Fatalf("NewGlobCapturePattern(%q): %v", glob, err)
 	}
 	return pattern
 }

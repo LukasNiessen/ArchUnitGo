@@ -27,7 +27,8 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: pattern matching lives in `common/matching`, not in `common/util` as the `AGENTS.md` layout
   table says — `revive`'s `package-naming` rule in this repository's own `.golangci.yml` rejects
   `util` as a package name, and "directory is package" means the directory has to move with it. Only
-  pattern matching moved; `common/util` is still free to appear for logging and path helpers.
+  pattern matching moved; a package of its own is what every other would-be `util` tenant gets too.
+  (Issue #39 took the second one: logging landed as `common/logging`.)
 - WHY: separators are normalised for globs and for match candidates, but never for a regex pattern —
   in a regular expression a backslash is an escape, so rewriting it to `/` would silently corrupt
   `\.` into `/.`. A regex pattern is documented as using forward slashes, which is the identifier
@@ -136,6 +137,8 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
 - WHY: `logging` is one `io.Writer` field rather than a nested `{enabled, level}` bag. Non-nil is
   "enabled" and the destination is injected, which is what `.golangci.yml`'s `forbidigo` note on
   `log.Print*` requires of issue #39; a bool beside the writer would be a second way to say off.
+  (Superseded by issue #39: the field is a `*logging.Options`, which is still one nilable field
+  meaning off — the level and the log file could not travel on a writer.)
 - WHY: the Go-specific toggles are exactly three — `IncludeTestFiles` (go/packages' `Tests`),
   `IgnoredImportKinds` (an `extraction.ImportKindSet`, so blank driver imports can be dropped without
   four bools) and `BuildTags`. Each is a knob the extractor cannot work without; anything else would be
@@ -416,3 +419,2222 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   above, end to end), `TestExtractGraphMergesParallelImportsOfOneOfItsOwnPackages` (the internal half of the
   merge — two imports of a two-file package are four edges before it and two after) and
   `TestExtractGraphSplitsIntoOneNodePerFileAndTheDependenciesBetweenThem`.
+
+## Issue #11 — Extraction: graph cache and clear-graph-cache
+
+- WHY: the memo is a new function, `CachedGraph(root, options)`, in front of `ExtractGraph` rather than
+  caching inside `ExtractGraph` itself. `ExtractGraph` is documented and tested as "runs the Go toolchain
+  once over the whole project", and every existing test calls it; making that one function stateful would
+  have changed what a dozen passing tests mean. The two doors now read as what they are — the extraction,
+  and the memo a check goes through — and `ExtractGraph`'s doc points at the memo.
+- WHY: the cache key is built from the **resolved project root**, not from the `ProjectLocator` the issue
+  names. A locator is a starting point for an upward search, so `nil` (the working directory), the project
+  root and a directory three levels inside it are three spellings of one project; keying on the locator
+  would extract it three times and lose the point of the cache. `resolveProjectRoot` runs before the key is
+  built, which also makes a relative root and a symlinked one one entry — and it is the same resolution
+  `ExtractGraph` does internally, so the two cannot disagree.
+- WHY: `graphCacheKey` sorts the folder exclusions and the build tags before quoting them. Neither list's
+  order changes what is extracted — an exclusion list is a set and `-tags=a,b` is the same build as
+  `-tags=b,a` — so an order-sensitive key would only ever miss. It resolves the options first, so a nil bag,
+  the zero bag and one whose exclusions are nil are one key, while a caller who excluded nothing on purpose
+  keeps their own; every string is `%q`, so a folder named `a b` cannot forge a boundary between entries.
+- WHY: the "hard to forget" half of the issue is a test, not only a named function. `graph_cache_test.go`
+  reflects over `SourceOptions`, varies each field in turn and fails if the key does not move — so a field
+  added to that bag without reaching the key fails a test rather than passing review, and a field of a kind
+  the test cannot vary fails loudly instead of silently passing.
+- WHY: a failed extraction is not cached, and the graph handed out is a copy. An extraction fails because of
+  the environment, so the next rule deserves the same chance rather than a memoised error; and a `Graph` is
+  a slice, so handing out the cached one would let any reader write through into every later reader's graph.
+  Both are covered by tests that fail without them.
+- WHY: the lock is not held across the extraction. Two goroutines asking about one project at once extract
+  it twice and store the same answer, which costs one redundant run in a case a synchronous test suite does
+  not reach, while locking for the whole extraction would make one project's rules wait on another
+  project's toolchain run.
+- WHY: `CheckOptions.ClearCache` is honored in one new method, `CheckOptions.ExtractGraph(locator)`, which is
+  the same kind of translator as issue #7's `CheckOptions.SourceOptions()` and the only edit outside the
+  issue's package. Without it every terminal would locate, clear and extract in three steps of its own, and
+  the one that forgot the middle step would silently ignore the user's flag. It clears the whole cache rather
+  than this project's entry: the reason to clear is that the source moved, and one project is cached once per
+  set of options it was asked about. It clears *before* the lookup rather than instead of it, so the check
+  that cleared still fills the cache for the rules after it in the suite.
+- WHY: the public global is `extraction.ClearGraphCache()`, and there is no root-package re-export of it yet.
+  `archunit.go` is the public surface, it does not exist, and creating it for one function would be claiming a
+  deliverable another issue owns; `ClearGraphCache` is exported from a public package in the meantime, and
+  re-exporting it is one line when that surface lands.
+- WHY: file stem is `graph_cache.go`, one concept, as in issues #1, #4, #6, #7 and #9 — no sibling stem names
+  this step. The cache type is unexported (`graphCache`), with the two exported functions over one
+  package-level instance: a cache exists to be shared by every rule in a suite, and rules are built and
+  checked independently of each other, so there is nothing for it to hang from. That global carries the
+  `//nolint:gochecknoglobals` the harness sanctions, with its reason on it.
+- WHY: still no fluent-API integration test through a builder chain — none exists, as in issues #1 to #10.
+  The level above the unit tests is `common/fluentapi`'s four new tests, which do what a terminal will do
+  with a rule (`options.ExtractGraph(rule.locator)`) over a fixture project that gains a file between two
+  checks: the second check shares the first one's graph, `ClearCache` reads the source again,
+  `IncludeTestFiles` is a different analysis rather than a cache hit, and a locator naming no project is a
+  `UserError`.
+
+## Issue #12 — Extraction: per-line ignore directive
+
+- WHY: the Go spelling is `//archunit:ignore`, not the issue's `# archunit: ignore`. Every directive comment
+  in this language is a `//` line with no space after the slashes and a `tool:verb` word — `//go:build`,
+  `//go:generate`, `//nolint:gochecknoglobals` — and gofmt is what enforces that shape, so a directive
+  written any other way would be reformatted out from under the user. The parser is lenient about the
+  whitespace it accepts, so `// archunit: ignore` transliterated straight from a sibling port still works,
+  but the canonical form is the one the language uses. A `/* */` comment is never a directive: it cannot be
+  the last thing on the line an import is on, so accepting one would accept a spelling every other Go tool
+  disagrees about.
+- WHY: "optionally scoped to named modules" is implemented as *named scopes on the check*, end to end: a
+  bare directive is honored by every analysis, and `//archunit:ignore layers` is honored only by a check
+  whose `CheckOptions.IgnoreScopes` names `layers`. The other reading of the issue — naming the modules the
+  ignore applies to — does not arise in Go, where one import spec is one import path and the directive is
+  already on that line; there is nothing left to name. Scopes follow the `IgnoredImportKinds` precedent and
+  are wired through today rather than being a field nothing reads.
+- WHY: an unanswered or misspelled scope leaves the import **in** the graph. That is the loud direction: the
+  rule then reports a dependency the user thought they had suppressed, whereas honoring an unknown scope
+  would silently swallow real violations for a typo.
+- WHY: the scopes live on `IgnoreDirective` as one comma-separated `Scopes string`, not a `[]string`.
+  `ImportInfo` has to stay comparable — `extract_imports_test.go` compares imports with `!=`, and the
+  directive is a field of it — which is the same reason `Edge` carries an `ImportKindSet` bit set instead of
+  a list. `Names()` is the accessor that hands back the list.
+- WHY: the directive is *not* read from `ast.ImportSpec.Doc` / `.Comment`. Both are empty for shapes a user
+  will actually write — a trailing comment on a lone `import "fmt" //archunit:ignore`, and a trailing
+  comment inside a block when the next line is also a comment — so `newIgnoreDirectives` indexes every
+  comment by the line it is on, marks the lines that hold code, and answers "trailing" and "directly above"
+  from positions. Both blind spots are cases in `ignore_directive_test.go`.
+- WHY: a directive belongs to one import, never to a block or a file. It counts when it trails the import's
+  own line or sits on a comment line above it, with a blank line or a line of code ending the block; a
+  directive above `import (`, or beside the opening parenthesis, applies to nothing. Leaving a whole file
+  out is what `SourceOptions.ExcludedFolders` is for, and a directive that quietly ignored a block would be
+  the kind of invisible suppression the previous note avoids. It does reach across an ordinary comment
+  above the import, so a reason can be written above the directive; and a second `//` on the directive line
+  starts a reason, so prose is never read as a list of scope names.
+- WHY: `CheckOptions.IgnoreScopes` is the fourth knob translated in `CheckOptions.SourceOptions()`, and it
+  sits with the language-neutral knobs rather than the Go-specific ones: the directive convention is a
+  family convention, and only its comment syntax is Go's. It reaches `graphCacheKey` too — two checks
+  answering to different scopes are two analyses of one project, and the cache would otherwise hand the
+  second one the first one's graph.
+- WHY: file stem is `ignore_directive.go`, one concept, as in issues #1, #4, #6, #7, #9 and #11 — no sibling
+  stem names this convention. The parser and the per-file index live there with the type; the *decision* to
+  honor a directive is `SourceOptions.IgnoresImport`, next to `IgnoresImportKind`, because both are the same
+  question the extractor asks of one import.
+- WHY: still no fluent-API integration test through a builder chain — none exists, as in issues #1 to #11.
+  The level above the unit tests is `common/fluentapi`'s two new tests, which do what a terminal will do
+  (`options.ExtractGraph(locator)`) over a fixture whose file marks two of its imports: the bare directive
+  is honored by a default check, the scoped one only by the check that answers to its name.
+- WHY: the per-file index reads `fileSet.PositionFor(position, false)`, not `fileSet.Position(position)`.
+  `Position` applies `//line` directives, and a column-1 one is legal inside an import block — generated Go
+  (goyacc, committed cgo output) has them. Every question the index answers is about *physical* adjacency:
+  trailing this import, the line above holds code, a blank line ended the block. Rewritten numbering can
+  shift or collide two segments, losing a directive or attaching one to an import the file never marked;
+  `TestExtractImportsReadsDirectivesByPhysicalLine` is the file where the adjusted lines swap the two.
+
+## Issue #13 — Projection: project edges, nodes and cycles
+
+- WHY: `MapFunction` is `func(extraction.Edge) (MappedEdge, bool)`. The data model's "`Edge -> MappedEdge |
+  nothing`" has no union type in Go, and `(value, ok)` is how every optional answer in the language is
+  spelled — a `*MappedEdge` would put a pointer to a two-string struct on the heap for every edge of the
+  graph and make "nothing" a nil dereference away.
+- WHY: `ProjectEdges` drops an edge whose two **labels** are equal, not one whose raw `Source == Target`.
+  That is the data model's "projections filter self-edges out by default" applied after relabelling
+  rather than before, and the difference is the whole point of a slicing projection: two files of one
+  slice depending on each other is a real file-level dependency and no dependency at all between slices,
+  so the drop has to be by label. It subsumes the raw self-edge, because any label that is a function of
+  the identifier gives a self-edge two equal labels.
+- WHY: `ProjectToNodes(graph, mapper)` takes the graph and the hook, not the `[]ProjectedEdge` a reader
+  of the sibling ports might expect. Node projection is the half that "depends on the self-edges", and by
+  the time `ProjectEdges` has returned they are gone — so a signature over projected edges would silently
+  lose every file that depends on nothing, which for a rule about naming or placement is the entire
+  population. Both functions go through one unexported `projectAll`, so the `MapFunction` is called, and
+  the merge decided, in exactly one place.
+- WHY: a projected self-edge appears in neither `Incoming` nor `Outgoing`: it names the node and is not a
+  dependency, so every edge reachable from a `ProjectedNode` is an edge `ProjectEdges` returned too. The
+  edges *inside* a slice therefore have no public door yet — when a cohesion metric wants them,
+  `projectAll` is the door to open, and inventing an options bag for it before that issue lands would be
+  a knob nothing reads.
+- WHY: `ProjectCycles` returns one entry per **strongly connected component**, not one per simple cycle,
+  and each entry holds every projected edge between labels of that component. A component of five labels
+  can hold dozens of simple cycles and enumerating them is exponential, while every edge inside a
+  component provably lies on one — for `a -> b` inside it there is a path from `b` back to `a` — and
+  breaking any single one of them breaks the component. So the component is what a report names, and its
+  labels are the source labels of its edges — inside a component every label has an outgoing edge that
+  stays in it, so an assertion reading them off misses none.
+- WHY: a projected self-edge is not a cycle. `a -> a` is a strongly connected component of one label and
+  is skipped with every other single-label component, which keeps one convention across the whole PROJECT
+  stage: a node depending on itself is not a dependency, so it cannot be a cyclic one either.
+- WHY: `cycles` is a subpackage of `projection` (`AGENTS.md`'s `projection/ ... plus cycles/`) and
+  `tarjan_scc.go` is the sibling stem. Tarjan runs on labels and sorted successors, and `visit` recurses
+  by name off a `tarjanSearch` receiver rather than closing over eight locals; sorted input is what makes
+  the components a function of the projection alone, which a reproducible report needs. Recursion depth is
+  the longest path in the projection, well inside Go's growable stacks.
+- WHY: `ProjectedEdge` and `ProjectedNode` keep unexported fields behind accessors, unlike
+  `extraction.Edge`'s exported ones, and `CumulatedEdges`/`Incoming`/`Outgoing` clone on read. Both types
+  carry slices, so exported fields would let a reader write through into a value that has already been
+  reported — the same reason `matching.Filter` hides its exclusions and `graphCache` hands out copies.
+- WHY: `NewProjectedEdge` puts its raw edges through `extraction.NewGraph`. It copies them away from the
+  caller's slice, and it means the cumulated edges of a projection have the kernel's one edge order and
+  one self-edge shape rather than a second ordering invented here.
+- WHY: labels are used verbatim — no `NormalizeIdentifier`. A label is the vocabulary the rule speaks, and
+  a layer called `API` is not a path; identifier-shaped labels arrive already normalised from the
+  extractor. An empty label drops the edge, which is the same defence `NewGraph` applies to an edge
+  without an identifier.
+- WHY: a nil `MapFunction` projects nothing rather than defaulting to `PerEdge` or returning a
+  `UserError`. Projection is pure and has no `error` to travel in, and an empty projection is exactly what
+  `GatherEmptyTestViolations` was built to report — the loud direction, where guessing at `PerEdge` would
+  quietly judge a rule against a vocabulary nobody asked for.
+- WHY: two `per <thing>` factories, `PerEdge` and `PerInternalEdge`, and no `PerExternalEdge`. A rule
+  about third-party modules is a rule about which edges *leave* the project, and `PerEdge` keeps them with
+  `extraction.Edge.External` still on the raw edges the projection cumulates; a third factory would be a
+  second place deciding what external means. `PerInternalEdge` is written over `PerEdge` so the identity
+  labelling is stated once.
+- WHY: file stems are `project_edges.go` (the sibling stem, and where the package doc lives),
+  `map_function.go`, `project_nodes.go`, `cycles/project_cycles.go` and `cycles/tarjan_scc.go`. The hook
+  and its factories are one concept and share a file; `project_nodes.go` is the stem for a function the
+  issue names `project to nodes`, because `ProjectToNodes` is the English and `project_to_nodes.go` is not
+  a stem any sibling has.
+- WHY: still no fluent-API integration test — no builder chain exists, as in issues #1 to #12. The level
+  above the unit tests is three projections of this repository, extracted the way a check will do it:
+  `TestProjectEdgesProjectsThisRepositoryByFolder` (the `common/projection -> common/extraction` folder
+  dependency, and the raw edges under it naming the two files that make it),
+  `TestProjectToNodesGivesThisRepositoryOneNodePerFolder` (every folder is a node, `common/matching`
+  included, which depends on nothing of the library's own) and
+  `TestProjectCyclesFindsNoCycleAmongTheFoldersOfThisRepository`, which is this library dogfooding the
+  rule the cycle projection exists to serve.
+
+## Issue #14 — Projection: the per-edge MapFunctions
+
+- WHY: `PerEdge` **changed meaning** and now drops the self-edges, which issue #13's version kept. The
+  issue names four factories and spells `per edge` out as "everything except self-edges", and that
+  parenthetical is what makes `identity` a fourth function rather than a second name for the same one —
+  the only difference available between the two is the self-edge. So `Identity` is what issue #13 shipped
+  as `PerEdge` (every edge, labels verbatim, self-edges and external edges included), and the three
+  `per <thing> edge` factories are strictly nested inside it. Nothing else here has two names for one
+  behaviour, and the issue that owns these factories is the place to reconcile that.
+- WHY: the family's one rule is therefore "every `per <thing> edge` factory is about *dependencies*, so
+  none of them keeps the edge that only names a node" — `PerExternalEdge` ⊆ `PerEdge` ⊆ `Identity`, and
+  `PerInternalEdge` ⊆ `PerEdge` too. The alternative was to have `PerInternalEdge` keep the self-edges
+  (a self-edge is internal by construction, so it partitions the whole graph with `PerExternalEdge`
+  rather than only its dependencies), and that is the trap: a reader who has been told `per edge` drops
+  self-edges will assume `per internal edge` is a subset of it. Nesting is statable in one sentence, so
+  nesting won.
+- WHY: the consequence, and it is the whole cost of the change: `ProjectToNodes` wants `Identity`, not
+  `PerEdge`. Node projection is the half written over the self-edges, so projected through any
+  `per <thing> edge` factory it loses every file that depends on nothing — for a rule about naming or
+  placement, most of the population. `project_nodes.go`'s doc says so in as many words and
+  `TestOnlyIdentityGivesAFileThatDependsOnNothingANode` fails if either half of the split is undone.
+  Seven `ProjectToNodes(…, PerEdge())` calls in the existing tests moved to `Identity()`; their
+  assertions are unchanged.
+- WHY: `Identity` therefore puts every external module in a node projection as well, so "the project's
+  own files as nodes" has no factory in `common` — it is `PerInternalEdge` plus the self-edges, which is
+  neither of the two, and inventing a fifth factory for a rule that has not landed would be the
+  speculative knob the earlier notes keep refusing. When the file-level node rules land, that mapper is
+  `files/projection`'s to write, which is what a module's own projection package is for.
+- WHY: `PerExternalEdge` exists now, reversing issue #13's note that said it would not. That note's
+  reasoning — `PerEdge` keeps the external edges and `extraction.Edge.External` is still on the raw ones,
+  so a second factory would be a second place deciding what external means — is answered by writing it
+  as the exact complement of `PerInternalEdge`: both read the one flag the extractor set, neither
+  re-decides anything, and `TestPerInternalEdgeAndPerExternalEdgePartitionWhatPerEdgeKeeps` is what
+  holds them to being two halves of one whole. Making a rule about third-party modules filter
+  `PerEdge`'s output by hand was the thing that would have spread the decision.
+- WHY: all four are factories returning a `MapFunction` rather than functions of the right signature
+  that a caller could pass directly. `PerEdge` as a plain `func(extraction.Edge) (MappedEdge, bool)`
+  would read better at a call site by one pair of parentheses, but a `slice by <thing>` factory has to
+  take arguments, so the family would then be spelled two ways; and the factory form is where a knob
+  lands if one of them ever needs one.
+- WHY: the tests for the factories moved out of `project_edges_test.go` into `map_function_test.go`,
+  beside the file they test, as `AGENTS.md` asks. The four are one table with the predicate each is
+  supposed to satisfy, so the family's rule above is checked in a loop rather than four times by hand —
+  and the table is a function returning the slice rather than a package-level `var`, which needs no
+  `//nolint:gochecknoglobals` (the linter is excluded in `_test.go` files, so the directive would itself
+  be a `nolintlint` finding).
+- WHY: `TestProjectEdgesDropsTheGraphsSelfEdges` now projects through `Identity`. It is a test about
+  `ProjectEdges` dropping an edge whose labels are equal, and `PerEdge` no longer hands it one to drop —
+  through `PerEdge` it would have passed without exercising anything.
+- WHY: no new file. The four factories join the hook in `map_function.go`, for the reason issue #13 gave
+  for putting the first two there: the hook and its factories are one concept.
+- WHY: still no fluent-API integration test — no builder chain exists, as in issues #1 to #13. The level
+  above the unit tests is `TestTheMapFunctionsSplitThisRepositoriesDependencies`, which extracts this
+  repository the way a check will and projects it through each factory in turn: the external half holds
+  `common/extraction/extract_graph.go -> golang.org/x/tools/go/packages` and nothing internal, the
+  internal half holds `common/projection/map_function.go -> common/extraction/edge.go` and nothing that
+  leaves the project, and the identity projection has a node for every file the graph gives a self-edge.
+
+## Issue #15 — Projection: cycle detection — Tarjan and Johnson
+
+- WHY: the Tarjan half already landed with issue #13 (`tarjan_scc.go`, and `ProjectCycles` over it), so
+  this issue is the Johnson half — and it **reverses** issue #13's note, which said the elementary
+  circuits would not be listed because listing them is exponential. That reasoning is sound and it is
+  answered rather than overruled: the enumeration is bounded (see below), so the exponential case ends in
+  a truncated answer that says it is truncated instead of in a test suite that never finishes.
+- WHY: `ProjectCircuits` is therefore a **second door beside `ProjectCycles`, not a replacement for it**.
+  They answer one question at two resolutions — which parts of the graph are cyclic, and which cycles
+  there are — and both are wanted: the component is linear and so always safe to ask for, while the
+  circuits are what a report names (`api -> db -> api` is the sentence; the component is a haystack of
+  every edge around it). Replacing `ProjectCycles` would also have rewritten the meaning of a dozen
+  passing tests, which the scope rule forbids. The package doc now names both doors and each function's
+  doc points at the other.
+- WHY: the vocabulary splits on Johnson's own word. A `Circuit` is one elementary circuit and a "cycle"
+  stays the strongly connected component `ProjectCycles` returns, so the two are nameable in one sentence
+  and neither name has to grow an adjective. The fluent API's `should have no cycles` is unaffected —
+  that is a mood plus a predicate, and it will read whichever of the two it wants.
+- WHY: `ProjectCircuits` returns `([]Circuit, bool)` and is **bounded by default** —
+  `CircuitOptions.MaxCircuits`, defaulting to `DefaultMaxCircuits` = 1000, negative meaning unbounded.
+  The count of elementary circuits is exponential in the size of a component (twenty labels that all
+  depend on each other hold more than 10^17 of them), so an unbounded enumeration is not something a
+  pure function called from a unit test can promise. The bool is `complete`, in the `(value, ok)` shape
+  `MapFunction` already chose: a silent cap would read as "these are all your cycles", which is the
+  quiet direction this library keeps refusing. A rule only needs to know that there is one, so `false`
+  costs it nothing; a report built from a truncated answer can say so.
+- WHY: `MaxCircuits` is the bag's only knob. A `MaxLength` beside it is the obvious second one and
+  nothing asks for it yet — that is the speculative knob the earlier notes keep declining.
+- WHY: Johnson is implemented with the per-starting-label restriction from the paper, which calls
+  `tarjanSCC` again on the shrinking subgraph (`strongComponentOf`). That is what makes the enumeration
+  report each circuit exactly once rather than once per rotation, and it is why `ProjectCircuits` can
+  hand `johnsonCircuits` a whole component and get the circuits *inside* it: the search restricts itself
+  further at every start. The outer decomposition into components is kept anyway — it is the issue's
+  structure, and it keeps each start's Tarjan run on a smaller graph.
+- WHY: `blockedOn` (Johnson's `B`) is a `map[string][]string` with an append-if-absent, not a set of
+  maps. The unblocking order decides which branches the search takes next and so which circuits come out
+  first — and *which ones a truncated enumeration keeps*. Go's map iteration order is deliberately
+  random, so a set would have made a truncated report unreproducible;
+  `TestJohnsonCircuitsIsAFunctionOfTheGraphAlone` runs a limited enumeration eight times for that reason.
+- WHY: `cyclicComponents` was lifted out of `ProjectCycles` unchanged, which is the only edit to code
+  that was already passing its tests. Both doors need "the components of two or more labels, in a
+  reproducible order", and stating that rule twice is how the two doors would drift apart. No behaviour
+  changed; `ProjectCycles`' own tests are untouched.
+- WHY: no `NewCircuit` constructor, though `NewProjectedEdge` beside it is exported. A circuit is not
+  three independent fields but a closed chain, and a hand-built one that is not closed would be a value
+  the type promises cannot exist. An assertion's fixture is a hand-built projection put through
+  `ProjectCircuits`, which is the shape a rule sees anyway.
+- WHY: file stems are `johnson_circuits.go` for the pure algorithm over labels and `project_circuits.go`
+  for the public `Circuit`/`CircuitOptions`/`ProjectCircuits` over projected edges — the same split as
+  `tarjan_scc.go` and `project_cycles.go`. No sibling stem names Johnson; `<algorithm>_<what>` is the
+  shape `AGENTS.md` gives for `tarjan_scc`, and Johnson's paper is titled "Finding all the elementary
+  circuits of a directed graph".
+- WHY: the unit tests check Johnson against `naiveCircuits`, a short exponential enumerator in the test
+  file, on six fixtures — rather than against hand-counted expectations only. The correctness claim
+  here ("every elementary circuit, exactly once, no rotations") is the kind that a hand-written
+  expectation can agree with while being wrong in the same way, and the naive walk is slow enough to be
+  obviously right. The hand-counted cases are kept beside it, including the complete graph on four
+  labels, whose 20 circuits are a closed form.
+- WHY: one fixture, `"a label blocked on twice"`, was found by brute-force enumerating every directed
+  graph on five labels and looking for the one that makes the search record a dead end against the same
+  blocked label twice. Nothing smaller reaches it, and without it the append-if-absent in `blockOn` was
+  the one line in the package no test executed.
+- WHY: the transitive half of the blocking rule has its own fixture, `releasedDeadEndPairs` (a <-> b,
+  b <-> d, a -> c -> d), because `deadEndAdjacency` does not reach it: there every release is `unblock`'s
+  own `s.blocked[label] = false`, so deleting `blockOn` or `unblock`'s recursion changed no answer. In the
+  new one, d is blocked on the root's first branch and the root's second branch needs it released, so both
+  deletions lose `a -> c -> d -> b -> a` — verified by making each mutation in turn.
+- WHY: `TestJohnsonCircuitsIsAFunctionOfTheGraphAlonePastADeadEnd` runs *both* dead-end fixtures rather
+  than moving to the new one. Only the new one has a `blockedOn` list whose contents reach the answer,
+  which is what the test is about — but the chain fixture is the case where a label is blocked and released
+  twice over, and dropping it would have traded one kind of coverage for the other.
+- WHY: `TestProjectCircuitsIsBoundedByDefault` runs on the complete projection over seven labels (2365
+  elementary circuits) through `ProjectCircuits(edges, nil)`, and `TestCircuitOptionsWithDefaults` spells
+  the default out as `1000` instead of naming `DefaultMaxCircuits`. Both are the same point: a test that
+  compares against the constant under test agrees with any value it is given, and a test that passes its
+  own limit never walks the default path. `completeProjection` is `completeAdjacency`'s twin one layer up,
+  over projected edges rather than an adjacency.
+- WHY: still no fluent-API integration test — no builder chain exists, as in issues #1 to #14. The level
+  above the unit tests is two extractions of this repository, projected the way a check will:
+  `TestProjectCircuitsFindsNoCycleAmongTheFoldersOfThisRepository` and
+  `TestProjectCircuitsFindsEveryFileLevelCycleOfThisRepository`, the second at the vocabulary a file-level
+  `should have no cycles` rule will use.
+
+## Issue #16 — Files API: entry point and selectors
+
+- WHY: `archunit.go` exists now, which is another issue's deliverable in name. An entry point that cannot be
+  reached from the public surface is not an entry point: `AGENTS.md`'s own first example and
+  `common/extraction/locate_project.go`'s doc comment both say `archunit.ProjectFiles(...)`, and there is
+  nowhere else for the integration test to run through. It is kept to what this issue needs — the two files
+  entry points, the three type aliases a user needs to name a rule (`ProjectLocator`, `CheckOptions`,
+  `FilesBuilder`) and issue #11's parked one-line re-export of `ClearGraphCache`. Everything else the surface
+  will re-export still belongs to the issue that builds it.
+- WHY: the locator is one nilable parameter, `ProjectFiles(locator *extraction.ProjectLocator)`, not a
+  variadic and not two constructors. Go has no optional parameter, and this is the spelling
+  `locate_project.go` has documented since issue #7 (`archunit.ProjectFiles(nil)`); it is also the same
+  nil-means-defaults contract as `*CheckOptions` and `*SourceOptions`, so a reader learns it once.
+- WHY: the two `govet.unusedresult.funcs` entries the config parked for this moment are uncommented —
+  `…/ArchUnitGo.ProjectFiles` and `.Files`. Verified empirically that a bare `archunit.ProjectFiles(nil)`
+  statement is now reported; the entries are package-level functions, which is the only thing that flag can
+  guard, as the comment above them says. No chain method was added and no default was removed.
+- WHY: what the selectors *mean* lives in `files/projection.SelectFiles(graph, selectors...)`, not in the
+  builder. It is the module's half of the PROJECT stage, it is pure, and it is what lets the meaning of
+  `project files, in folder "internal/**", with name "*.go"` be tested against a hand-built graph. The AND
+  the issue asks for is stated there, once, so no coming predicate re-derives it.
+- WHY: `SelectFiles` reads `Graph.SelfEdges()` for the file population rather than `Graph.Nodes()`. Issue
+  #10's note already named this: the project's own files are the self-edges read for their `Source`. It is
+  what keeps an import path the project depends on unselectable — `in path "**"` cannot select `fmt` — and
+  what keeps a file that depends on nothing selectable. Three tests fail if the two are swapped.
+- WHY: `FilesBuilder.SelectFiles(options)` is a public method the fluent grammar has no stage for. Without
+  it the issue lands as a bag of compiled filters that nothing can resolve, and the SOURCE-and-EXTRACT-plus-
+  scope half it performs is what every predicate this module gains will be written over — better one door,
+  tested, than the same three steps assembled inside each terminal. It deliberately does *not* wire the
+  empty-test guard: selecting nothing is only a failure once a rule judges something, so the guard stays with
+  the terminal, which is what `Selectors()` is exported to report with.
+- WHY: a pattern a scope verb cannot compile is kept on the builder as a deferred `err` and returned by
+  `SelectFiles`, not panicked on and not returned from the verb. A fluent method has nowhere to put an error
+  and `.golangci.yml`'s `forbidigo` bans `panic`. This is the wrap point issue #6's note predicted:
+  `UserError.Operation` is the verb as the user typed it (`in folder`), `Subject` the pattern, and
+  `matching.ErrInvalidPattern` travels as the cause. The first rejection wins — it is the one to fix — and a
+  rejected pattern does not join the selectors, because a zero `Filter` matches nothing and the rule would
+  then report every file as unselected instead of reporting the typo. The error is returned before the
+  project is read.
+- WHY: `common/fluentapi` is imported as `kernel` inside `files/fluentapi`. Both packages are called
+  `fluentapi` — that is `AGENTS.md`'s per-module shape, and the unaliased import compiles and lints clean —
+  but `*fluentapi.CheckOptions` written inside package `fluentapi` reads as a self-reference. `kernel` is the
+  word `AGENTS.md` uses for `common/`, and every sibling module's fluent API will want the same alias.
+- WHY: `Selectors()` is exported and clones on read; there is no `Err()` beside it. The filters are what
+  `assertion.EmptyTestViolation` carries (issue #4 chose `[]matching.Filter` over the pattern strings for
+  exactly this reason) and the only way to observe a stored half-built rule; the deferred error has one
+  reader, the terminal, which is in this package.
+- WHY: `String()` renders the selectors by their own descriptions — `project files, path without filename
+  matches "internal/**"` — rather than replaying the verbs the user typed. Keeping the verb would mean a
+  parallel field beside every filter, and issue #4 already settled that a `Filter` is the reporting unit
+  because it carries both the pattern as typed and the part of an identifier it looks at. A rejected pattern
+  is rendered too, so a builder cannot print as the rule the user thought they wrote.
+- WHY: the four verbs are the four matchers issue #3 built, and none of them re-decides which part of an
+  identifier it looks at: `selecting(verb, pattern, compile)` takes the factory method, so `with name` →
+  `FilenameMatcher`, `in folder` → `FolderMatcher`, `in path` → `PathMatcher`, `in file` →
+  `ExactFileMatcher`. The `RegexFactory` is a field on the builder rather than one built per verb, so glob
+  syntax is chosen once per rule — which is also where `defined by regex`-style syntax choices will hang.
+- WHY: no mood, no predicate, no terminal, no `files/assertion`. This issue is the entry point and the
+  selectors; there is nothing to judge yet, and `Checkable` arrives with the first predicate.
+- WHY: file stems are `files/fluentapi/project_files.go` (the entry point the chain starts at) and
+  `files/projection/select_files.go`. No sibling stem names either; `project_files` is the sentence and
+  `select_files` is what the projection does, and naming the latter `project_files.go` too would put two
+  different concepts under one name in one module.
+- WHY: **the first fluent-API integration test in the repository**, which every note since issue #1 has said
+  was waiting for a builder chain. `archunit_test.go` dogfoods on this repository through the public surface:
+  a chain with no locator selects the files of `common/matching`, `Files` and `ProjectFiles` build the same
+  rule, a stored rule is branched from twice (the `AGENTS.md` example, verbatim), `IncludeTestFiles` reaches
+  the selection, and a folder no file is in selects nothing rather than everything. `files/fluentapi` has a
+  second one against a fixture project on disk, and the unit tests below both run against hand-built graphs.
+- WHY: `TestProjectFilesAndFilesAreOneEntryPoint` resolves both names against the fixture project *on disk*
+  rather than against `fixtureGraph()`, and `archunit_test.go` gained
+  `TestTheLocatorReachesTheProjectThroughEitherEntryPoint`. The locator is an argument nothing else observes
+  — `String()` does not render it and a hand-built graph never reads it — so an entry point that dropped it
+  would silently analyse the auto-detected project. Verified by making each entry point return
+  `ProjectFiles(nil)` in turn: both mutations now fail.
+- WHY: `TestABranchDoesNotWriteIntoTheRuleItGrewFrom` branches from a base of *three* verbs. A value receiver
+  alone does not make a builder immutable — the copy shares the selectors' backing array — but with one or two
+  selectors `append` has no spare capacity, so the aliasing bug is invisible; at three it is, and the test was
+  confirmed to fail with `slices.Clone` removed from `selecting`.
+- WHY: `ProjectFiles` copies the `*ProjectLocator` it is handed, because a builder that is immutable in
+  every stage but the argument it started from is the worse of the two contracts: a caller reusing one
+  locator struct to build a rule per directory would otherwise leave every stored rule, and every branch
+  of it, pointing at the last directory, with no error and no visible symptom.
+  `TestTheLocatorAnEntryPointWasGivenCannotBeChangedAfterwards` writes the locator after the rule is built
+  and both entry points still resolve the project they were given; it fails with the copy removed.
+
+## Issue #17 — Files API: should and should not
+
+- WHY: the flag is a named type, `common/assertion.Mood` (a `bool` with the constants `Should` and
+  `ShouldNot`), rather than a bare `negated bool` field in `files/fluentapi`. The issue's own sentence
+  is "a boolean flag threaded into the assertion function", and a type is what gives that flag one
+  spelling and one meaning across the library: `Mood.Holds(satisfied)` is the single comparison the two
+  moods differ by, so no `gather <thing> violations` function re-derives `satisfied != negated` and none
+  of them can branch on the mood instead. A plain `bool` parameter would have been re-invented, and
+  probably inverted, once per rule family.
+- WHY: it lives in `common/assertion`, not in `files/assertion` — which is why this issue adds no
+  `files/assertion` package at all. Mood is the family's grammar (`AGENTS.md` states it in the fluent-API
+  section, not the files one), every module's assertions take it, and rule 2 says the shared thing goes in
+  `common` *before* a second module reaches sideways for it. Nothing about it is files-specific.
+- WHY: `Mood` is `type Mood bool` with two typed constants rather than a struct or an `iota` enum. It has
+  exactly two members forever, so a bool is the honest shape; a struct could not be `const`, and a
+  package-level `var` pair would need `//nolint:gochecknoglobals` for values that are not tables. The zero
+  value is `Should`, which is the harmless mood for a rule value nobody set a mood on, and there is a test
+  saying so. `String()` renders `should` / `should not` — the two words the user typed, read back for a log
+  or a test failure, which is the same latitude `FilesBuilder.String()` and `archerror` already take;
+  violation prose is still the testing layer's.
+- WHY: `Negated()` and `Holds()` are both exported and are not two ways to ask one thing. `Holds` is the
+  assertion's question about a subject ("the predicate is satisfied — does the rule hold?"), `Negated` is
+  the flag itself, for a report that has to say which mood a rule was written in. Nothing else is on the
+  type.
+- WHY: the two mood builders are `FilesShouldBuilder` and `FilesShouldNotBuilder`, each holding one
+  unexported `filesRule{scope, mood}` — the "two thin types over one shared assertion" the issue asks for,
+  written as explicit one-line delegations rather than an embedded struct. Embedding would have removed the
+  duplication entirely, but the promoted methods' documentation would then live on an unexported type,
+  where `go doc archunit.FilesShouldNotBuilder` cannot show it to a user; for a library this documented
+  that is the worse trade. `filesRule` is what every coming predicate takes and passes on, and `String()`
+  is its one real method, so the rendering of a rule cannot differ between the moods.
+- WHY: a mood builder deliberately has **no** mood verb, which is how the grammar's "mood: exactly 1"
+  becomes the type system's problem rather than a reviewer's: `...ShouldNot().Should()` does not compile.
+  `TestTheMoodIsTwoWordsWithNoSynonyms` reflects over the method sets of all three stages and fails both if
+  a mood stage grows a mood and if any stage grows a synonym (`Must`, `May`, `Never`, `Cannot`, `IsNot`, …).
+  Verified by adding each mutation in turn. The issue's first line is "the two moods, and nothing else — no
+  synonyms", and a list in a doc comment is not enforcement.
+- WHY: `Mood()`, `Selectors()`, `SelectFiles()` and `String()` are on both mood builders, so the mood stage
+  can do everything the scope stage could plus report its flag. That is what keeps this issue from landing
+  as two structs nothing can resolve: `SelectFiles` is the SOURCE-and-EXTRACT-plus-scope half every
+  predicate will be written over (issue #16's reason for exporting it in the first place), and `Selectors`
+  is what the empty-test guard will report with. The empty-test guard is still not wired in — selecting
+  nothing is only a failure once a rule judges something, and there is nothing to judge until the first
+  predicate.
+- WHY: `FilesBuilder.String()` was refactored into `stages()` and `rejected()`, the only edit to code that
+  was already passing its tests. The mood appends its word to the scope's stages, and a pattern a scope verb
+  rejected has to stay at the end of the sentence rather than in the middle of it — `project files, ...,
+  should not (rejected: ...)`. `String()`'s output is unchanged and its test is untouched.
+- WHY: no predicate, no terminal, no `Checkable`. This issue is the mood; `Mood.Holds` therefore has no
+  production caller yet, and the assertion it is threaded into is written out in test code — the precedent
+  issues #5, #6 and #16 set with `dependencyRule`, `inFolder` and `selectFrom`. Both
+  `TestOneAssertionServesBothMoods` (over a hand-built graph, in `common/assertion`) and
+  `TestTheMoodReachesAnAssertionAsAFlag` (over the fluent API's own mood value) gather both moods with one
+  function and hold their results to being exactly complementary, which is the property a duplicated
+  negative code path would break.
+- WHY: the public surface gains `Mood`, `Should`, `ShouldNot`, `FilesShouldBuilder` and
+  `FilesShouldNotBuilder`. `Mood()` returns a `common/assertion` type, so without the alias a user could not
+  name what the mood stage hands them without importing the library's internals — which is the one thing
+  the public surface exists to prevent. Nothing was added to `govet.unusedresult.funcs`: `Should` and
+  `ShouldNot` are methods, and that flag cannot guard a method, as the note in `.golangci.yml` says.
+- WHY: file stems are `common/assertion/mood.go` and `files/fluentapi/mood.go`. No sibling stem names this
+  stage; `AGENTS.md`'s grammar table calls it the mood, and `should.go` would have named one of the two
+  words. Both are one concept per file, as in issues #1, #4, #6, #7, #9, #11 and #12.
+
+## Issue #18 — Files API: have no cycles
+
+- WHY: `GatherCycleViolations(circuits)` takes **no** `assertion.Mood`, which is a deliberate departure
+  from `AGENTS.md`'s "Adding a new rule" step 4 ("handle both moods via the flag") and from every other
+  `gather <thing> violations` function so far. `should not have no cycles` is a double negative demanding
+  that the files *be* cyclic, and it fails exactly when there is no cycle — with nothing to report but the
+  absence of one, which is not data a violation can carry. The issue says "positive mood only", so the
+  predicate exists on `FilesShouldBuilder` alone and the flag would have been a parameter no caller could
+  vary. The doc comment carries a "# Why this one takes no mood" section so the next rule family does not
+  read it as licence to drop the flag, and `TestHaveNoCyclesExistsOnThePositiveMoodAlone` reflects over both
+  mood builders' method sets — the same mechanical enforcement issue #17 used for the synonyms, rather than
+  a sentence a reviewer has to remember.
+- WHY: the violation is built from `cycles.ProjectCircuits` (Johnson) and not from `cycles.ProjectCycles`
+  (Tarjan), the two doors issue #15 left. A strongly connected component names the *region* of the graph
+  that is cyclic; the issue asks the message to "print the cycle as a readable path", and a path is what a
+  reader has to break. `Check` deliberately drops the enumeration's `complete` flag: it bounds the size of
+  the report and not the verdict — a truncated enumeration still holds every cycle it did find, and a rule
+  reporting a thousand cycles is broken by the first of them. Reported as a `//` comment at the call site,
+  because a discarded second return value is otherwise read as an oversight.
+- WHY: `KindFileCycle = "file-cycle"` names the vocabulary as well as the failure, like `file-dependency`
+  will: a rule about cycles exists in every vocabulary the library grows (slices, layers, packages), each
+  reports its own type, and two families sharing one kind would be two shapes of data under one key.
+- WHY: `CycleViolation` carries the whole `cycles.Circuit` — not a `[]string` of files and not a message.
+  `Files()` is the offenders in cycle order and `String()` is the readable path
+  `internal/api/handler.go -> internal/db/conn.go -> internal/api/handler.go`, while the circuit's own
+  `Edges()` still hold the raw `extraction.Edge` behind each step, so the testing layer can name the import
+  that made the dependency when it lands. `String()` on a violation is the same latitude `FilesBuilder`,
+  `Circuit` and `archerror` already take: enough for a log line or a `t.Errorf`, with the user-facing
+  message still the testing layer's to build. That layer does not exist yet, so the dogfood test in
+  `archunit_test.go` prints the path itself.
+- WHY: cycles are computed over the edges whose **both** ends the scope selected —
+  `projection.PerSelectedFileEdge(selected)`. A rule's scope is read as "the dependencies between these
+  files", so a cycle that leaves the scope and comes back through a file the rule did not select is not
+  this rule's cycle, and widening the scope is what makes it visible. The alternative (project every edge,
+  then report a cycle if any selected file is in one) would report a failure a reader cannot see in the
+  files the rule names. Tested in both directions, at both levels: `internal/api` alone has no cycle,
+  `internal/**` has the one.
+- WHY: `PerSelectedFileEdge` takes `[]string` identifiers rather than `[]matching.Filter`. It is the
+  selection `projection.SelectFiles` already resolved, and a terminal needs the count of it for the
+  empty-test guard anyway; taking filters would have re-run the matching per edge — twice per edge — and
+  put a second, silently divergent answer to "which files is this rule about" in the module. It composes
+  `kernel.PerInternalEdge()` rather than re-deciding what an internal edge is, so an external target cannot
+  be one end of a kept edge even if a caller passes an import path among the identifiers, and it drops
+  self-edges like every other member of the `per <thing> edge` family. An empty selection projects nothing,
+  which is the loud direction: it is what the empty-test guard reports on.
+- WHY: three edits to code that was already passing its tests, all of them the "one shared implementation"
+  kind rather than refactors of taste. (1) `FilesBuilder.resolve` returns the graph *and* the selection in
+  one call, and `SelectFiles` now delegates to it — a terminal needs both, and asking for them separately
+  would extract the project twice or, worse, resolve the scope against a second graph. (2) `filesRule.render`
+  generalises `filesRule.String` so every stage after the mood appends its words in one place and a pattern
+  a scope verb rejected stays at the end of the sentence. (3) `filesRule.emptyTestOptions` spells the
+  subject word `files` once for every terminal the module will grow. `SelectFiles`'s and `String`'s output
+  is unchanged and their tests are untouched.
+- WHY: the empty-test guard is wired in here, at the first terminal, which is where issue #16 and #17 said
+  it belonged: `have no cycles` over no file at all is a projection with no edges, so a stale glob would be
+  green forever. It short-circuits — an empty selection is reported *instead of* being judged, not beside
+  it — because two violations of different kinds would make a report say the rule both did and did not have
+  a subject.
+- WHY: the public surface gains `Checkable`, `Violation`, `ViolationKind`, `EmptyTestViolation`,
+  `FileCycleViolation` (aliasing `files/assertion.CycleViolation`), `Circuit`, `FilesCyclesCondition` and
+  the two kind constants. A user who wants more than a pass or a fail reads the violation, and without the
+  aliases they could not name what `Check` returns without importing the library's internals — which is the
+  one thing the public surface exists to prevent, and the precedent issue #16 set. `FileCycleViolation` is
+  the one alias renaming its target: `archunit.CycleViolation` would have to be renamed the day slices or
+  layers report theirs, and the kind it carries is already `file-cycle`. Nothing was added to
+  `govet.unusedresult.funcs`: `HaveNoCycles` and `Check` are methods, and that flag cannot guard a method.
+- WHY: file stems are `files/projection/per_selected_file_edge.go` (the `per <thing>` naming of issue #14),
+  `files/assertion/cycle_violation.go` and `files/assertion/gather_cycle_violations.go` (the
+  `<Thing>Violation` / `gather <thing> violations` pair of issue #10, one concept per file), and
+  `files/fluentapi/have_no_cycles.go` — the predicate, spelled as the user types it, holding the condition
+  type, the verb and the terminal. `files/assertion` is a new package, so its doc comment lives on
+  `cycle_violation.go`, the type file, as `common/assertion`'s lives on `violation.go`.
+- WHY: the integration test needs a project that does **not** compile. A file-level cycle is a cycle
+  between Go files, and the compiler rejects an import cycle, so no project that builds has one — the
+  fixture's two packages import each other on purpose. That is only possible because extraction never
+  type-checks (`packages.Load` without `NeedTypes`, and "a package that does not compile is deliberately
+  not read here"), and it is the property this rule depends on: a project mid-refactor still has a shape.
+  Both levels of the test suite say so — hand-built cyclic graphs in `files/projection` and
+  `files/assertion`, the fixture project in `files/fluentapi` — and the dogfood test in `archunit_test.go`
+  holds this repository itself to `should have no cycles`.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped because that package does not exist yet; no issue has created it. The data the
+  phrasing will need is all on the violation (`Kind`, `Files`, `Cycle.Edges`), so the step is additive when
+  the layer lands, and nothing here has to be revisited but the message.
+
+## Issue #19 — Files API: have name, be in folder, be in path
+
+- WHY: the three predicates report **one** violation type, `files/assertion.NamingViolation` of kind
+  `file-naming`, and not one per predicate. The only thing that differs between `have name`, `be in folder`
+  and `be in path` is the part of an identifier that was looked at, and that already travels on the compiled
+  `matching.Filter` as its `MatchTarget` — so three kinds would be three keys over one shape of data, which
+  the testing layer would then have to keep in step. `String()` renders the filter, so `filename matches
+  "*.go"` versus `path without filename matches "internal/**"` still tells a reader which predicate failed.
+- WHY: the violation carries the `assertion.Mood` it was judged in, which no earlier violation type does.
+  The same file, pattern and match target describe both failures — "should, but does not match" and "should
+  not, but does" — so without the flag a report could not tell them apart. The alternative, storing
+  `Required.NotMatching()` for the negated mood, was rejected: it would make a second place in the library
+  invert something, and `Mood.Holds` is deliberately the only one. `String()` therefore renders the
+  requirement as the rule stated it, never inverted.
+- WHY: `filesRule.requiring` mirrors `FilesBuilder.selecting` — verb, pattern, and the compile function that
+  pairs a predicate with the part of an identifier it reads — so that pairing is stated once per predicate
+  and nowhere else. A pattern the predicate cannot compile is handed to `FilesBuilder.rejecting`, the scope's
+  own deferred `UserError`, rather than to a new error field on the terminal: that way the first rejection of
+  the whole chain still wins, the rule renders with `(rejected: ...)`, and `Check` returns it before the
+  project is read. No passing code was touched to get it.
+- WHY: no new projection. What a file is called and where it lives is on the file, so the population is
+  `files/projection.SelectFiles` — already there from issue #16 — and `Check` deliberately drops the graph
+  `resolve` returns. There is no `files/calculation` for this either: a predicate that is a single
+  `Filter.Matches` per selected file is not a calculation.
+- WHY: file stems are `files/assertion/naming_violation.go` and
+  `files/assertion/gather_naming_violations.go` (the `<Thing>Violation` / `gather <thing> violations` pair of
+  issue #10), plus four in `files/fluentapi`: `naming_condition.go` for the shared terminal and `requiring`,
+  and `have_name.go`, `be_in_folder.go`, `be_in_path.go` — one per predicate, spelled as the user types it,
+  the way `have_no_cycles.go` is. The terminal is not in any of the three, because it belongs to none of
+  them.
+- WHY: the predicate renders as the words the user typed — `should, have name "*.go"` — while the scope verbs
+  before it render as their filters' descriptions. After the mood the sentence has to read as English, and
+  `should, filename matches "*.go"` is not a predicate anybody typed. The pattern string is kept on the
+  terminal beside the compiled filter for that rendering, because a rejected pattern has no filter to read
+  it back from.
+- WHY: the public surface gains `FileNamingViolation` (aliasing `files/assertion.NamingViolation`, renamed
+  for the same reason `FileCycleViolation` was), `KindFileNaming` and `FilesNamingCondition`. Nothing was
+  added to `govet.unusedresult.funcs`: `HaveName`, `BeInFolder`, `BeInPath` and `Check` are methods, and that
+  flag cannot guard a method.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped again because that package still does not exist. Everything a phrasing needs is on
+  the violation (`Kind`, `File`, `Required` with its pattern and target, `Mood`), so the step stays additive.
+
+## Issue #20 — Files API: depend on files
+
+- WHY: `DependOnFiles` returns **one** type, `FilesDependencyCondition`, that is both the object stage and
+  the terminal — not an object builder that a second method turns into a `Checkable`. The grammar in
+  `AGENTS.md` says OBJECT is `1..n, chainable` and TERMINAL is `Check`, and a rule whose object nothing was
+  chained onto is still a rule (`should not depend on files` = depend on nothing of this project), so every
+  object stage is already checkable. Two types would have meant the three object verbs written twice.
+- WHY: the object stage offers exactly the three verbs the issue names — `WithName`, `InFolder`, `InPath` —
+  and not the scope's fourth, `InFile`. The scope has `InFile` because a rule is often written about one
+  named file; an object is a population, and `InPath` already spells the same match target. If a user asks
+  for it, it is one method, and adding it later is additive.
+- WHY: **one violation per offending file**, not one per offending import. The subject of the rule is a file,
+  and the predicate is existential over its dependencies — a file holds `should depend on files in folder X`
+  when it reaches at least one file of X — so the file is what the two moods agree to disagree about. It is
+  also what makes the positive mood reportable at all: there is no import to point at when the offense is
+  that there are none, and a violation carrying the empty list renders as `-> nothing`. Every dependency the
+  negated mood was broken by travels on the one violation, sorted, so a report loses nothing by grouping.
+- WHY: `DependencyViolation.Dependencies` is `[]string` — the identifiers of the files found — and not the
+  projected edges or their import kinds. It matches `NamingViolation`'s shape (data the rule was judged on,
+  nothing more), and a rule about files is written against exactly those strings. The import kinds are still
+  on the projection for a later `depend on files ... by import kind` predicate to read; nothing is lost, and
+  a violation type that carried edges would tie the assertion half to the projection half for no present
+  reader.
+- WHY: the empty-test guard runs over **both** populations of the relational rule — the scope's, with
+  `Subject` `"files"`, and the object's, with `Subject` `"files to depend on"`. An object naming a folder
+  that has been renamed forbids nothing, so `should not depend on files in folder "internal/database/**"` is
+  green forever: that is precisely the silent pass the guard exists for, and it is the more likely half to go
+  stale, because the scope is usually the code the author is looking at. Two subjects rather than one so a
+  report can say which half to go and fix; both halves are reported when both are empty. The object guard is
+  skipped when no object verb was chained, since a bare `depend on files` means every file of the project and
+  the subject guard already covers it.
+- WHY: `files/projection.PerDependencyEdge(from, to)` is new, and `PerSelectedFileEdge` from issue #18 now
+  delegates to it — the one line of passing code this issue touched. "The dependencies between these files"
+  is the relational projection with one population at both ends, so keeping both implementations would have
+  meant two membership tests over the same identifiers and two places to get external edges and self-edges
+  wrong. `select_files.go`'s package doc gained the third bullet that says so.
+- WHY: a bare `DependOnFiles()` with no object verb means every file of the project, which is the loud
+  reading: an object the user forgot to type makes the rule fail (`should not depend on files` becomes "be a
+  leaf") rather than pass over an empty forbidden set. It is the same choice the empty-test guard makes one
+  stage up.
+- WHY: file stems are `files/projection/per_dependency_edge.go` (the `per <thing> edge` family of issue #14),
+  `files/assertion/dependency_violation.go` and `files/assertion/gather_dependency_violations.go` (the
+  `<Thing>Violation` / `gather <thing> violations` pair of issue #10), and
+  `files/fluentapi/depend_on_files.go` — the predicate spelled as the user types it, holding the object stage
+  and the terminal together the way `have_no_cycles.go` holds its terminal.
+- WHY: the public surface gains `FileDependencyViolation` (aliasing `files/assertion.DependencyViolation`,
+  renamed the way `FileCycleViolation` and `FileNamingViolation` are), `KindFileDependency` and
+  `FilesDependencyCondition`. Nothing was added to `govet.unusedresult.funcs`: `DependOnFiles`, the three
+  object verbs and `Check` are methods, and that flag cannot guard a method.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped again because that package still does not exist. Everything a phrasing needs is on
+  the violation (`Kind`, `File`, `Required`, `Dependencies`, `Mood`).
+
+## Issue #22 — Files API: adhere to — custom user predicate
+
+- WHY: the `FileInfo` the issue describes is a **new type in a new package**, `files/extraction.FileInfo`, and
+  not the `common/extraction.FileInfo` that issue #7 already shipped. That one is the walk's enumeration
+  record — an identifier, the *host path* it was found at and whether the toolchain calls it a test file — and
+  it exists so the extractor never has to convert between the two forms of a location. This one is what a
+  user's function is handed, so it carries no host path at all (a predicate matches identifiers, like every
+  other rule in the library) and it carries the file's text, which the enumeration deliberately does not read.
+  Widening the shared record instead would have put a whole project's source in every graph extraction, and
+  cached it. `AGENTS.md` sanctions a module's own `extraction/` for exactly this, so the files module now has
+  its SOURCE half beside its `projection` and `assertion` ones.
+- WHY: the read is in `files/extraction`, so `files/assertion` stays pure and `GatherAdherenceViolations`
+  takes `[]FileInfo` — values already gathered — the same way `files/projection` takes an
+  `extraction.Graph`. `.golangci.yml`'s depguard `pure-packages` rule (no `os`, no `path/filepath` in a
+  non-test `assertion|projection|calculation`) is what makes that split enforced rather than remembered, and
+  it is why the file contents reach the judge as data rather than the judge opening the files.
+- WHY: `NonBlankLineCount` rather than a line count, because that is the number the issue names and the one a
+  size rule wants — a file's length in lines that carry something, so that padding cannot buy a limit. It is
+  computed once, at gathering time, over `strings.Lines`, and `Source` is kept verbatim beside it (nothing
+  stripped, no line endings normalised) so a predicate the library did not anticipate can still count
+  whatever it likes.
+- WHY: `Directory` is `.` at the project root, which is `path.Dir`'s answer and the identifier convention's —
+  not the empty string. A predicate comparing folders then has one spelling for "the root" instead of two, and
+  it is the same string `path.Join` round-trips.
+- WHY: `Check` **re-locates the project** (`filesRule.readSources` calls `extraction.LocateProject`) rather
+  than the selection carrying its root out of `FilesBuilder.resolve`. The identifiers were minted against that
+  root, so what matters is that the same locator answers both times — a locator is immutable and locating is a
+  walk up to a `go.mod`, so it does, and the cost is nothing beside reading the files. Widening `resolve`'s
+  three return values to four would have touched four passing terminals to give three of them a value they do
+  not want.
+- WHY: the files are read **after** the empty-test guard, not before. A rule whose glob matches nothing opens
+  no file at all, which is what makes the guard cheap enough to keep in front of the one predicate in the
+  module that does I/O of its own; `TestAdhereToOfAScopeThatSelectedNothingIsAnEmptyTest` counts the
+  predicate's invocations to hold it there.
+- WHY: **two** rejections, `ErrNoPredicate` and `ErrNoRequirement`, which the issue does not ask for. A nil
+  function would be a nil call in a user's test process — `.golangci.yml`'s `forbidigo` bans `panic` and
+  taking a test suite down is worse than any of them — and a blank message would leave a violation with
+  nothing to print, because a Go closure has no readable form and these words are the whole of what a failure
+  of this rule can say. Both travel the deferred-rejection road issues #16 and #19 built (`rejecting` on the
+  scope, so the first rejection of the chain still wins, the rule renders with `(rejected: ...)`, and `Check`
+  returns a `UserError` naming `adhere to` before the project is read) rather than being invented here.
+- WHY: `assertion.satisfies` answers `false` for a nil predicate anyway, so the pure half cannot be made to
+  call one either. It is the same defence as "a zero `matching.Filter` matches nothing" and it is the loud
+  direction: under `should` every file is reported, which is a rule that visibly says nothing rather than one
+  that quietly passes.
+- WHY: the requirement is a *required second argument* rather than an optional one or a `String()`-able
+  interface. Everything else in this library renders itself, and this is the single stage of the grammar it
+  cannot print; making it optional would produce reports whose offender has no readable requirement at all.
+  Its doc comment asks for a bare infinitive so the mood reads onto it, which is the same rule the predicate
+  names already follow.
+- WHY: one violation type, `AdherenceViolation` of kind `file-adherence`, carrying the file, the requirement
+  and the `assertion.Mood` — the shape `NamingViolation` settled on in issue #19, for the same reason: the
+  same file and requirement describe both failures ("does not satisfy" and "does, where the rule forbade
+  it"), so the mood has to travel or a report cannot tell them apart, and `String()` renders the requirement
+  as the rule stated it because `Mood.Holds` is the library's only inversion. It is the one violation whose
+  data is prose, and unavoidably so: the rule *was* a sentence the user typed beside a function.
+- WHY: no `files/calculation`. What the predicate computes is the user's, and the library's own contribution —
+  deriving a name, an extension, a folder and a non-blank line count from an identifier and a source text —
+  is the gathering step itself, not a metric over the graph.
+- WHY: the public surface gains `FileInfo`, `FilePredicate`, `FileAdherenceViolation` (aliasing
+  `files/assertion.AdherenceViolation`, renamed the way `FileCycleViolation`, `FileNamingViolation` and
+  `FileDependencyViolation` are), `KindFileAdherence` and `FilesAdherenceCondition`. `FileInfo` is the first
+  alias a user needs in order to *write* a rule rather than to read its result — the parameter of their own
+  function — so without it the escape hatch could not be reached without importing the library's internals.
+  The two sentinel errors are deliberately not re-exported, matching the surface's existing treatment of
+  `ErrModuleFileNotFound` and `ErrInvalidPattern`. Nothing was added to `govet.unusedresult.funcs`:
+  `AdhereTo` and `Check` are methods, and that flag cannot guard a method.
+- WHY: file stems are `files/extraction/extract_file_info.go` (the `extract <thing>` naming of issues #7 and
+  #8, holding the type it extracts as `extract_source_files.go` holds its own),
+  `files/assertion/adherence_violation.go` and `gather_adherence_violations.go` beside it (the `<Thing>Violation` /
+  `gather <thing> violations` pair of issue #10, with `FilePredicate` on the gathering file because it is that
+  function's parameter), and `files/fluentapi/adhere_to.go` — the predicate spelled as the user types it,
+  holding the terminal the way `have_no_cycles.go` and `depend_on_files.go` hold theirs.
+- WHY: the integration test in `archunit_test.go` dogfoods the escape hatch on this repository with the three
+  conventions no glob expresses that the library actually keeps — every file ends with a newline, every file
+  is Go source with something in it, and `files/assertion` mentions neither `os` nor `path/filepath`, which is
+  the purity rule `.golangci.yml` enforces from outside written as an ArchUnit rule from inside. Beside them
+  `TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles` holds the same package to 20 non-blank
+  lines, which it breaks, so the failing direction is exercised against real files and not only a fixture.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — "teach the violation factory how to phrase it, in
+  `testing`" — is skipped again because that package still does not exist. Here the phrasing is nearly
+  written already: `Kind`, `File`, `Requirement` and `Mood` are on the violation, and the requirement is the
+  user's own words.
+
+## Issue #23 — The empty-test guard on every terminal
+
+- WHY: the guard was already wired into all four terminals of `files` when they landed (issues #18–#20, #22),
+  and `files` is still the only domain module, so "on **every** terminal" could not be delivered by adding a
+  call anywhere. What was missing is the two things that make the claim hold for the terminals nobody has
+  written yet: the guard's *terminal-side* shape lives in the kernel rather than being reinvented per module,
+  and `every` is checked mechanically rather than remembered.
+- WHY: the new kernel file is `common/fluentapi/empty_test_guard.go`, holding `EmptyTestPopulation{Subject,
+  Matched, Selectors}` and `(*CheckOptions).GatherEmptyTestViolations(populations ...EmptyTestPopulation)`.
+  The decision itself stays in `common/assertion` — the method reads `AllowEmptyTests` out of the user's bag
+  through `CheckOptions.EmptyTestOptions` and asks `assertion.GatherEmptyTestViolations` per population — so
+  this adds the *wiring* a terminal repeats and no second implementation of the rule.
+- WHY: the method has the **same name** as the assertion function one layer down, distinguished by its
+  receiver, which is the convention issue #3's matchers set and issue #16's scope verbs followed: a terminal
+  asks the options bag for the guard, and a reader who knows `gather <thing> violations` reads both.
+- WHY: `EmptyTestPopulation` is a *type* rather than three positional arguments, and the method is variadic
+  over it, because the multi-population case is the one a relational terminal has and the one most likely to
+  be got wrong. `files/fluentapi/depend_on_files.go` privately owned that logic; a `layers` rule (`layer A
+  should not access layer B`) has exactly the same two halves, and a `slices` rule has more. Stating it once
+  is the whole of what moved.
+- WHY: four terminals that already passed their tests were touched. It is not a refactor of working code for
+  its own sake: they are the four call sites the shared wiring exists for, and leaving them on the old call
+  would have meant the kernel's guard was used by nothing and the next module would copy the old shape. The
+  renames follow the shift — `filesRule.emptyTestOptions` became `filesRule.selection`, which now answers with
+  the population rather than with an options bag, and `FilesDependencyCondition.gatherEmptyTestViolations`
+  became `populations`, which names both halves of the sentence and no longer gathers anything itself. Their
+  reasoning comments are unchanged.
+- WHY: `EmptyTestPopulation` is **not** re-exported on the public surface. Its `Selectors` field is
+  `[]matching.Filter`, and `matching.Filter` is deliberately not on the surface either — a user names a
+  selector by typing a scope verb, never by constructing one — so an alias would name a type nobody outside
+  the library can fill in. It is the vocabulary a *terminal author* writes with, and terminal authors are
+  inside the module.
+- WHY: `files/fluentapi/empty_test_guard_test.go` has no production twin in that package, which breaks the
+  sibling-stem convention. It is deliberate: the file is one test about a property of *every* terminal of the
+  module, so putting it beside any one of them would say it belonged to that one, and splitting it four ways
+  would be the list-of-terminals the test exists in order not to keep. The stem matches the kernel file the
+  property comes from.
+- WHY: that test finds the terminals by **walking the method sets** (`terminalsOf` → `reachableTerminals`),
+  the way issue #17's `TestTheMoodIsTwoWordsWithNoSynonyms` holds the mood to two words: every method whose
+  single result implements `fluentapi.Checkable`, from both mood builders and then one level further for the
+  object verbs that are chainable and terminal at once — 17 terminals today. A predicate that lands later is
+  swept up without anybody editing the test, which is the only version of "every" that stays true. Two levels
+  is where it stops because an object verb hands back its own type; a third would repeat the same three verbs.
+  `argumentOf` synthesizes a pattern as `**` and a user's function with `reflect.MakeFunc`, and `t.Fatalf`s on
+  any other kind rather than passing a zero value — a verb whose meaning the walk cannot guess could quietly
+  turn the rule into a sentence nobody meant, and the sweep would then hold the guard to nothing. A sanity net
+  fails the test if the six known predicate names are not among what it found, so a walk that has gone blind
+  cannot pass by finding nothing.
+- WHY: `archunit_test.go` gains `TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard`, an `adhere to` rule
+  over this repository: a file that declares a terminal's `Check` method must also mention
+  `GatherEmptyTestViolations`. The reflective sweep covers the module it lives in and cannot see a module that
+  does not exist yet; this one reads every file of the library, so a terminal in `layers/`, `slices/`,
+  `metrics/` or `graph/` that forgets the guard fails here on the day it is written, even if nobody writes a
+  sweep for it. It is `adhere to` because which methods a file declares is exactly what no glob expresses.
+  It looks for `) Check(` — the method declaration — so `Checkable` in `common/fluentapi/checkable.go`, which
+  declares the contract rather than implementing it, is not asked to satisfy it.
+- WHY: both mechanical checks were verified to bite, by temporarily unwiring the guard in
+  `naming_condition.go` (the sweep failed for `HaveName`, `BeInFolder`, `BeInPath` in both moods) and in
+  `have_no_cycles.go` (the dogfood rule reported the file), then reverting. A guard test that cannot fail is
+  the same silent pass the guard itself exists to prevent.
+- WHY: the kernel's own tests are `common/fluentapi/empty_test_guard_test.go`: the unit level over both
+  populations of a relational rule (neither, either and both empty; the opt-out; a nil options bag, which is
+  the defaults and so the guard *on*; the selectors copied on the way to the violation; no population at all,
+  which is a terminal that is not guarded and has nothing to report), and one level above over a hand-built
+  `extraction.Graph` in the shape a relational terminal resolves both halves of its sentence in.
+- WHY: `assertion.GatherEmptyTestViolations`'s signature is unchanged. Making *it* variadic over populations
+  was the other way to state the multi-population case once, but it is the pure layer's decision function —
+  one count, one options bag — and widening it would have churned its own passing tests to move logic that
+  belongs where the terminal is. A closure-taking `Guarded(judge func() (...))` helper was rejected too: it
+  is heavier at the call site, just as forgettable, and `adhere to` must run the guard *between* its two I/O
+  steps rather than around them.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing was removed from it.
+  `GatherEmptyTestViolations` is a method, and that flag cannot guard a method.
+- WHY: step 8 of `AGENTS.md`'s "Adding a new rule" — the phrasing in `testing` — is skipped again because that
+  package still does not exist. `EmptyTestViolation` already carries the subject and the selectors, which is
+  the data such a phrasing would read.
+
+## Issue #24 — Testing: violation formatting, result shaping and colour
+
+- WHY: the layer lives in `archtest/` and not the `testing/` of `AGENTS.md`'s layout table. A package named
+  `testing` shadows the stdlib `testing` in exactly the file that needs both — a test — and would force every
+  user of the library to alias one of the two imports at the one call site the layer exists for. It is the
+  same answer `common/archerror` already took for the layout's `error`, and the one `AGENTS.md`'s Go-specifics
+  section reaches for. The layout table's *contents* are unchanged: `ViolationFactory`, `ResultFactory` and
+  the colour utilities, and nothing else.
+- WHY: "colour" is spelled `color` in every identifier, comment and doc in the new code. `.golangci.yml` runs
+  `misspell` with `locale: US`, so the issue's spelling is a lint failure in source; the concept is the
+  issue's, the spelling is the linter's.
+- WHY: `.golangci.yml` changed twice, both times to keep a dependency rule mechanically enforced rather than
+  to make room for this code. The `common-imports-no-domain` deny listed `…/testing`, a path that never
+  existed and now never will, so it denies `…/archtest` instead — rule 1 was unenforced until this commit.
+  And a new `testing-layer` depguard block states rule 3 (`archtest` may see `common` and the domain modules'
+  violation types, nothing else) in `list-mode: strict`, so a module added later is denied by default instead
+  of needing a new deny line nobody remembers to write. It excludes `!$test` because the layer's own tests
+  read the surface they describe.
+- WHY: `Palette` names roles — `Failure`, `Pass`, `Subject`, `Requirement`, `Finding`, `Hint` — and not rule
+  families. Every message this layer builds has one shape, so a reader who has learned that cyan is the file
+  to open and yellow is the rule has learned every family the library will grow. A palette per family would
+  have to be extended by whoever adds a family, and would teach a reader nothing transferable.
+- WHY: `DefaultPalette()` is a function, not a package-level `var`. A var would let one caller repaint the
+  library's idea of a default report underneath another one, and `gochecknoglobals` would be right to say so.
+- WHY: messages are built from a violation's fields rather than delegated to its `String()`. `String()` is one
+  opaque piece and a report has to paint its parts separately; building here is also what keeps phrasing this
+  layer's decision, which is the whole point of the issue. The cost is a type switch in `Message`, and an
+  `unphrased` fallback keyed on `ViolationKind` plus the violation's own `String` catches a family whose
+  phrasing is outstanding and a `Checkable` of a user's own — so step 8 of "Adding a new rule" being late
+  loses the wording, not the information.
+- WHY: a requirement is rendered as the rule stated it — `should not, filename matches "*_test.go"; it does`
+  — and never inverted into "does not match". `matching.Filter`'s inverted and excluding state is only
+  visible through its `String()`, and `assertion.Mood.Holds` is meant to be the library's only inversion; the
+  mood contributes one word of the sentence and the finding follows from the violation existing at all.
+- WHY: `cyclesRequirement` is a constant sentence rather than something read off `CycleViolation`. `have no
+  cycles` exists in one mood only — its negation would demand that files be cyclic — so there is no other
+  rule the violation could have come from, and nothing to read.
+- WHY: a nil `Violation` inside a list reads as `(no violation)` at its number instead of being skipped or
+  panicking. It is a bug in whatever built the list, a numbered gap is how a reader finds out, and this layer
+  describes somebody else's failing test — taking their test process down while doing it would be worse than
+  any message. `forbidigo` bans `panic` besides.
+- WHY: `MaxViolations` truncation is never silent. The heading carries the whole count and a cut report adds
+  `... and N violations not listed, because MaxViolations is X`, naming the knob, because a short list that
+  looks complete is worse than a long one.
+- WHY: `Result` carries `Passed` and `Message` and not the violations or the rule's own sentence. The data is
+  what `Check` already returned, and which framework prints it — and how a rule's description reaches the top
+  of a report — is the adapter issue's, not this one's.
+- WHY: the package doc lives in `violation_factory.go`, the file the layer's own name is about, because
+  `archtest/` has no `archtest.go` and inventing a doc-only file to hold four paragraphs would break the
+  sibling-stem convention for no reader's benefit.
+- WHY: `ResultFactory.listed` is a method on the factory rather than on `MessageOptions`, where the limit
+  lives. `MessageOptions` already needs a pointer receiver for `WithDefaults`'s nil contract, and `recvcheck`
+  rejects a type with both receiver kinds.
+- WHY: the public surface gains `Result`, `ResultFactory`, `ViolationFactory`, `MessageOptions`, `Palette`,
+  `Color` with its eight constants, `NewResultFactory`, `NewViolationFactory` and `DefaultPalette` now rather
+  than with the adapter. Turning `Check`'s violations into a message is what a user does today, by hand, in
+  the test they already wrote — the layer is usable without an adapter and reaching into a subdirectory for
+  it would contradict "nothing depends on the public surface, the public surface depends on everything".
+- WHY: the fluent-API integration tests for this layer are in `archunit_test.go`, at the root, and not in
+  `archtest/`. Driving a real rule end to end needs `files/fluentapi`, which rule 3 and the new depguard
+  block forbid `archtest` from importing; the root package is where everything is already visible, and it is
+  the surface a user reads a report through anyway.
+- WHY: `TestThisRepositoryObeysItsOwnDependencyRules` gains three rules — `common/**` must not depend on
+  `archtest`, and `archtest` must not depend on `files/fluentapi` or `files/projection`. depguard states the
+  same rules for the linter; the dogfood rules state them for anyone running `go test`, and they are the
+  first check of the new layer that the library performs on itself.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing was removed from it. `Message`, `Messages`
+  and `Result` are methods, and that flag cannot guard a method; their results are consumed by construction
+  in every test that calls them.
+
+## Issue #25 — Testing: the framework-agnostic assert helper
+
+- WHY: the options bag is a required third parameter, `AssertPasses(t, rule, nil)`, and not the optional
+  argument of `assert passes(rule, options?)` or of AGENTS.md's opening example. Go has no optional
+  parameter, and `Check(*CheckOptions)` with a nil-means-defaults contract is what AGENTS.md's Go-specifics
+  section picks over variadic options — so every entry point and terminal in this repository already reads
+  `ProjectFiles(nil)`, `Check(nil)`, `NewResultFactory(nil)`, and the helper reads the same way.
+- WHY: `TestingT` asks for `Error(args ...any)` alone; `Helper()` is an optional interface asserted at the
+  call, so the helper still calls it on every handle that has one — which AGENTS.md's `AssertPasses(t, rule)`
+  paragraph asks for — without locking out a framework whose handle lacks it. Requiring it would have made
+  "framework-agnostic" mean "stdlib-shaped".
+- WHY: that interface puts `any` in the public API, which AGENTS.md says to avoid. The signature is the
+  stdlib's and has to be, or `*testing.T` would not satisfy the interface without an adapter; the helper
+  always passes exactly one string, and a test holds it to that.
+- WHY: a failing assertion is headed by the rule's own sentence, taken through `fmt.Stringer`, above the
+  report `ResultFactory` shaped. Issue #24's note left "how a rule's description reaches the top of a report"
+  to the adapter issue, and this is it: without the heading, a test that asserts several rules — or one in a
+  loop — reports a list of files with nothing saying which sentence they broke. A `Checkable` that cannot
+  describe itself gets the report unheaded.
+- WHY: `AssertOptions` holds `fluentapi.CheckOptions` and `MessageOptions` as two fields rather than
+  flattening their knobs. The helper spans both halves of the pipeline's tail, and a flat bag would be a
+  second place where every knob either half ever grows has to be repeated, in step, forever.
+- WHY: a nil rule and a technical error from `Check` are reported through `t.Error` in their own words —
+  `there is no rule to check: ...`, `the rule could not be checked: ...` — rather than as violations or a
+  panic. A rule that failed to run is a different problem for the reader than one that does not hold, an
+  assertion that quietly asserted nothing is the outcome this library treats as the worst there is, and
+  `forbidigo` bans `panic` besides. A nil `t` is the one case left to panic: there is nowhere to report to.
+- WHY: the helper reports through `Error` and not a fatal call, so a suite asserting several rules reports
+  all of them, and it returns nothing — a caller who wants the violations rather than the failure calls
+  `Check`, which is public for that.
+- WHY: the fluent-API integration tests are in `archunit_test.go` at the root, for issue #24's reason
+  (`archtest` may not import `files/fluentapi`), and the failing direction is asserted against a handle that
+  records instead of failing — a real `*testing.T` there would fail this repository's own suite.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AssertPasses` returns nothing,
+  so there is no result to guard.
+- WHY: the re-exported `archunit.AssertPasses` probes for `Helper()` and marks itself before delegating, so the
+  probe exists twice rather than once. A framework blames the first frame that did not mark itself, and the
+  re-export is that frame on the call form the documentation prescribes — `archunit.AssertPasses(t, rule, nil)`
+  — so without it every failure would be attributed to `archunit.go` instead of the user's assertion line.
+  Exporting the probe from `archtest` would have shared the three lines at the price of a public name that
+  exists only for one caller inside the module.
+
+## Issue #21 — Files API: depend on external modules
+
+- WHY: `matching(name)` is spelled `Matching(pattern)` and compiles a path matcher, the same glob syntax
+  every other selector in this repository takes. The issue calls the object selector a name; an import path
+  is the only name an external dependency has here, and a matcher keeps `gorm.io/**` and the exact
+  `net/http` in one verb rather than adding a second one for prefixes.
+- WHY: the object verbs are combined with OR, which makes this the one chain in the library that widens
+  instead of narrowing. The issue asks for it — "repeatable for OR" — and it is what the object means: a
+  module cannot be two modules at once, so two path patterns ANDed would name a set that cannot have a
+  member. The join is stated in `projection.matchesAny` and rendered in three places a reader can see it —
+  the condition's `String`, the violation's `String` and `archtest.alternatives` — because a report that
+  spelled alternatives with a comma would read as the AND every sibling rule uses.
+- WHY: `external` keeps the meaning EXTRACT already gave it — `Edge.External`, so the standard library is
+  external too — and this layer does not re-decide it. A rule that wants third-party code alone writes
+  `Matching("*.*/**")`, which is documented on the verb: the glob translator turns it into a first segment
+  containing a dot plus everything under it, and no standard library path has one. Teaching the projection
+  to exclude the stdlib would have put a second definition of "outside the project" one layer above the
+  one that computed it.
+- WHY: the empty-test guard is wired to the subject alone, and there is no object population. For this
+  family the object *is* the set of dependencies found, so "no module matched" and "no file depends on such
+  a module" are one statement — and under `should not` that statement is the pass, which a guarded object
+  would turn into a violation for every well-behaved project. Two tests pin it in both moods, and the
+  reflection sweep in `files/fluentapi/empty_test_guard_test.go` still holds the terminal to guarding its
+  subject.
+- WHY: `EmptyTestPopulation`'s doc in `common/fluentapi/empty_test_guard.go` was softened from "A relational
+  rule has two" to "usually has two", with the reason above. The sentence became false the moment this
+  terminal landed, and which populations a rule has was always the terminal's to say.
+- WHY: `GatherExternalDependencyViolations` writes out the per-file existential walk that
+  `GatherDependencyViolations` also has, rather than the two sharing one. The precedent is next door —
+  `GatherNamingViolations` and `GatherAdherenceViolations` are the same walk twice — and the two differ in
+  what they carry and in the fact that this one is handed a population it must not guard. Sharing it would
+  have made the shared function the place where a future rule family's object semantics get decided.
+- WHY: `ExternalDependencyViolation` is its own kind, phrased by an `externalDependency` method of its own in
+  `archtest`, rather than reusing `DependencyViolation`. It carries import paths and not the project's own
+  files, its object joins with `or`, and phrasing is the report layer's whole deliverable: one names folders
+  of this project, the other names somebody else's modules.
+- WHY: the integration fixtures live in a `writeExternalFixtureProject` of their own and import nothing but
+  the standard library. A fixture with a real third-party import would need the module proxy at test time;
+  stdlib imports are external by the same rule, so they exercise every branch without anything being
+  fetched, and the existing `writeFixtureProject` stays as its own tests wrote it.
+- WHY: file stems follow the sibling rule family exactly — `depend_on_external_modules.go`,
+  `select_external_modules.go`, `per_external_dependency_edge.go`,
+  `gather_external_dependency_violations.go`, `external_dependency_violation.go` — with each test file
+  beside the file it tests.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `DependOnExternalModules` and
+  `Matching` are methods, and that flag cannot guard a method; the immutability tests are what hold them to
+  returning a new builder.
+
+## Issue #26 — Testing: native integration with the standard `testing` package
+
+- WHY: there is no registration, no `init()` and no import side effect, because Go has no matcher-registration
+  hook to register on. AGENTS.md's own testing paragraph settles it — "Go has no matcher-registration hook, so
+  that helper *is* the integration; there is nothing to auto-register" — so the issue's "register on import
+  behind a silent detection check so there is zero setup" is honoured by there being nothing to set up: import
+  the package and call the helper. The one detection this port does have is a probe, not a registration:
+  `AssertPasses` asks the handle for `Helper()` at the call and stays silent when it is missing.
+- WHY: what the issue's "translates to the framework's result shape" asks for, in Go, is the subtest. So the
+  deliverable of this issue is `archtest.AssertAllPass` — the plural of `AssertPasses` — which asserts a whole
+  suite through one `t.Run` per rule, giving each rule its own pass/fail line, its own name in the output and
+  its own `go test -run` selector. It is the same assertion `AssertPasses` makes, one level up; #25 built the
+  framework-agnostic half, and this is the half only the standard library can have.
+- WHY: no rule logic was added. `AssertAllPass` calls `AssertPasses` per rule and nothing else, so the check
+  stays the rule's, the mapping through the shared factory stays `ResultFactory`'s, and there is exactly one
+  idea in the library of how a failure reads.
+- WHY: the suite is `map[string]Checkable` rather than a slice of name/rule pairs or a variadic builder. A map
+  is what keeps a name and the rule it belongs to together at the call site with no wrapper type, and what
+  makes two rules under one name impossible. Its rules are asserted in the sorted order of their names,
+  because Go randomizes map iteration on purpose and a suite whose output reorders itself on every run cannot
+  be diffed; a test runs the helper eight times to pin that.
+- WHY: `TestingRunner` is `TestingT` plus `Helper()` plus `Run(string, func(*testing.T)) bool`, so it is the
+  one interface in this layer that is deliberately not framework-agnostic — `Run`'s argument is a `*testing.T`,
+  so `*testing.B` cannot satisfy it and neither can a third-party handle that is not built on the stdlib's.
+  That is the trade the two helpers split: `AssertPasses` asks for the one method every framework has,
+  `AssertAllPass` asks for the standard library so it can hand back what only the standard library can do.
+- WHY: `Helper()` is required there rather than probed as `AssertPasses` probes it. A handle with
+  `Run(string, func(*testing.T))` is the stdlib's handle, and the stdlib's handle has `Helper` — an optional
+  interface for a method that cannot be missing would be a branch no test could reach.
+- WHY: the subtest closure calls `t.Helper()` on the subtest's own handle. Asked for the frame to blame inside
+  a subtest whose every frame is marked, the standard library walks out into the stack the subtest was created
+  from, where this helper's frames are marked too — so a failing rule of a suite is filed against the user's
+  own `AssertAllPass` line, the same as a single assertion. It is not asserted in a unit test: a `*testing.T`
+  does not expose the frame it filed a failure against, and `Run`'s argument has to be a real one, so it is
+  pinned by the doc comment's own worked example instead.
+- WHY: a suite with no rules in it is one failure — `there are no rules to check: ...` — and no subtests. It is
+  the empty-test guard one level up (a map that lost its entries to a refactor, or one filled by a loop over an
+  empty list), and it is reported for the same reason issue #23's guard reports a rule that selected nothing: a
+  green run that checked nothing is the worst outcome this library has. A nil rule under a name needs no branch
+  here, because `AssertPasses` already reports it inside that name's subtest.
+- WHY: the options bag is the whole suite's, and there is no per-rule bag. A suite is a policy, and a knob that
+  reached the first rule and not the third would be a policy with a hole in it; the one rule that needs knobs
+  of its own is asserted beside the suite with its own `AssertPasses` call.
+- WHY: "respect the framework's negation idiom" is answered by the rule's own mood, not by a second helper.
+  Go's idiom is one non-fatal `t.Error`, which `AssertPasses` already reports through, and the negation of an
+  architecture rule is written where the library already writes it — `ShouldNot()` — which is also the only
+  form that has data to report. An `AssertFails` would have to pass when there is nothing to say, which is
+  the reason issue #18 refused a negated predicate; a caller who wants that assertion has `Check`, which is
+  public for exactly this.
+- WHY: nothing was wired to `CheckOptions.Logging` and no `t.Log` progress output was added. Nothing in the
+  library writes to that field yet — issue #39 owns it — so a helper that piped it to the test log would be
+  piping an empty stream. (Issue #39 wired it; `archtest` still does not touch the field, because the suite's
+  bag is threaded to every rule already and the log's destination is the caller's to choose.)
+- WHY: the unit test's `runner` drives each subtest body against a fresh zero-value `&testing.T{}` and reads
+  `Failed()` off it, which is how a test of this form observes per-subtest outcomes without failing this
+  repository's own suite. A recorder cannot stand in, because `Run`'s argument is a `*testing.T`. The
+  integration test's `runner` in `archunit_test.go` is the same handle for the same reason: a `Run` that only
+  recorded the name never ran a rule, so nothing the re-export forwards to `AssertPasses` — the options bag
+  above all — was observable through the public surface.
+- WHY: `TestTheOptionsOfASuiteReachItsRulesThroughThePublicSurface` reads the bag off the *outcome* of one rule
+  rather than off the rule's recorded options, as the unit test next door does: a `Checkable` written by the
+  test cannot reach the root package (`archtest` may not import `files/fluentapi`, issue #24), so the
+  observable is a rule whose answer the knob decides. The stale glob selects nothing, so it fails under the
+  defaults and holds under `AllowEmptyTests`; asserting both halves is what says the passing half is a subtest
+  that really ran rather than one that was never entered.
+- WHY: file stems are `assert_all_pass.go` and `assert_all_pass_test.go`, beside `assert_passes.go`, and the
+  re-export sits in `archunit.go` with the rest of the public surface. The root re-export marks itself as a
+  helper before delegating, for issue #25's reason.
+- WHY: the sentences this change made false were rewritten in the same diff — the package doc in
+  `archtest/violation_factory.go` ("Two factories and the color utilities they use" bounded a surface that has
+  since grown a second door), the `AssertPasses` and `TestingT` docs in `archtest/assert_passes.go`, the
+  opening sentence of `AssertOptions`, and the `AssertOptions` re-export doc — so that no doc claims the assert
+  surface is one helper.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AssertAllPass` returns nothing, so
+  there is no result to guard.
+
+## Issue #27 — Layers API
+
+- WHY: there is no mood stage in this family, which is a deviation from AGENTS.md's "Mood: exactly 1" and the
+  one thing in this issue worth arguing about. `may only depend on layers` and `may not depend on layers` are
+  their own polarity, so a mood before them reads as `should not, may not depend on layers` — a sentence
+  nobody would type, and the acceptance test AGENTS.md sets for a name is reading the chain aloud. The mood is
+  still what makes the two one piece of logic rather than two: it travels on `assertion.Clause`, where `Should`
+  is the allowlist and `ShouldNot` the blocklist, and `Clause.Allows` is `Mood.Holds(named contains target)` —
+  one predicate, one flag. The table row in AGENTS.md was amended in the same diff rather than left false.
+- WHY: the grammar is declarations first, clauses after: `layer(name)` closed by a `defined by` verb hands back
+  the `LayersBuilder`, and only `where layer(name)` leads to a predicate and thus to a terminal. That order is
+  what lets a clause naming an undeclared layer be rejected where it was typed — see below — and it is why
+  `LayersPolicyCondition` offers `WhereLayer` and not `Layer`: a chain that went back to declaring after
+  writing a clause would drop out of `Checkable`, so a policy built in that order could not be checked at all.
+  Declaring a layer twice is legal and merges (below), so nothing a user might want to say is lost.
+- WHY: `LayersBuilder` is deliberately not a `Checkable`. A chain that has declared layers and written no
+  clause is not yet a rule about anything, so there is nothing for a terminal to report; it is a value worth
+  storing all the same, which is why it is named on the public surface and why the tests declare this
+  repository's layers once in a helper and branch every policy off it.
+- WHY: a clause naming a layer the policy never declared is a `UserError` wrapping `ErrUndeclaredLayer`,
+  rejected in `clausing` at the moment it is typed rather than at the terminal. An undeclared layer has no
+  files, so it is at neither end of any projected dependency, so the clause would judge nothing and pass
+  forever — the failure the empty-test guard exists for, caught one stage earlier where the name a user
+  mistyped can be quoted back at them. It is the typo the sibling libraries report most.
+- WHY: `may not depend on layers()` with nothing named is rejected (`ErrNoLayersNamed`) while
+  `may only depend on layers()` with nothing named is legal and means the sealed layer. They are not
+  symmetrical: a blocklist that forbids nothing holds forever, and an allowlist that allows nothing is a policy
+  people really write — a domain that may not reach the code around it. The rejected clause still joins the
+  policy so that `String()` renders the sentence the user typed, with the rejection in parentheses after it;
+  the policy carries the error, so it is never judged.
+- WHY: a layer name declared twice is one layer whose selectors are OR-ed, not two layers with one name.
+  `layer "domain" defined by folder "internal/domain"` followed by `layer "domain" defined by folder
+  "internal/model"` can only mean the domain is both, and merging in `declaring` is also what lets everything
+  downstream — the projection, the guard's populations, a clause's lookup — take one layer per name for
+  granted. An overlap between *different* layers is resolved by declaration order: `projection.LayerOf` returns
+  the first layer whose pattern describes the file, so a file is in exactly one layer and the order is the
+  user's, never sorted.
+- WHY: the issue's three semantics live where the pipeline already puts them, and none of them is a special
+  case in this module. Intra-layer dependencies are allowed because `kernelprojection.ProjectEdges` drops
+  label-equal edges, which is the data model's own self-edge rule; edges with an end in no declared layer are
+  dropped by `projection.PerLayerEdge`, the module's one `MapFunction`; blocklists before allowlists is
+  `assertion.GatherDependencyViolations` asking the `ShouldNot` clauses first. That last one is about the
+  *report* rather than the pass — every clause is in force and a dependency breaking both is one violation
+  either way — and it is blamed on the blocklist because that is the sentence the reader wrote about that very
+  pair of layers.
+- WHY: one violation per offending pair of layers, not per import, carrying the concrete `extraction.Edge`s
+  that connect them. That is what `ProjectedEdge.CumulatedEdges` is for, and it is what makes a layer report
+  short enough to read and still specific enough to act on: `layer "db": may not depend on layers "api"; it
+  depends on api through db/conn.go -> api/handler.go`.
+- WHY: the empty-test guard is asked one population per declared layer, not one for the policy, and it reports
+  every empty layer rather than the first. Any one of a policy's patterns can be the stale one, a layer nobody
+  is in makes every clause about it vacuous, and a reader who renamed two folders should be told about both.
+  The subject names the layer — `files in layer "api"` — because `layers` alone would not say which pattern to
+  go and fix.
+- WHY: `SelectLayerFiles` is the module's counterpart to `SelectFiles` and returns `map[string][]string` with
+  every declared layer as a key, including the empty ones. An empty layer is neither an error nor a violation
+  there: whether it is a failure is a question only a rule that judges something can ask.
+- WHY: the public surface names the three stages and the terminal and nothing else. `projection.Layer` stays
+  internal — `declaredLayers` is unexported — because a user describes a layer by typing `defined by`, not by
+  building a compiled selector, and the error sentinels are not re-exported either, which is the choice
+  `ErrNoPredicate` already made in the files module.
+- WHY: file stems follow the vocabulary as the files module's do — `project_layers.go`, `layer.go`,
+  `where_layer.go`, `may_only_depend_on_layers.go`, `may_not_depend_on_layers.go`, `policy_condition.go` in
+  `fluentapi`; `layer.go`, `select_layer_files.go`, `per_layer_edge.go` in `projection`; `clause.go`,
+  `dependency_violation.go`, `gather_dependency_violations.go` in `assertion` — each with its `_test.go`
+  sibling.
+- WHY: the phrasing of a layer violation is `archtest`'s, like every other family's, and it duplicates the
+  clause's wording rather than calling `Clause.String()`: the violation carries data (`Layer`, `DependsOn`,
+  `Named`, `Mood`, `Dependencies`), the report layer decides the sentence, and a report that borrowed a
+  chain's `String()` would make the phrasing impossible to change in one place. `layers/assertion` was added
+  to depguard's strict `testing-layer` allow list for it, one line, on purpose.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. Every stage of this chain is a
+  method, and that list cannot guard methods; the entry points return a builder a caller must use, and the
+  comment above the list already says why an unterminated chain is the idiom critic's catch rather than a
+  linter's.
+
+## Issue #28 — Graph reports: the snapshot and its query options
+
+- WHY: the two `include ...` modifiers are named `IncludingExternalDependencies` and
+  `IncludingSelfDependencies` rather than the issue's `include external dependencies` / `include self
+  dependencies`. AGENTS.md's grammar names them: modifiers are present participles and its own list spells
+  this one `including ...`. The imperative would read as a command in a chain of noun phrases (`project graph,
+  include external dependencies, titled ...`), and the fields they set keep the issue's own words —
+  `SnapshotOptions.IncludeExternalDependencies`. The chain reads what the issue means.
+- WHY: `CollapseByPattern(label, pattern string)` takes a group name the issue does not mention. A collapsed
+  set of nodes *is* a node of the diagram and a node has to be drawn under something; deriving a label from
+  the pattern would put `internal/{api,web}/**` on a box. Naming it is also what lets a report's groups and a
+  layer policy's layers carry the same names, which is what makes the two describe one architecture. An empty
+  name is rejected (`ErrUnnamedGroup`) rather than drawn blank.
+- WHY: `CollapseToFolderDepth(depth)` rejects a depth below one (`ErrInvalidFolderDepth`), while
+  `SnapshotOptions.CollapseToFolderDepth` still reads zero as "collapse nothing". Zero path segments is not a
+  folder any file lives in, and a caller who does not want a collapse does not call the modifier — so on the
+  bag zero is the default and on the chain it is a typo, reported instead of quietly drawing four hundred
+  files. `FocusOn` is the opposite case and clamps rather than rejects: a negative depth narrows to the named
+  files, because a mistyped depth must never blow a report up into the whole graph.
+- WHY: the aggregation is `snapshotEdges` in this module and not `common/projection.ProjectEdges`. That
+  function drops an edge whose two labels are equal, which after a collapse is exactly the self-dependency
+  `include self dependencies` exists to draw, and it returns edges only — a report also needs the isolated
+  nodes, which is what `ProjectToNodes` is for. Reusing both and then re-deriving the count, the external flag
+  and the union of import kinds beside them would have been the second aggregation, not the first.
+- WHY: the query filters before it collapses, so every pattern a user types is matched against identifiers
+  and never against the labels a collapse draws. It is the only reading in which `focus on` and `collapse`
+  stay order-independent — one hop out from a folder forty files were merged into is a different and much
+  larger set — and both chain orders are asserted to render the same report.
+- WHY: the empty report is an error wrapping `ErrEmptySnapshot`, not an `EmptyTestViolation`. It is the same
+  failure the empty-test guard exists for — a renamed folder leaves a pattern naming nothing, and a blank
+  diagram looks exactly like a clean project — but a report has no violation list to put one in, and its
+  terminal returns an artifact. `CheckOptions.AllowEmptyTests` is the opt-out, so a caller learns the knob
+  once. A project whose files depend on nothing is *not* empty: the nodes are the report.
+- WHY: `Snapshot()` takes no argument, unlike every `Check(*CheckOptions)` in the library. `with check
+  options` is one of the issue's nine modifiers, so the bag travels on the chain — which is what a second
+  terminal (a rendered diagram, a file written to disk) needs it to do, since each of them would otherwise
+  take the same argument and a stored report would be described in two places.
+- WHY: the module has no `assertion` package, which is a departure from AGENTS.md's per-module shape. A report
+  is not a rule: no mood, no predicate, nothing to disagree with, so there is nothing to gather violations
+  from. The two packages it does have are the ones the issue's two steps need — `projection` for the snapshot,
+  `fluentapi` for the chain — and rendering, which is the second step, is a later issue's function over the
+  snapshot.
+- WHY: file stems are `graph/projection/snapshot.go`, `snapshot_node.go`, `snapshot_edge.go`,
+  `snapshot_summary.go`, `snapshot_options.go`, `project_snapshot.go` and `reach_nodes.go`, and
+  `graph/fluentapi/project_graph.go`, `include_dependencies.go`, `focus_on.go`, `collapse_nodes.go` and
+  `snapshot.go`. `project_snapshot` is the sibling `project_<thing>` stem, `reach_nodes` is the traversal the
+  three `which nodes` options share, and the two `include` modifiers and the two `collapse` ones are one
+  concept each rather than four files of one method.
+- WHY: `SnapshotOptions`' four unexported helpers take pointer receivers, like its `WithDefaults`.
+  `recvcheck` rejects a type with both kinds, and the nil-safe read the "nil means defaults" contract promises
+  has to be the pointer one. Nothing about it is nil-tolerant but `WithDefaults`; the helpers are only ever
+  called on a resolved query.
+- WHY: the public surface re-exports the builder, the snapshot and its three parts, and the two entry points —
+  not `SnapshotOptions`, not the three sentinels. A user describes a report by typing the modifiers rather
+  than by filling in a bag, which is the choice `files`' and `layers`' projection types and `ErrUndeclaredLayer`
+  already made; the snapshot's parts are re-exported because a caller writing a renderer of their own reads
+  them. `archunit.go`'s package doc gained the paragraph saying that not every chain of this library is a
+  rule, because the sentence naming `ProjectFiles` and `ProjectLayers` as the entry points was made false by
+  this issue.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed, as in issue #27: every modifier
+  and the terminal are methods, which that list cannot guard.
+- WHY: the integration tests are `archunit_test.go`'s four new ones, dogfooding this repository through the
+  public surface — its packages collapsed to folder depth 2, the one module it depends on drawn as an external
+  node, the two entry-point names, and a locator naming no project reaching the extraction through both of
+  them — plus `graph/fluentapi`'s own suite against fixture projects on disk. The unit tests under
+  `graph/projection` run against hand-built graphs, as the pure packages' always do.
+- WHY: `graph` joins the dogfood suites as the third domain module rather than being left out of them, which
+  was the hole a new module opens: a file in no declared layer is ignored by every clause, so
+  `theLayersOfThisRepository` without a `graph` layer left AGENTS.md's rule 2 unenforced for this module.
+  `Layer("graph").DefinedByFolder("graph/**")` and `WhereLayer("graph").MayOnlyDependOnLayers("kernel")` are
+  in both layer policies now — the standalone one and the suite entry named "the layers of this library only
+  depend inwards", which would otherwise have claimed a coverage it did not have — and `graph/**` joins the
+  third-party rules, with `layers/**` beside it for the same reason. `graph` is deliberately *not* in the
+  `report` layer's allowlist: `archtest` phrases violations and a report has none, so that clause forbidding
+  the dependency is the statement. Verified by mutation: an import of `files/projection` from
+  `graph/projection/project_snapshot.go` fails both layer policies, and one of
+  `golang.org/x/tools/go/packages` from `graph/fluentapi/snapshot.go` fails the third-party rule.
+
+## Issue #29 — Graph reports: the six output formats
+
+- WHY: the renderers live in a new `graph/rendering` package, which is a sixth directory beside the per-module
+  shape `AGENTS.md` lists. It is the second of the two steps `graph/projection`'s own doc names, and it needs a
+  home where it can be pure: `projection` is the first step and a format is not a projection of anything,
+  `fluentapi` would put the whole surface behind the chain and lose the seam that lets every format be tested
+  against a hand-built snapshot, and `common/rendering` would claim a generality that six graph formats do not
+  have. `.golangci.yml`'s `pure-packages` gained `**/rendering/**` so the purity is enforced mechanically
+  rather than by this note.
+- WHY: all six renderers are `func(projection.Snapshot) string` — no error in the signature. A renderer reads a
+  value that is already sorted, counted and validated, and there is nothing left in it to refuse, so the twelve
+  terminals are two helpers (`rendered`, `exported`) rather than twelve bodies. The two places that forced a
+  choice are named below.
+- WHY: `RenderCSV` writes RFC 4180 quoting by hand instead of using `encoding/csv`. A `csv.Writer` over a
+  `strings.Builder` cannot fail, so going through it would mean an `if err != nil` branch no test can reach —
+  and an unreachable branch in a renderer is worse than eleven lines of quoting with a test that parses the
+  result back with `encoding/csv`.
+- WHY: `RenderJSON` returns `""` on a `json.MarshalIndent` error, which is unreachable: the DTOs are strings,
+  ints, bools and slices of those. It is written that way rather than propagated because the alternative is an
+  error on all six signatures for one branch that cannot happen; the comment at the branch says so.
+- WHY: CSV is the one format that does not carry the report's title, and the only one with no headline
+  fallback of its own. A line above the header row would stop the file being a table a spreadsheet or a script
+  can read. JSON carries the title but omits the key when there is none, so a consumer asking whether the
+  report was titled gets the answer rather than a name this library invented — the four formats a person reads
+  supply `dependency graph`.
+- WHY: the HTML page states the report as a list of nodes and a table of dependencies and embeds the DOT and
+  Mermaid sources in `<details>` blocks, rather than laying the graph out. Laying it out means shipping a
+  layout engine or fetching one, and "self-contained" is the format's whole point: no `<script>`, no `<link>`,
+  no URL, one inline `<style>`. The embedded sources are the very documents the other two formats export, so a
+  page cannot disagree with a diagram exported beside it.
+- WHY: Mermaid and D2 draw nodes under synthetic ids (`n0`, `n1`) with the label as an attribute, DOT uses the
+  label itself as the quoted identifier. DOT quotes anything; a Mermaid node id and a D2 key cannot hold a `/`
+  or a `.` without becoming a subgraph path, and a label is whatever a folder may be called.
+- WHY: an arrow carries its count only when it stands for more than one dependency. Every arrow in an
+  uncollapsed report would otherwise be labelled `1`, which is noise on the diagram a user reads most.
+- WHY: external nodes are dashed in DOT and D2 and stadium-shaped in Mermaid, rather than dashed in all three.
+  Mermaid's dashed-link syntax collides with a piped edge label, and a shape says the same thing about a node
+  without a syntax that has to be got exactly right.
+- WHY: `archunit.go` re-exports the twelve terminals only as methods of `GraphBuilder` — the six `Render*`
+  functions stay in `graph/rendering`. The issue asks for a chain that renders; a user reaching for a renderer
+  directly already has `GraphSnapshot`, which is re-exported for exactly that.
+- WHY: `export as <format>` creates the folders of the path it was given and overwrites an existing file. A
+  report exported into `docs/` should not fail because nobody had made `docs/` yet, and a report is the current
+  answer about the project, so a stale one left beside it would read as a second answer. Nothing touches the
+  disk until the whole document is rendered, so a failing query leaves no half-written diagram — asserted by a
+  test that the folder itself was never created.
+- WHY: an empty path is `ErrMissingExportPath`, a `UserError` naming which of the six terminals to fix. The
+  working directory is a folder rather than a file, so there is nothing the empty string could have meant, and
+  it is the API used wrongly rather than the disk refusing.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed: all twelve terminals are methods,
+  which that list cannot guard, and they return a value that `errcheck` already guards.
+- WHY: the prose the change made false was updated in the same diff — `graph/projection/snapshot.go`'s package
+  doc and `String` (which named rendering as "the issue after this one"), `graph/fluentapi/snapshot.go` and
+  `project_graph.go` (which said the terminal was `Snapshot`, singular, and that a rendered diagram "will be"
+  one), and `archunit.go`'s package doc and `GraphBuilder`/`GraphSnapshot` aliases.
+- WHY: the integration tests are `archunit_test.go`'s new one, which renders and exports this repository in all
+  six formats through the public surface and asserts the exported file equals the string form byte for byte,
+  plus `graph/fluentapi`'s `to_format_test.go` and `export_as_format_test.go` against fixture projects on
+  disk. `graph/rendering`'s own suite is unit tests against hand-built snapshots, with a whole-document golden
+  assertion per format and one cross-format file for the promises all six share.
+
+## Issue #32 — Metrics: extraction and count metrics
+
+- WHY: the module ships its scope, its extraction and its eight counts, but no mood, no threshold predicate and
+  no `Check` — those are the issue after this one, and the six threshold predicates `AGENTS.md` fixes are what
+  judge a number. `MetricBuilder.Measure(options)` is the resolution door in the meantime, the way
+  `FilesBuilder.SelectFiles` was for issue #16: it hands back the numbers, so every stage below it is exercised
+  by a test through the public surface instead of waiting for a predicate to reach it.
+- WHY: `count` is a stage the grammar in `AGENTS.md` has no word list for — its categories are entry point,
+  scope verb, mood, predicate, modifier and terminal, and "which number" is none of them. It is a stage rather
+  than eight more methods on the scope because the families beside it (cohesion, distance, the abstractness and
+  instability pair) are groups of their own, and `count, method count` reads as one phrase where
+  `MethodCount()` hanging off the scope would leave the eight counts and the coming ratios in one flat list.
+- WHY: `metrics/projection.SelectFiles` walks `graph.SelfEdges()` itself instead of calling
+  `files/projection.SelectFiles`. Rule 2 forbids the import — a domain module may not depend on a sibling — and
+  `common/projection`'s own package doc says its three functions are the whole surface and that each is a
+  function of a graph and one `MapFunction`, which a population selection is not. `layers/projection`
+  duplicates the same walk for the same reason, so this is the sibling convention rather than a departure from
+  it. Moving the walk into the kernel is a refactor of passing code and out of this issue's scope.
+- WHY: `metrics/extraction.countNonBlankLines` is a second copy of the helper `files/extraction` keeps
+  unexported, for the same rule-2 reason. The two are not the same measure and would have diverged anyway:
+  `files/extraction` counts the non-blank lines of a file as text, and `lines of code` here counts the non-blank
+  lines left after every comment has been masked out.
+- WHY: the class-level metrics the family has that Go has no concept for — depth of inheritance, number of
+  children — are absent rather than reported as 0, which the issue asks for. `ClassInfo`'s doc says so at the
+  place a reader would look for them, so nobody adds a field that would always hold the same number.
+- WHY: `classes` and `interfaces` count declared types — a struct, an interface, or a name given to another
+  type — and a class identifier is `internal/api.Handler`, the folder rather than the package clause. Go has no
+  classes and the vocabulary is the family's; the folder is what `for classes matching`, `in folder` and every
+  identifier in the library already agree on, and a package name is not unique across a project while a folder
+  is.
+- WHY: `for classes matching` narrows the measured files as well as the classes, so a rule that names classes
+  and then counts something about a file is measured over the files declaring one of them. The alternative is a
+  verb the user typed that changes nothing, and a metric about a file being measured over files that hold none
+  of the named classes.
+- WHY: a method is attributed to its type across the *selected* files of a folder, because a method is declared
+  beside its type rather than inside it and only the selected files are read. A narrowed scope therefore reports
+  the method count of what it selected — the same documented trade `PerSelectedFileEdge` makes — and
+  `ExtractFileInfo`'s doc states it.
+- WHY: `metrics/extraction` refuses a file it cannot parse with a `TechnicalError`, where the graph extractor
+  goes on past a file that does not compile. A metric is a number, and one taken over the files that happened to
+  parse is a number nobody can reproduce; the graph is a relation, where a missing file loses edges and nothing
+  else.
+- WHY: `projection.SelectSubjects` returns both populations — files and classes — from one call, and
+  `calculation.CountMetric.Measure` takes the one its non-nil function names. A rule's scope is written before
+  its metric is chosen, so this is what keeps the file answer and the class answer of one rule from disagreeing
+  and keeps every stage between the scope and the number from branching on the kind of metric.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed: `Metrics` and the eight count verbs
+  are methods or an entry point whose result is chained, which that list cannot guard, and `Measure` returns an
+  error that `errcheck` already guards. This follows #27 and #28.
+- WHY: the prose the change made false was updated in the same diff — `archunit.go`'s package doc (the entry
+  points it lists) and `archunit_test.go`'s layer policy, which now declares `metrics` as a sixth layer, holds
+  it to the kernel-only clause every other module is held to, and forbids it a third-party dependency.
+- WHY: the integration tests are `archunit_test.go`'s five new ones, which measure this repository through the
+  public surface — one per stage of the chain, the eight counts, the class population `for classes matching`
+  selects, and the empty selection that is no error at this door — and they assert subjects and metric names
+  rather than the numbers themselves, because the counts of this library's own source change with every commit.
+  The exact numbers are pinned in the module's own unit tests, against hand-built fixtures. The fifth is
+  `TestTheLocatorReachesTheProjectThroughTheMetricsEntryPoint`, the sibling of the files, layers and graph
+  families' locator tests: the locator is an argument nothing else observes — `String()` does not render it —
+  so a re-export that dropped it would silently measure the repository the test runs in, and only a rule
+  pointed at a directory holding no `go.mod` can see that. It is one entry point rather than a pair, because
+  `metrics` has no short alias. Verified by making `Metrics` return `metricsapi.Metrics(nil)`.
+
+## Issue #33 — Metrics: the LCOM family
+
+- WHY: the eight formulas live in `metrics/calculation/lcom_metrics.go` as the issue says, but the input the
+  issue calls "extracted class information — the methods each field is accessed by, and the fields each method
+  accesses" did not exist: `extraction.ClassInfo` carried `FieldCount` and `MethodCount` and no relation. So
+  `metrics/extraction` was extended with `FieldInfo` and `MethodInfo`, and `ClassInfo` gained `Fields` and
+  `Methods`. The alternative was formulas over data nothing produces, or a second input type declared in
+  `calculation` — which would be the duplicate the kernel rules exist to prevent, and would contradict
+  `extract_file_info.go`'s own promise that everything a metric could want is read once while the syntax tree is
+  in hand. The import direction is unchanged: `calculation` already depends on `extraction`.
+- WHY: the relation is built in the same two passes `MethodCount` already needed — the fields are known from the
+  type's own declaration, the accesses from every method of the folder — and both directions are written down in
+  one place, `attributeAccesses`, so they are one fact rather than two that could disagree. The family asks it
+  both ways: `μ(A)` is `len(FieldInfo.AccessedBy)`, and the pair measures ask which fields two methods have in
+  common.
+- WHY: an access is a selection on the method's own named receiver and nothing else, at any depth
+  (`h.inner.deep` reaches `inner`), counted once per method however often the body spells it. A name selected on
+  the receiver that is not one of the class's declared fields is dropped — a method call, a field promoted from
+  an embedded type — and a receiver shadowed inside the body reads as the receiver. Telling those apart needs a
+  resolved type, and this package parses a file rather than type-checking a package, which is the trade
+  `metrics/extraction` already made for every count it takes.
+- WHY: an embedded field is named by the embedded type without its package qualifier, its pointer star or its
+  type arguments — `Reader`, of `*io.Reader` — because that is the name a method selects on the receiver.
+  `baseTypeName` gained the `*ast.SelectorExpr` case for it; it already unwrapped the star and the type
+  arguments for receivers.
+- WHY: an interface's members are counted by `MethodCount` and are not in `Methods`: a member has no body, so
+  there is no field for it to reach and no cohesion to read off it. A method that does not name its receiver, or
+  names it `_`, is one of the class's methods and reaches nothing.
+- WHY: one guard, `measurable` — at least one field and more than one method — answers "no evidence" for the
+  whole family, where the sibling guards each formula against its own division by zero. Two methods are needed
+  to share a field or fail to, and a class with no fields has nothing to share, so scoring one would report
+  every Go interface and every `type ID string` as maximally incohesive for something no user could fix. The
+  no-evidence answer is 0 for the seven measures whose 0 is perfect cohesion and 1 for `LCOM4`, whose scale
+  starts at one component — and 0 for `LCOM4` too when there are no methods at all, because there is nothing
+  there to fall apart.
+- WHY: `LCOM3` and `LCOM2` are one-line delegations to `LCOM96a` and `LCOM96b`. They are the same expressions
+  from different papers — negate LCOM96a's numerator and denominator for LCOM3, expand LCOM96b's average for
+  LCOM2 — and both names are kept because a user arriving from either paper searches for the one they know.
+  `TestTheTwoPairsOfNamesThatAreOneNumberStayInStep` is what stops a change moving only half of a twin.
+- WHY: `LCOM5` divides by `(a - 1)` where ArchUnitTS divides by `(a - m)`. The sibling's denominator makes the
+  measure degenerate for every class with as many fields as methods — the numerator vanishes with it, so the
+  answer is 0, "perfect cohesion", for a class that may share nothing — and `(a - 1)` is the normalisation the
+  1996 definition states and the one that makes 0 perfect cohesion and 1 a class whose methods each keep a field
+  to themselves. A class with a single field is 0: there is no spread over fields left to normalise.
+- WHY: `LCOM4`'s graph is the shared-field one alone, where Hitz & Montazeri also join a method to a method it
+  calls. `extraction.ClassInfo` keeps only the field relation, and the sibling ports count the components of the
+  same graph, so a class scores the same in all of them. It makes the number an upper bound on the paper's — a
+  class the paper calls one piece can be two here, never the other way round — and `LCOM4`'s doc says so.
+- WHY: `LCOM1` and `LCOM4` return `int` and the other six `float64`, because a count of method pairs and a count
+  of components are counts, and rounding a ratio to report it as one would throw the measurement away. The test
+  table reads all eight as `float64` so that one table can hold the family.
+- WHY: no fluent verb and no new public surface. `Measurement.Value` is an `int` and `MetricBuilder.metric` is
+  typed to `calculation.CountMetric`, so a `metrics().lcom()` group would mean generalising both — a refactor of
+  #32's passing code, and a pre-emption of the threshold-predicate issue that has to decide how a ratio is
+  compared and reported. The eight are exported functions of one `extraction.ClassInfo`, which is what the issue
+  asks for and what the fluent stage will call.
+- WHY: there is therefore no integration test for this issue: nothing of it is reachable from the public
+  surface yet. The tests are unit tests at both levels instead — `metrics/calculation/lcom_metrics_test.go`
+  against hand-built classes, with one case per scale and a table that fails if it names fewer than eight
+  measures, and seven new cases in `metrics/extraction/extract_class_info_test.go` for the relation, including
+  one that holds its two directions to each other.
+- WHY: the file stem is `lcom_metrics.go` beside `count_metrics.go`, where the sibling's is `lcom.ts`. The stem
+  convention inside this package is `<family>_metrics.go`, and `metrics/fluentapi/count_metrics.go` is its
+  sibling stem here; matching the package a reader is already in beats matching the port's filename.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. The eight are functions returning a
+  number that no caller can usefully discard, and they are not chain methods, so the list is unchanged for the
+  reason #32, #27 and #28 left it unchanged.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc, which
+  now names both families and the `m`/`a`/`μ(A)` vocabulary and says why the cohesion measures are plain
+  functions rather than `CountMetric` values; `metrics/extraction`'s package doc, which listed `FileInfo` and
+  `ClassInfo` as everything it produces and now names `FieldInfo` and `MethodInfo` too; and `countFunctions`'
+  doc, which named the tally as `countReceivers` after it became `collectReceiverMethods`.
+
+## Issue #34 — Metrics: distance metrics and the zone checks
+
+- WHY: `Measurement.Value` widened from `int` to `float64`, which reverses issue #33's note that the field
+  is an `int`. Four of the five metrics this issue asks for are ratios, so a `Measurement` that could not
+  carry one would mean either rounding a measurement away or a second measurement type beside the first,
+  and every reader downstream would then have to know which. Nothing else changed: a count is a whole
+  number that a `float64` holds exactly, and `Measurement.String` prints with `%g`, so `9` is still `9`.
+  This is the generalisation #33's note said a group of ratios would need.
+- WHY: `MetricBuilder.metric` is typed to a new `calculation.Metric` interface — a name and a way of reading
+  measurements off `projection.Subjects` — where issue #32 typed it to the concrete `CountMetric`. That is
+  the other half of the same generalisation: without it, `distance` would need a second builder holding a
+  second field, and the stage between a group and `Measure` would branch on which kind of metric it holds.
+  `CountMetric` and `DistanceMetric` are the two implementations, and neither knows about the other.
+- WHY: `projection.SelectSubjects` gained the graph as its first parameter, and `Subjects` a third
+  population, `Components`. A component's abstractness is read off the files it holds and its coupling off
+  the edges between folders, so the two halves come from one call for the reason issue #32 gave for
+  returning files and classes together: a rule's scope is written before its metric is chosen, and two calls
+  are two chances for the file answer and the component answer to disagree about which code the rule is
+  about. Ten call sites in the existing tests gained a leading `nil`; their assertions are unchanged.
+- WHY: a component is a **folder**, named as the identifiers are — `internal/db`, and `.` for the project
+  root — not a package clause. It is what `for classes matching`, `in folder` and issue #32's class
+  identifiers already agree on, and a package name is not unique across a project while a folder is.
+- WHY: `PerComponentEdge(selected)` keeps an edge only when *both* ends are selected files, so a component's
+  coupling is its coupling to the rest of the selection rather than to the project. That is the same
+  documented trade `PerSelectedFileEdge` makes, and it has a consequence worth stating: narrowing a scope
+  moves a package in the plane, so a rule about the corners is written over the whole project.
+  `TestADistanceMetricIsMeasuredOverThePackagesTheScopeSelected` and
+  `TestAZoneCheckIsJudgedOverThePackagesItsScopeSelected` are that consequence, pinned.
+- WHY: `coupling factor` is **per component** — `(Ca + Ce) / (2 * (n - 1))`, the share of the possible
+  couplings this one package has, and 0 for a selection of one — rather than the single system-wide MOOD
+  figure the metric is defined as. Every other verb in the group hands back one number per subject through
+  the one `Measure` door, and a metric that collapsed the whole project to a scalar would need a second
+  door, a subject nobody selected to report it against, and a threshold predicate that meant something
+  different for one verb than for the other four.
+- WHY: both `distance from the main sequence` (`|A + I - 1| / √2`, the perpendicular distance) and
+  `normalized distance` (`|A + I - 1|`, the same distance scaled so 1 is a corner) are shipped, under those
+  two names. They are one measure at two scales, like issue #33's `LCOM3`/`LCOM96a` pair, and the issue
+  asks for both; keeping both names is what lets a user arriving from either statement of the metric find
+  the one they know. `TestTheTwoDistancesAreTheSameQuestionOnTwoScales` holds them to each other.
+- WHY: the two zone checks are spelled `ShouldNotBeInZoneOfPain` and `ShouldNotBeInZoneOfUselessness`, so
+  the mood is fused into the verb and there is no mood stage before them — where the issue text writes them
+  as `not in zone of pain`. This is the layers family's shape (`may not depend on layers`) and the shape
+  `AGENTS.md` fixes for this very module: all six threshold predicates it names are spelled
+  `should be below` and friends, mood included. Only the negated mood is offered, because `should be in
+  zone of pain` is a rule asking a project to be painful.
+- WHY: `GatherZoneViolations` takes the `assertion.Mood` flag anyway and honours it, though no fluent verb
+  can pass `Should`. It is `AGENTS.md`'s step 4 and it costs one comparison — `Mood.Holds(zone.Contains(...))`
+  — where a hard-coded negation would be the second code path the mood flag exists to prevent, and would
+  have to be undone if a threshold-style verb ever wants the positive reading.
+- WHY: `zoneExtent` is 0.3, a Euclidean radius, and the library chooses it rather than taking it from the
+  issue or from a knob — no sibling port parameterises it, and a rule whose region a user could resize is a
+  rule two projects cannot compare. `zone.go`'s doc justifies the number geometrically: no point on the main
+  sequence is within 0.3 of a corner, so `not in zone of pain` is a rule about the corners rather than a
+  second, weaker spelling of the distance rule.
+- WHY: `ZoneViolation.Zone` is a `string`, not the `calculation.Zone` that judged it. `archtest` phrases the
+  violation and rule 3 allows it `common` and the modules' `assertion` packages only, so a violation
+  carrying a `calculation` type could not be phrased without widening that allow list to a package that is
+  not a violation. The zone's name is the whole of what a report says about it.
+- WHY: `metrics/assertion` imports `metrics/projection` for the `Component` it judges and
+  `metrics/calculation` for the `Zone` it judges against, which is a new edge — `files/assertion` and
+  `layers/assertion` reach into no projection. Both are pure, the import direction runs one way (neither
+  reaches back), `metrics/calculation` already depends on `metrics/projection` for the `Subjects` a metric
+  measures, and the alternative is a second `Component` declared in `assertion` for the fluent API to convert
+  into — the duplicate the kernel rules exist to prevent. The library's own dependency rules say this in the
+  words that constrain it: the pairwise rule the `files` module is held to is that an assertion may not reach
+  its module's *fluent API*, which this does not.
+- WHY: `archunit_test.go`'s layer policy now lets the `report` layer depend on `metrics`, where it named
+  `kernel`, `files` and `layers`. That is the same one-line widening as the depguard allow list below, in the
+  library's own words: the metrics module reports violations now, so the report layer phrases them. It is
+  written twice in that file — once in `TestThisRepositoryObeysItsOwnLayerPolicy` and once in the suite of
+  `TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests` — and both clauses had to move, which the
+  first fix round found by leaving the second one red.
+- WHY: `.golangci.yml`'s strict `testing-layer` allow list gained
+  `github.com/LukasNiessen/ArchUnitGo/metrics/assertion`, one line, which is what that list being strict is
+  for: the module whose violations land next is allowed in on purpose.
+- WHY: file stems are `metrics/projection/per_component_edge.go` and `select_components.go`,
+  `metrics/calculation/metric.go`, `distance_metrics.go` (beside `count_metrics.go`, the convention issue
+  #33 settled) and `zone.go`, `metrics/assertion/zone_violation.go` and `gather_zone_violations.go` — the
+  `<thing> violation` / `gather <thing> violations` pair every rule family uses — and
+  `metrics/fluentapi/distance_metrics.go` and `zone_checks.go`.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `Distance`, the five verbs and
+  the two zone checks are methods, which that list cannot guard, and `Check` returns an error `errcheck`
+  already guards. This follows #27, #28, #32 and #33.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc
+  (which now names the distance family and the two zones), `metrics/fluentapi`'s package doc (the groups and
+  the family's first checkable terminal), `metrics/projection`'s package doc and `SelectSubjects`' doc,
+  `archtest/violation_factory.go`'s doc example, `archunit.go`'s `Metrics` doc and `Measurement`/
+  `MetricBuilder` aliases, and `archunit_test.go`'s compile-time block, which said there was "no mood stage
+  to name yet". Two comments that were factually wrong when re-read were corrected with them:
+  `select_components.go`'s claim that sorting was needed because `ProjectEdges` returns an arbitrary order
+  (it returns a total order by source and target), and `zoneExtent`'s arithmetic, which put a zone 0.7 from
+  the main sequence where it is 1/√2 - 0.3.
+- WHY: the integration tests are `archunit_test.go`'s three new ones — the five distance verbs measured over
+  this repository's packages, the zone checks judging it, and the empty-test guard on the family's first
+  checkable terminal. The zone test asserts which side of the plane a reported package is on rather than
+  which packages are reported, because the shape of this library moves with every commit; the corner itself
+  is pinned in `metrics/calculation/zone_test.go` against hand-built points. The honest answer it records is
+  that this library's own kernel is in the zone of pain, which is the trade `common/` was written for.
+
+## Issue #35 — Metrics: custom metrics
+
+- WHY: `ShouldSatisfy` takes two arguments — the predicate *and* a `requirement string` — where the issue
+  writes `should satisfy(fn)`. It is the reason `AdhereTo` insists on words for the files module's escape
+  hatch: a closure has no readable form, so the other five threshold predicates print the figure they
+  compare against and this one has nothing to print. Those words are the whole of what the rule's sentence,
+  every violation and `archtest`'s report can say about what the number should have been. A blank one is
+  rejected as `ErrNoRequirement` rather than accepted, because a rule nobody can read from its output is a
+  rule nobody can fix.
+- WHY: the predicate is `func(calculation.Measurement, extraction.ClassInfo) bool` where the issue writes
+  `(value, classInfo)`. The measurement *is* the value plus the two things that say what it is about — the
+  metric's name and the subject — and a predicate over a metric about a file or a package has no class to
+  read, so the value alone would leave it unable to tell which number it was handed. The `ClassInfo` is the
+  zero value for those metrics, which `Satisfaction`'s doc states, and `should satisfy` is offered on every
+  metric rather than on the class metrics alone.
+- WHY: `custom metric` is a verb on `MetricsBuilder` and opens no group, where `count` and `distance` are
+  groups. A group exists to hold a family of verbs — eight and five — and one holding a single verb would be
+  a word the user typed twice. The word `custom metric` is still rendered as the group of the sentence, so a
+  rule reads as `metrics, custom metric, public surface ("...")` and the three metric families render alike.
+- WHY: the description lives on the fluent `MetricBuilder`, not on `calculation.CustomMetric`. It is a word
+  of the sentence, like `group` beside it: it is rendered by `String`, which `archtest.AssertPasses` prints
+  as the heading above every violation, and it says nothing about how the number is read. Putting it on the
+  metric would have meant either a second field nobody downstream reads or a `Description()` on the `Metric`
+  interface — prose written for thirteen metrics that describe themselves, which is refactoring passing code.
+- WHY: `metrics/assertion` now imports `metrics/extraction`, for the `ClassInfo` the predicate is handed.
+  `files/assertion` imports `files/extraction` for exactly the same reason — the `FileInfo` its own escape
+  hatch's predicate takes — so this is the precedented direction rather than a new one; both packages are
+  pure, the edge runs one way, and `metrics/calculation` already depends on `metrics/extraction`. The
+  alternative is a second `ClassInfo` declared in `assertion`, the duplicate the kernel rules exist to
+  prevent.
+- WHY: `SatisfactionViolation` carries the subject, the metric's name and the value as plain fields rather
+  than the `calculation.Measurement` they were read off. This is issue #34's note about `ZoneViolation.Zone`,
+  unchanged: `.golangci.yml`'s `testing-layer` allow list is strict, so a violation carrying a `calculation`
+  type could not be phrased without widening it to a package that holds no violations.
+- WHY: the empty-test population is reported as `measurements`, where the zone checks report `components`.
+  Which population a metric reads is the metric's own business — `lines of code` reads the files and
+  `method count` the classes — so what a reader has to be told is that the rule ended up with no number to
+  judge. A scope selecting files that declare no class is exactly that case, and
+  `TestShouldSatisfyOverAScopeWithNoClassIsAnEmptyTestViolation` pins it.
+- WHY: a nil user function answers no instead of failing — `calculation.CustomMetric.Measure` measures
+  nothing and `assertion.satisfies` returns false — mirroring `files/assertion.satisfies`. `forbidigo` bans
+  `panic`, and a library judging somebody else's code must not take their test process down. No rule the
+  fluent API builds reaches either path: a missing name, description, function, predicate or requirement is
+  a deferred `UserError` naming the verb, returned before the project is read.
+- WHY: `archtest` prints a satisfaction violation's subject unquoted, where a component's is
+  `component "internal/db"` and a layer's is `layer "db"`. A measurement's subject is a file, a class or a
+  folder depending on which metric was read, so there is no one noun to put in front of it — and the metric
+  named in the finding (`at method count 40`) is what says which of the three it is.
+- WHY: file stems are `metrics/calculation/custom_metric.go`, `metrics/assertion/satisfaction_violation.go`
+  and `gather_satisfaction_violations.go` — the `<thing> violation` / `gather <thing> violations` pair every
+  rule family uses — and `metrics/fluentapi/custom_metric.go` and `should_satisfy.go`, each with its test
+  file beside it.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `CustomMetric` and
+  `ShouldSatisfy` are methods, which that list cannot guard, and `Check` and `Measure` return errors
+  `errcheck` already guards. This follows #27, #28, #32, #33 and #34.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc
+  and its `Metric` interface doc (which said `CountMetric` and `DistanceMetric` were the two the library
+  ships), `metrics/assertion`'s package doc (which said `ZoneViolation` was the first violation type in it
+  and `GatherZoneViolations` the one function that makes one, and that the package judges packages),
+  `metrics/fluentapi`'s package doc and `MetricsBuilder` doc (the groups, the checkable rules and the
+  threshold predicates that "land with them"), `MetricBuilder`'s own doc, `archtest`'s `Message` doc example,
+  `archunit.go`'s `Metrics`, `MetricsBuilder` and `MetricBuilder` docs, and `archunit_test.go`'s two
+  compile-time blocks and its note that the empty-test guard "will be" wired into the threshold predicates.
+- WHY: the integration tests are `archunit_test.go`'s five new ones — a custom metric measured over this
+  repository's own fluent builders, `should satisfy` judging one of those numbers and reporting it through
+  the report layer, a rule this repository keeps, the empty-test guard on the new terminal, and the five
+  things neither half of the escape hatch can run without. They assert the subject, the metric's name and a
+  bound rather than the numbers, because the shape of this library moves with every commit; the arithmetic
+  is pinned in `metrics/calculation/custom_metric_test.go` against hand-built classes.
+
+## Issue #36 — Metrics: threshold verbs
+
+- WHY: the arithmetic of the five comparing verbs is one `calculation.Threshold` value rather than five code
+  paths, mirroring `calculation.Zone`: unexported fields, a factory per comparison, one question
+  (`Holds(value)`) and a zero value that admits nothing. What differs between `should be below` and
+  `should be above or equal` is which sides of a figure satisfy, so the five share one fluent terminal
+  (`MetricsThresholdCondition`), one violation type (`ThresholdViolation`) and one gather function
+  (`GatherThresholdViolations`). Five of each would have been five places for the mood, the empty-test guard
+  and the rendering to drift apart.
+- WHY: the factory for `should be` is named `calculation.Exactly` and not `EqualTo`. `should equal` is the
+  first synonym `AGENTS.md` forbids, so the word `equal` is never a bare comparison name in this codebase —
+  it appears only inside `below or equal` and `above or equal`, where it is half of a comparison rather than
+  one.
+- WHY: `Holds` is a single boolean expression over three flags (`below && <`, `equal && ==`, `above && >`)
+  and not a `switch` on the sign of the comparison. A `switch` with the equality in its default branch would
+  put a NaN measurement there — every comparison against NaN is false — and quietly pass `should be`. As
+  written, a number on no side of the figure satisfies nothing and is reported, which
+  `TestGatherThresholdViolationsReportsANumberOnNoSideOfItsFigure` pins.
+- WHY: a figure that is not a number is rejected, an infinite one is not. NaN is on no side of itself, so a
+  rule written with one would report every number it measured and never say why — that is not a rule the code
+  has broken, so it is a deferred `UserError` naming the verb the user typed (`ErrLimitNotANumber`), returned
+  by `Check` before the project is read, exactly as a rejected glob is. `should be below +Inf` is the rule
+  that a count is finite at all, and somebody could mean it.
+- WHY: `should be` carries the empty string as its comparison word, where the other four carry `below`,
+  `above`, `below or equal`, `above or equal`. The equality *is* the comparison, so the figure follows `be`
+  with no word between them — `should, be 1` — and the violation carries no word the user never typed rather
+  than a placeholder. Both `assertion.ThresholdViolation.String` and `archtest`'s `comparison` helper handle
+  the empty word as the one case.
+- WHY: the `be <comparison> <figure>` phrase is assembled twice — once in `metrics/assertion` for the
+  violation's own log line, once in `archtest` for the message a human reads. This is the existing precedent
+  (`ZoneViolation.String` builds `be in <zone>` and `archtest.metricsZone` builds it again), and it is what
+  keeps phrasing the testing layer's decision while leaving every violation able to describe itself.
+  `archtest.stands` — the `is`/`is not` auxiliary for the requirements whose verb is `be` — is now shared by
+  the zone phrasing and the threshold one instead of being inlined in the first.
+- WHY: the empty-test population is reported as `measurements`, as `should satisfy` reports it. Which
+  population a metric reads is the metric's own business, so what a reader has to be told is that the rule
+  ended up with no number to compare — a scope selecting files that declare no class is exactly that case,
+  and `TestAThresholdOverAScopeWithNoClassIsAnEmptyTestViolation` pins it.
+- WHY: `TestTheThresholdPredicatesAreExactlySixWithNoSynonyms` checks the issue mechanically rather than
+  leaving it to a reviewer's memory: it walks `MetricBuilder`'s method set with `reflect`, requires the
+  `Should*` methods to be exactly the six, and requires the stages before a metric is named to offer none of
+  them and none of nineteen named synonyms (`ShouldEqual`, `ShouldBeAtMost`, `ShouldBeLessThan`, …). A
+  seventh spelling is added by somebody who did not know the comparison was already there, which is what a
+  test can notice and a convention cannot.
+- WHY: file stems are `metrics/calculation/threshold.go`, `metrics/assertion/threshold_violation.go` and
+  `gather_threshold_violations.go` — the `<thing> violation` / `gather <thing> violations` pair every rule
+  family uses — and `metrics/fluentapi/should_be.go`, the sibling of `should_satisfy.go`, each with its test
+  file beside it.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. The five verbs are methods, which
+  that list cannot guard, and `Check` returns an error `errcheck` already guards. This follows #27, #28, #32,
+  #33, #34 and #35.
+- WHY: the prose the change made false was updated in the same diff — `metrics/calculation`'s package doc
+  (which said comparing a number against a threshold was not this package's business), `metrics/assertion`'s
+  package doc (which counted two violation types and two gather functions), `metrics/fluentapi`'s package doc
+  and `MetricBuilder`'s doc (which said `ShouldSatisfy` was "the first of the six to land"), `archtest`'s
+  `Message` doc example block and its `coordinate` helper doc, `archunit.go`'s `MetricBuilder`,
+  `MetricsSatisfactionCondition` and `Metrics` docs, and two comments in `archunit_test.go` — the metrics
+  compile-time block and the note saying the empty-test guard was wired into `should satisfy` and the zone
+  checks alone.
+- WHY: the integration tests are `archunit_test.go`'s five new ones — a threshold rule this repository cannot
+  keep, reported through the report layer; each of the five verbs arriving at the public surface as the
+  comparison the user typed; a rule this repository keeps; the empty-test guard on the new terminal; and the
+  figure that is not a number rejected on each of the five. They are written against figures no line count of
+  a real Go file can satisfy — a file has at least one line and not a billion — rather than against numbers a
+  commit can move; the arithmetic is pinned in `metrics/calculation/threshold_test.go` against hand-built
+  figures.
+
+## Issue #37 — Metrics: HTML report export
+
+- WHY: there is no `export as HTML` on an LCOM builder, because this port has no LCOM fluent group to put one
+  on. The LCOM family is eight plain functions in `metrics/calculation/lcom_metrics.go` — `LCOM96a`, `LCOM96b`,
+  `LCOM1`…`LCOM5` and `LCOMStar` — and that package's own doc says they are functions rather than `Metric` values
+  because no fluent verb names them yet (issue #34's decision). The terminal therefore landed on the two
+  groups that exist, `MetricsCountBuilder` and `MetricsDistanceBuilder`; the day a `cohesion` group lands, its
+  `ExportAsHTML` is three lines over the same `MetricsBuilder.exportedAsHTML` and its `reported()` list.
+- WHY: the page is rendered in a new pure package, `metrics/rendering`, and written to disk from
+  `metrics/fluentapi`, mirroring `graph/rendering` plus `graph/fluentapi/export_as_format.go`. `.golangci.yml`
+  already denies `os`, `io/fs`, `path/filepath`, `net` and `os/exec` to `**/rendering/**`, so the split is
+  enforced rather than remembered. `AGENTS.md`'s per-module shape does not list a `rendering/` package, which
+  is the deviation — `graph/rendering` set that precedent and `.golangci.yml`'s own comment beside the
+  `pure-packages` rule already records the reason ("rendering is here for the same reason though AGENTS.md does
+  not name it"): a renderer is a pure function of a projected value, so it is pure for the reason `projection`
+  is.
+- WHY: the timestamp is a `time.Time` field on `rendering.ReportOptions`, zero meaning no stamp, and never a
+  clock this library reads. `forbidigo` bans `time.Now` and its message names this issue as the reason the ban
+  is worth having: a page that stamped itself renders different bytes on every run, so a report committed
+  beside the code shows up in every diff and no test can assert on a page at all.
+- WHY: the caller's own CSS is appended *after* the library's stylesheet and written unescaped. After, because
+  CSS resolves a tie in favor of the later rule, so a caller who restyles the heading wins it and keeps
+  everything they did not name; unescaped, because a stylesheet that has been escaped is not one any more. It
+  is the one string on the page that is not escaped, and it is the caller's own text rather than anything read
+  out of the project — every heading, subject, metric name and title goes through `htmlEscaped`.
+- WHY: the group terminals take the check options at the terminal — `ExportAsHTML(path string, options
+  *kernel.CheckOptions)` — rather than through a `with check options` modifier as `graph` does. This family
+  passes the bag at `Measure` and at `Check`, so a third convention inside one module would be the surprise.
+  The report's own knobs (title, timestamp, CSS) are not on that bag: they say what the *page* is, not how the
+  rule is run, which is what `MetricsExporter` and `MetricsReportOptions` are for.
+- WHY: a group's report is titled with the rule's own sentence, `b.String()` — `metrics, path without filename
+  matches "internal/**", count` — so a page found in a build's output says which scope produced it. A caller
+  with something better to call it goes through `NewMetricsExporter`, which is also the only way to a stamp
+  and a stylesheet. That keeps the fluent terminal a one-argument-plus-options call instead of growing a
+  `titled`/`stamped`/`styled` modifier trio the grammar does not have.
+- WHY: the group and not the metric is what closes with a report. `Count().ExportAsHTML(...)` measures all
+  eight counts over one resolved scope and `Distance().ExportAsHTML(...)` all five, because which of the eight
+  a page should show is not a question somebody has already answered when they ask for the page — and one
+  resolution for the whole page means a report cannot hold two numbers taken of two different readings of the
+  same code. The metrics of a group are produced by the group's own verbs (`reported()`), so no metric is
+  enumerated twice, and `export_as_html_test.go` enumerates the verbs by reflection so a metric added to a
+  group and left out of its report is a failing test.
+- WHY: an empty report is `ErrEmptyReport` from the fluent terminals and *not* from `MetricsExporter`. The
+  terminals resolved a scope, so they can tell a stale glob from a project with nothing to report, which is
+  the empty-test guard's whole question; the exporter was handed the caller's own data and cannot. It is an
+  error rather than a violation for the reason `graph`'s `ErrEmptySnapshot` is — a terminal that writes an
+  artifact has no violation list to put one in — and `AllowEmptyTests` opts out of it, the same knob that opts
+  a rule out of the same guard. A group with no measurement is still rendered as a heading saying so, so a
+  caller who opted out gets a page that states the emptiness instead of a blank one.
+- WHY: `metrics/rendering` has its own `pluralize`, `number` and `htmlEscaped` rather than sharing
+  `graph/rendering`'s. They are unexported there, and dependency rule 2 forbids a domain module importing
+  another — the shared home would be `common/`, and three one-line string helpers do not earn a kernel package
+  that every future renderer would then have to agree with.
+- WHY: file stems follow the siblings — `metrics/rendering/render_html.go` beside `graph/rendering`'s, with
+  `report_data.go` and `report_options.go` for the two values it renders from, and
+  `metrics/fluentapi/metrics_exporter.go` and `export_as_html.go` for the terminals — each with its test file
+  beside it. The exporter is spelled `MetricsExporter` because the issue names it, and its options bag is
+  `ReportOptions` rather than `MetricsExporterOptions`: it describes the report, which is the thing, and the
+  public surface prefixes it as `MetricsReportOptions` the way it prefixes every other metrics alias.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `ExportAsHTML` returns an error
+  `errcheck` already guards, and the fluent stages are methods, which that list cannot guard. This follows
+  #27, #28, #32, #33, #34, #35 and #36.
+- WHY: the prose the change made false was updated in the same diff — `metrics/fluentapi`'s package doc (which
+  said a group is closed by one verb of the group and named the family's checkable rules as its only terminals
+  beside the measurements), `MetricsCountBuilder`'s and `MetricsDistanceBuilder`'s docs (which said every verb
+  hands back a `MetricBuilder` and listed what each group closes with), `archunit.go`'s package doc (which
+  said `ProjectGraph` is the one chain that describes a report), its `MetricsCountBuilder`,
+  `MetricsDistanceBuilder` and `Metrics` docs, and the comment above `archunit_test.go`'s metrics compile-time
+  block, which enumerated the family's stages and terminals.
+- WHY: the integration test is `archunit_test.go`'s
+  `TestTheMetricsReportOfThisRepositoryIsExportedThroughThePublicSurface`, dogfooding on this library: both
+  groups export a page of this repository's own `metrics/rendering` folder through the public surface, and the
+  exporter writes a third page from measurements read with `Measure` — with a title, a fixed timestamp and a
+  stylesheet of its own, and asserted to fetch nothing. It asserts on the headings, the subjects and the page's
+  self-containment rather than on any count a commit can move; the arithmetic of a page is pinned in
+  `metrics/rendering/render_html_test.go` against hand-built measurements.
+
+## Issue #38 — Pattern exclusions: the `except` companion
+
+- WHY: the semantics live once, in `common/matching/exclusion.go`, as one function — `Excepting(selectors,
+  factory, patterns, build)` — and every family spells only the verb. `Filter` already carried an
+  `exclusions` field and `ExcludingMatchers`, so this issue added no second `Filter`, no second glob
+  compilation and no new matching primitive: what was missing was the rule about *which* selector an
+  exclusion attaches to and the words for it.
+- WHY: an exclusion qualifies the **last** selector of the chain rather than the whole selection. `in folder
+  "app/**", except "**/generated"` is one clause and a chain of selectors is a chain of clauses, so a scope
+  narrowed twice and then excepted once still means what it reads as — which is also what makes the verb
+  repeatable without a second stage to hold the exclusions in.
+- WHY: a plain `except` inherits the target of the selector it qualifies, so the same pattern is a folder
+  after `in folder` and a name after `with name`. The targeted forms exist for the other half of the verb,
+  which is not sugar: `in folder "app/**", except with name "*_gen.go"` cannot be written as a pattern of
+  either verb alone.
+- WHY: each family offers `except` plus exactly the targeted forms its own selectors already name — four in
+  the files module (`with name`, `in folder`, `in path`), five in metrics (those plus `except classes
+  matching`), three in layers (`in folder`, `in path`, the two `defined by` verbs), and in the graph module the
+  plain verb alone, because every pattern there is matched against the whole identifier and `except in path`
+  would be a second spelling of `except`. `in file` is a path selector compiled from a literal, so
+  `except in path` is its targeted form and no fifth spelling was added.
+- WHY: `ErrExclusionOfAnotherPopulation` is a third sentinel the issue does not ask for, and it guards the one
+  family whose scope describes two populations: `for classes matching "*Service", except in folder
+  "internal/legacy"` would ask for the folder of `internal/api.UserService`. That is a question with a wrong
+  answer rather than no answer, so it is refused where the user typed it instead of quietly matching nothing.
+  The guard is in the kernel because the kernel is where an exclusion's target meets its selector's.
+- WHY: `Filter.String()` repeats the word `excluding` before an exclusion that names its own target —
+  `path matches "app/**", excluding "**/generated", excluding filename matches "*_gen.go"` — and joins
+  *consecutive* plain ones into one list. Without the repetition a targeted exclusion reads as a second
+  selector of the chain, and a plain one written after a targeted one reads as a second pattern of it: `in
+  folder "app/**", except with name "*_gen.go", except "**/generated"` would otherwise render the folder
+  pattern as a second filename to exclude.
+- WHY: in the graph module `except` binds to the most recent *pattern* modifier, tracked in an unexported
+  `qualified patternModifier` field, because the four of them append to four different fields of
+  `SnapshotOptions` and nothing in a resolved query says which was written last. `titled`, `including ...`
+  and `with check options` do not clear it: they are not selectors, so an exclusion after one of them still
+  qualifies the pattern it reads as following. `lastSelector` is a free function taking `*SnapshotOptions`
+  rather than a method, because writing through it needs a pointer and `recvcheck` — rightly — forbids
+  `GraphBuilder` having one receiver of each kind.
+- WHY: in the layers module `except` binds to the most recently *declared* layer, tracked by name in an
+  unexported `declared` field, because `declaring` merges a repeated name into the layer already declared
+  under it — so `b.layers[len-1]` is the wrong layer as soon as a policy declares `domain` twice. Within that
+  layer the exclusion qualifies the declaration it follows and not the layer's whole membership, which is the
+  same rule one level down: a layer declared twice is the only place in this library where chaining widens.
+- WHY: a file excluded from a layer is in no layer, and that is stated rather than worked around — every
+  dependency it is an end of is ignored, exactly as for a file no pattern ever claimed. Moving it somewhere
+  else or reporting it would be inventing a third rule for the projection.
+- WHY: on the third-party rule `except` qualifies the `matching` alternative it follows and not the list of
+  them. Those objects are combined with OR, so an exclusion of the list would be a different rule — and the
+  useful sentence is `matching "*.*/**", except "golang.org/x/tools/**"`, one alternative with one hole.
+- WHY: `files/fluentapi/empty_test_guard_test.go`'s reflection walk was extended rather than exempted. It
+  types every terminal of the module from the builder's method set, and an `except` before any object verb is
+  a chain the grammar rejects, so the walk now goes three levels deep — scope, predicate, object — offers
+  `Except*` verbs only where a selector precedes them, gives a variadic verb exactly one argument, and passes
+  a pattern that excludes nothing so that the guard still sees the population the rule was about. Nothing was
+  skipped, deleted or loosened.
+- WHY: zero matches after an exclusion is not special-cased. A scope excepted down to nothing is the
+  empty-test guard's own failure and is reported as one, which is the point of the guard: an exclusion that
+  went stale is exactly the mistake it exists to catch.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. The `except` verbs are methods,
+  which that list cannot guard. This follows #27, #28, #32, #33, #34, #35, #36 and #37.
+- WHY: no `//nolint` was added anywhere in this issue.
+- WHY: the prose the change made false was updated in the same diff — `common/matching`'s `Filter` and
+  `RegexFactory` docs, `files/fluentapi`'s package doc and its `depend on files` and `depend on external
+  modules` docs (the OR paragraph), `metrics/fluentapi`'s package doc (the scope-verb paragraph),
+  `layers/fluentapi`'s package doc (the two halves of the chain), `graph/fluentapi`'s package doc (the nine
+  modifiers), and in `archunit.go` the package doc plus the `ProjectFiles`, `ProjectLayers`, `Metrics` and
+  `ProjectGraph` docs, each of which counted or bounded the verbs a family takes.
+- WHY: `AGENTS.md` gained the word: an **Exclusions** paragraph beside the scope verbs and a row in the stage
+  table. The grammar is the file's own subject, and a verb every selector in every family takes cannot be
+  documented only in the port that implemented it first.
+- WHY: the integration tests are in `archunit_test.go`, dogfooding on this library:
+  `TestTheThirdPartyPolicyOfThisRepositoryIsOneRuleWithOneDocumentedHole` replaces this repository's eleven
+  folder-by-folder third-party rules with the one sentence they invert — nothing depends on a third-party
+  module, except the extractor on the loader — and asserts that the exclusion is load-bearing by checking the
+  same rule without it; `TestADomainModuleOfThisRepositoryDependsOnTheKernelAndOnNoOtherModule` puts the
+  exclusion on a rule's object; and `TestAnExclusionNarrowsWhatTheOtherFamiliesLookAtThroughThePublicSurface`
+  takes one folder of the kernel back out of a measured scope, a declared layer and a drawn report.
+- WHY: two dogfooding tests in `archunit_test.go` had the file list of `common/matching` written out in them —
+  `TestANamingRuleThisRepositoryBreaksReportsTheOffendingFiles` and
+  `TestTheAssertHelperFailsTheTestWithTheReportOfARuleThisRepositoryBreaks`, both about the one folder whose
+  files are not named `*_factory.go` — so `common/matching/exclusion.go` joining the folder made their
+  expectations false. They now name three offenders and count `3 violations:`. That is updating data this
+  change made stale, not loosening the assertion: both still pin the exact list, in order.
+
+## Issue #39 — Logging
+
+- WHY: `CheckOptions.Logging` changed type from `io.Writer` to `*logging.Options`, and
+  `CheckOptions.LogWriter()` was removed in favour of `CheckOptions.Logger()`. The issue asks for levels, a
+  log file, a timestamped filename and an append-vs-overwrite switch, and an `io.Writer` can carry none of
+  them; the field is still one nilable field whose nil means off, which is what issue #5's note was actually
+  about. `LogWriter` had no caller in the library and returned a raw writer, which is no longer the seam —
+  `Logger()` hands back the thing that writes the fixed vocabulary.
+- WHY: the package is `common/logging` and the option bag's file stem is `log_options.go` rather than
+  `options.go`, so that the stem still names the type a reader is looking for after the package name has been
+  dropped from it (`logging.Options`), the way `check_options.go` does in `common/fluentapi`.
+- WHY: a log record carries no timestamp. `.golangci.yml`'s `forbidigo` bans `time.Now` and tells an issue
+  that wants a timestamp to take it as a field on an options bag, so the only instant a log can state is
+  `Options.Timestamp` — and it names the file, not the lines. The side effect is the one that makes the
+  feature testable: two runs of the same check over the same code write the same bytes.
+- WHY: the filename stamp is `2006-01-02T15-04-05` and not `time.RFC3339`. A colon is not legal in a filename
+  on Windows and the repository cross-compiles for it, so the colons are hyphens and the offset is left off
+  for the same reason. A caller who wants an unambiguous stamp passes a UTC time.
+- WHY: the append-vs-overwrite switch is spelled `Overwrite bool`, defaulting to append, and not `Append`.
+  Every default in this library is a zero value, and appending has to be the default: a log file is opened
+  once per check, so a suite of twenty rules under one filename would keep only its twentieth rule's records
+  if truncation were the default.
+- WHY: the five records are one decorator in the kernel — `CheckOptions.LoggedCheck` — rather than nine
+  terminals each writing their own start, violation and end records. It is argued exactly as
+  `GatherEmptyTestViolations` is: the three records every family writes identically are written in one place,
+  so no family can log a little differently or forget to log at all. What is left at the call site is the
+  part only the terminal knows, which is the "more verbose at the call site" the issue asks for — every
+  terminal writes its own `LogProgress` lines and the two metrics threshold terminals their `LogMetric` ones.
+- WHY: `Logger` has no mutex and its doc states that one logger belongs to one check. The library makes a
+  logger per check, so a lock would protect nothing it shares; what makes a parallel suite behave is that the
+  log file is opened with `O_APPEND`, so parallel checks writing one file interleave whole records, and that
+  an injected writer shared between them is documented as the caller's to make concurrency-safe.
+- WHY: a write that fails is remembered and reported from `Close` rather than from the record method. A log
+  line has nowhere to return an error to, and `errcheck`'s `check-blank: true` means the alternative is not
+  `_ = write(...)`. `LoggedCheck` surfaces it, and it loses to the check's own error, because a rule that
+  could not be run is the more useful of the two things to say.
+- WHY: `assertion.EmptyTestViolation` gained a `String()`. Every other violation type in the library already
+  has one "for logs and test failures" and `Logger.LogViolation` renders each violation through it; this was
+  the one type that would have logged as its kind alone.
+- WHY: logging is not wired into `extraction`/`ExtractGraph`, `MetricBuilder.Measure`, or the report and
+  export terminals of `metrics` and `graph`. The issue scopes the log to a check — start check, end check,
+  progress, violation, metric — and `common/extraction` may not import a package that touches the options
+  bag's logging field without inverting the kernel's layering. A report is not a check and has no violations
+  to log; wiring one would be the speculative half of the feature.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `LoggedCheck` is a method, which
+  that list cannot guard, and the five records return nothing. This follows #27, #28, #32, #33, #34, #35,
+  #36, #37 and #38.
+- WHY: no `//nolint` was added anywhere in this issue.
+- WHY: the prose the change made false was updated in the same diff — `AGENTS.md`'s layout table and the
+  `common/util` note ("logging and path helpers get their own named packages when they land" is now half
+  history), `common/fluentapi`'s `CheckOptions.Logging` and `WithDefaults` docs and the `checkable.go` package
+  doc (which now names two kernel doors rather than one), the `Check` docs of the nine terminals that gained a
+  logging step, and in `archunit.go` the new `LogOptions`, `LogLevel`, `Logger` and `LogLevel*` re-exports
+  beside `CheckOptions`. Issue #5's and #2's notes above say what they superseded.
+- WHY: the integration tests are in `archunit_test.go`, dogfooding on this library:
+  `TestARuleOfThisRepositoryLogsWhatItDidThroughThePublicSurface` runs one real rule with a `*LogOptions`
+  and pins the five records; `TestALogFileOfThisRepositoryIsTheArtifactACiJobWouldArchive` asserts the
+  auto-created folder, the timestamped filename and append-vs-overwrite;
+  `TestARuleThatWasNotAskedToLogWritesNothing` is the default;
+  `TestEveryRuleFamilyOfThisRepositoryLogsItsOwnStepsThroughThePublicSurface` runs one rule of each of the
+  nine rewired terminals at `LogLevelDebug` over a scope that selects something, and pins the `start check`
+  record, the `end check` record with its own outcome and the exact list of `progress` steps that terminal
+  took — plus the `metric` record of the two threshold families; and
+  `TestTheLevelALogWasAskedForDecidesWhichRecordsACheckWritesThroughThePublicSurface` pins one rule's
+  `warn  violation:` records at `LogLevelWarn` and the empty log at `LogLevelError`. The first three ran
+  the check but observed only what `LoggedCheck` writes around it, so a deleted `LogProgress` or `LogMetric`
+  inside a terminal failed nothing; a family whose scope stops selecting fails its row at the empty-test
+  guard rather than passing quietly, because each row rejects a `KindEmptyTest` violation before it reads
+  the log.
+- WHY: the four levels and the logger are pinned by value as well as by type.
+  `TestTheFourLogLevelsOfThePublicSurfaceAreTheOnesTheyName` asserts each constant's `String()` against the
+  literal word the issue names and asserts the four strictly ascending, which is what makes a threshold a
+  threshold; `TestTheLoggerThePublicSurfaceNamesOpensThroughTheCheckOptions` opens a `*archunit.Logger`
+  through `CheckOptions.Logger()` and compares one byte-exact record. The `var _` block at the top of the
+  file pins the rest at compile time — `LogLevel` against each of its four constants, `*LogOptions` with
+  every field of it set, `CheckOptions.Logging`, and `Logger()`'s signature as a function value — because a
+  re-export aliasing the wrong thing is a compile error nowhere else.
+- WHY: `TestEveryTerminalOfThisLibraryGoesThroughTheKernelsLoggedCheckDoor` is a sibling of the empty-test
+  guard's rule and is argued the same way: the three records every family writes identically are written by
+  one decorator, so a terminal that returns violations without going through it logs nothing and no other
+  test in the suite notices. Both rules read the same predicate, and the new one counts what it matched
+  against `terminalCheckDeclarations = 9`, so a `declaresTerminalCheck` that quietly stopped matching — or a
+  tenth terminal that lands without a logging step — fails instead of scoping the rules down to nothing.
+- WHY: `TestEveryTerminalOfThisLibraryWiresInTheEmptyTestGuard` in `archunit_test.go` now asks
+  `declaresTerminalCheck(file.Source)` instead of `strings.Contains(file.Source, ") Check(")`. The new helper
+  looks for the same signature on a line that starts at the left margin, which is what a method declaration
+  is. `common/fluentapi/logged_check.go` shows a terminal author their own `Check` in its doc comment, and the
+  substring alone read that piece of documentation as an implementation and demanded the guard from a file
+  that has no rule to guard. This makes the predicate say what its own comment already claimed it said —
+  every `Check` of this library is declared at the left margin, so nothing that used to be caught stops being
+  caught, and a terminal in `layers/`, `metrics/` or `graph/` that forgets the guard still fails the rule.
+  `TestDeclaresTerminalCheckReadsAMethodDeclarationAndNotADocComment` holds the helper to both halves of that
+  claim on its own — true for a real signature, false for the same signature indented inside a doc comment —
+  because a predicate that two dogfooding rules narrow their scope by is the one place where matching nothing
+  reads as everything passing.
+- WHY: what each step *came to* is pinned one level down from `archunit_test.go`, in three new files —
+  `files/fluentapi/logged_progress_test.go`, `layers/fluentapi/logged_progress_test.go` and
+  `metrics/fluentapi/logged_progress_test.go` — over the fixture projects those packages already write, whose
+  file, edge, cycle, layer, clause and measurement counts a test fixes rather than the next commit to this
+  repository. Each row compares the whole `debug progress: <step>: <count>` line byte for byte, and the
+  metrics one every `info  metric:` record beside it, so zeroing any `len(...)` argument, reporting two
+  adjacent populations the wrong way round, or hoisting a `LogMetric` out of its loop fails — each of those
+  mutations was made in turn and the failures observed. `progressSteps` in `archunit_test.go` still strips the
+  counts off for the reason its doc comment gives (a count of this repository moves with every commit), and
+  that comment now names where the counts are pinned instead.
+- WHY: each of the three files carries its own `loggedRecords` helper rather than one shared one. The three
+  test packages are `fluentapi_test` in three modules and rule 2 forbids a domain module depending on another;
+  a shared helper would have to land in `common` as non-test code, which is a testing utility in the public
+  surface of the kernel.
+- WHY: the counts of each row are deliberately distinct where a mutation could confuse two of them — the
+  cycles family is asserted over two projects (4/3/0 files, dependencies, cycles for the acyclic fixture and
+  3/3/1 for the cyclic one) because one row alone cannot tell "dependencies" from "cycles"; `depend on files`
+  selects 2 files against 3 objects, so its two adjacent populations cannot be swapped; and the layer policy
+  declares 3 layers with 2 clauses, which is what the `len(clauses)` → `len(declaredLayers())` mutation
+  changes.
+- WHY: one item of the finding is rejected. `len(files)` → `len(selected)` for `adhere to`'s `source files
+  read` is not a behaviour change and no test can catch it:
+  `files/extraction.ExtractFileInfo` returns exactly one `FileInfo` per identifier it is given or an error, so
+  `len(files) == len(selected)` holds for every project — the two spellings are the same program. The record is
+  still asserted byte for byte, which is what pins it against being zeroed or hard-coded; making the two
+  numbers differ would mean inventing a "some files were not read" path that the extraction deliberately does
+  not have.
+
+## Issue #40 — Dogfood: enforce our own architecture rules on ourselves
+
+- WHY: the suite is one file at the repository root, `architecture_test.go`, and not a test file beside the
+  file it tests as the naming convention asks — it tests no file. It is about the layout of the whole
+  repository, so the root of the module is where a reader looking for "the architecture of this project"
+  finds it, and it is the level the four rules are stated at.
+- WHY: the suite is `map[string]archunit.Checkable` handed to `AssertAllPass`, and the rules of rule 2 are
+  built by a loop over `domainModulesOfThisRepository()` rather than typed out per module. One shape per
+  module is what makes the module landing next inside the rules on the day its folder appears, instead of on
+  the day somebody remembers to add four lines. `TestTheArchitectureSuiteSaysSomethingAboutEveryFolderOfThisRepository`
+  is the other half of that: a top-level folder the suite knows nothing about is a failure, because the
+  empty-test guard only catches the opposite mistake — a pattern whose folder was renamed away.
+- WHY: the suite covers AGENTS.md's rule 3 (the report layer reads the kernel and the modules' violations)
+  and the third-party half of rule 1 as well as the four bullets the issue names. The issue's list is the
+  four dependency rules of AGENTS.md read short, and rule 1 says "nothing but the standard library **and the
+  analysis toolchain**", which is only a rule if the toolchain's one hole is named and held to one folder.
+- WHY: the six dogfooding tests that already existed in `archunit_test.go` are left where they are, and the
+  suite restates three of their rule shapes rather than avoiding the overlap.
+  `TestThisRepositoryHasNoCyclesBetweenItsFiles` is the acyclicity rule verbatim,
+  `TestADomainModuleOfThisRepositoryDependsOnTheKernelAndOnNoOtherModule` is the four rules of the suite's
+  rule-2 loop glob for glob, and `TestTheThirdPartyPolicyOfThisRepositoryIsOneRuleWithOneDocumentedHole`
+  together with `TestThisRepositoryObeysItsOwnThirdPartyDependencyPolicy` is the third-party half of rule 1
+  with the same `*.*/**` and the same toolchain hole — the latter also carrying the positive `the extractor
+  knows the analysis toolchain` rule. In each of them the rule is the vehicle and a feature of the library is
+  what is being proved, so folding one into the suite would delete a family's integration test to save a
+  duplicated sentence. `TestThisRepositoryObeysItsOwnDependencyRules` goes on to the boundaries inside a
+  module — a pure assertion half not reaching back into its fluent API — which no rule of one shape per module
+  can express, and `TestThisRepositoryObeysItsOwnLayerPolicy` is the same architecture as the one policy it
+  is; those two the suite genuinely does not restate. What the suite adds that none of the six do is coverage
+  of every module by shape.
+- WHY: the empty-test guard covers less of this suite than "every rule goes through it" would suggest, and the
+  two extra tests are where the rest is covered. Every rule's scope is guarded, and so is the object of the
+  `depend on files` rules — but the object of a `depend on external modules` rule is unguarded by design
+  (`files/fluentapi/depend_on_external_modules.go`: "no module matched" and "no selected file depends on such a
+  module" are one statement, and under the negated mood it is the pass), so the seven rules written with
+  `thirdPartyModules` would all report nothing if that pattern stopped matching anything.
+  `TestAThirdPartyRuleOfThisRepositoryReportsTheFileThatBreaksIt` is the failing half for that shape — the
+  kernel's third-party rule with its `except` for the toolchain removed, which has to report
+  `golang.org/x/tools/go/packages` on the extractor — and the positive `the extractor knows the analysis
+  toolchain` rule pins `analysisToolchain` the same way from inside the suite.
+- WHY: `TestTheArchitectureSuiteSaysSomethingAboutEveryFolderOfThisRepository` reads the suite itself as well as
+  the extractor's folders, asking for both per-module rule names. Naming a module in
+  `domainModulesOfThisRepository` is what the folder half checks, but the loop that turns the name into two
+  rules is the half that can silently stop producing them — a dropped assignment, or a key that no longer varies
+  per module and collapses all four onto one entry — and no other test in the file counts or names them.
+- WHY: `nothing depends on the public surface` is written as `in path "*.go"` — every Go file at the module
+  root — rather than as `with name "archunit.go"`, which is how the older pairwise test spells it. A `*` never
+  crosses a separator, so the pattern is exactly the root package, and a second file landing there is inside
+  the rule the day it lands. `TestThePublicSurfaceIsTheOneFileTheSuiteForbidsDependingOn` pins that the
+  pattern names `archunit.go` and nothing else, since a pattern that named the wrong file would leave the rule
+  green rather than empty.
+
+## Issue #43 — CI: build, test and lint on every push
+
+- WHY: the issue names three things to run and the workflow has five jobs. `build` (with `go vet` and
+  `go mod tidy -diff`) and `cross-build` are the two extra, and they are there because the gate this
+  repository is held to has commands the three do not cover: a tidy check, and `GOOS=windows GOARCH=amd64`
+  plus `GOOS=linux GOARCH=386` builds. Leaving those out of CI would mean the gate a change is judged by
+  and the gate CI runs were two different lists.
+- WHY: the dogfooding job runs the whole root package (`go test -race -shuffle=on -count=1 .`) rather
+  than a `-run` filter naming the architecture suite. `go test -run` that matches nothing exits 0, so a
+  renamed test would leave that job green having checked no rule at all — the silent pass `AGENTS.md`
+  forbids the library itself ("zero matches is a violation, not a pass"). The cost is seventeen seconds
+  of test time the `test` job already spent; the job exists for the signal, so that "the library broke
+  its own architecture" is a line a reader sees rather than one failure among twenty-six packages.
+- WHY: no OS matrix for the tests — every job runs on `ubuntu-latest`, and Windows and 386 are compiled
+  only. Extraction is the one stage that touches the filesystem and identifiers are normalised paths, so
+  running the suite on Windows is worth having; but nothing here could run it before landing it, and a
+  workflow whose first run is red says less about the code than about the workflow. The cross-build job
+  names both platforms and its comment says what running the tests there would add.
+- WHY: `golangci-lint` is installed with `install-only: true` and then invoked in three plain steps
+  rather than run by `golangci-lint-action` itself. The action's own run would leave `config verify` and
+  `fmt --diff` looking like extras beside it, when `.golangci.yml`'s header names all three as the gate;
+  as plain commands they are also what `ci_test.go` can read and pin. The version is pinned to `v2.12.2`,
+  the release the checks were run against, for the reason the file says: a linter release changes what
+  this repository considers correct, so it should arrive in a commit of its own.
+- WHY: there is a test for a YAML file. `ci_test.go` reads `.github/workflows/ci.yml` as text and pins
+  that every command of the gate is a step of it, that both cross-build platforms are named, that the
+  trigger is every push, and that nothing in it is switched off with `continue-on-error`, `if: false` or a
+  floating linter version. It is the argument `architecture_test.go` makes about the architecture applied
+  to the checks: dropping `-race` or `-shuffle=on` makes CI faster and greener and nothing else fails.
+  The file is searched as text with whitespace collapsed, not parsed, because a YAML parser is a
+  dependency this module does not have and should not take for a test.
+- WHY: the workflow's YAML was reviewed by hand and not machine-validated. No YAML parser is installed
+  on the machine this was written on (`python3` has no `yaml`, and there is no `ruby`, `node` or `yq`),
+  and the only way to get one was a dependency — in the module, or outside the repository. The file's
+  first run on GitHub is therefore also the first parse of it.
+- WHY: the README gained a CI badge. Not asked for by the issue, one line, and it is where a reader
+  looks to find out whether the checks this issue adds are passing.
+## Issue #30 — Slices API: slicing projections and forbidden dependencies
+
+- WHY: `(**)` and `(*)` are read by `common/matching`, not by `slices/projection`: `NewGlobCapturePattern`,
+  `NewRegexCapturePattern`, `Pattern.Capture` and `RegexFactory.CapturePattern` join the package that already
+  owns glob syntax. AGENTS.md's rule is that globs compile to regex in exactly one place, and a capture glob is
+  the same syntax with one construct more — a second translator in the slices module would be the second place.
+- WHY: `globToRegex` grew one `captures bool` parameter rather than a capture-specific twin, and all four `**`
+  spellings are derived from a single `run` variable (`.*` plain, `.*?` capturing). The structure of `**` — the
+  optional segment before it, the optional slash after it — is then stated once, and only greediness differs
+  between the two doors. A hand-written second spelling of each construct is a spelling that can drift.
+- WHY: `.*?` and not `.*` under a capture, because Go's regexp is leftmost-preference: with a greedy run the
+  optional group before a capture would swallow every segment it could and `internal/(**)/**` would name the
+  *last* folder of a path rather than the first one under `internal`. Nine rows of
+  `TestNewGlobCapturePatternNamesWhatItMatched` pin what each construct actually captures, including the two
+  zero-segment cases — `**/(*)` against a root file and `internal/(*)/**/order.go` against a file one folder
+  down — which are the rows that fail if the optional runs are made mandatory.
+- WHY: parentheses stay literal in `NewGlobPattern` and are structural only in `NewGlobCapturePattern`. A scope
+  glob is matched against identifiers that may hold a `(`, and every existing rule was written against that
+  promise; the capture door is new, so it is the one that gets the new meaning.
+- WHY: a capture pattern is refused unless it captures exactly one group (`ErrOneCapture`), checked in
+  `compileCapturePattern` after compilation rather than by counting `(` in the glob. `regexp` already knows how
+  many groups an expression has, and the regex door takes the expression as written, so one check covers both
+  syntaxes and neither can disagree with the other.
+- WHY: `Pattern.Capture` answers `"", false` for an empty capture as well as for no match, and
+  `slices/projection`'s `sliceBy` drops an edge unless *both* ends are named. A nameless slice is not a slice,
+  and a slice with one end missing is a dependency on something outside the vocabulary — the same drop
+  `projection.PerInternalEdge` makes for an external target.
+- WHY: `ProjectSlices` has no short alias, where `ProjectFiles` has `Files` and `ProjectLayers` has `Layers`.
+  `slices` is the name of a standard-library package this repository imports, so `archunit.Slices` would make
+  every file that has both in scope alias one of them. The sibling convention loses to Go, which is AGENTS.md's
+  own tie-break, and `ProjectSlices`' doc says so where a reader would look for the alias.
+- WHY: `Identity` is re-exported from `common/projection` rather than mirrored in `slices/projection`. The issue
+  lists it beside the three slicings, and it is the one of the four that relabels nothing — a copy in the slices
+  module would be a second definition of a kernel function, and `slices/projection`'s package doc names it as
+  the kernel's instead.
+- WHY: `MapFunction` is on the public surface as an alias of `kernelprojection.MapFunction`, because the four
+  exported slicings return one and a caller who cannot name the return type cannot store it. It is the first
+  kernel projection type the surface names; nothing else of `common/projection` is exported with it.
+- WHY: `SliceByFileSuffix` reads identifiers with `path`, never `path/filepath`. Identifiers are normalised to
+  forward slashes, and `filepath` would split them differently on Windows — the same reason
+  `common/extraction/identifier.go` does its own prefix arithmetic.
+- WHY: `contain dependency` reports at most one violation per rule rather than one per offending import: the
+  sentence is about a pair of slices, so the pair is the finding and the concrete file dependencies are carried
+  on it as data. That is what makes a slices report short and still actionable, and it is what
+  `layers/assertion` already does for the same shape of sentence.
+- WHY: the positive mood's violation is the library's one violation about something absent, so it carries no
+  dependencies and `DependencyViolation.String` names the two slices alone. `ViolationFactory.sliceDependency`
+  branches on `len(Dependencies)` for the same reason, and phrases the requirement as the user wrote it —
+  `Mood.Holds` stays the one place in the library that inverts anything.
+- WHY: a slice named with the empty string (`ErrUnnamedSlice`) and a slice said to depend on itself
+  (`ErrSelfDependency`) are user errors returned by the terminal, not violations. The projection never produces
+  an empty name and never carries a self-dependency, so both rules would be vacuous in one mood and impossible
+  in the other whatever the project is — a mistake in what was typed rather than a finding about the code. They
+  are stored on the builder and returned before the project is read, as every other family's rejections are.
+- WHY: a chain with no slicing is `ErrNoSlicing` and not a compile error. The mood is a method on the entry
+  point itself — `ProjectSlices(nil).Should()` has to type-check for the grammar's mood stage to be exactly one
+  stage — so the missing slicing is a rejection naming `project slices`, and it is reported before the slice
+  names are looked at because a reader has to fix it first.
+- WHY: the empty-test guard is given one population for the slicing itself (subject `slices`) and one per named
+  slice (`files in slice "api"`). A slicing whose folder was renamed finds nothing at all, and a rule naming a
+  slice the project no longer has is vacuous even when the slicing works; the two go stale independently, so
+  each is its own population and a reader who broke both is told about both at once.
+- WHY: `.golangci.yml`'s `testing-layer` allow list gained `slices/assertion` — the report layer's strict list,
+  which is what makes a module added later denied by default. `archtest` reads the new violation type and
+  nothing else of the module.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `DefinedBy`, `Should`,
+  `ContainDependency` and their siblings are methods, which the analyzer cannot guard (`sig.Recv() != nil`), and
+  `SliceByPattern`/`SliceByRegex` return an error `errcheck` already guards. This follows #27, #28 and #32.
+- WHY: the prose the change made false was updated in the same diff — `archunit.go`'s package doc (the entry
+  points it lists), and `archunit_test.go`'s dogfooding policies, which now declare `slices` as a seventh layer,
+  hold it to the kernel-only clause every module is held to, forbid it a third-party dependency, and let the
+  report layer reach it because `archtest` now phrases its violations.
+- WHY: `TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface` was repointed from `slices/**` to
+  `common/util/**`. It needs a folder no file of this repository is in, and `slices/` now exists; AGENTS.md says
+  in as many words that there is no `common/util` and there will not be one, so that glob keeps the test failing
+  for the reason it was written for instead of going green the day its folder gets filled in.
+- WHY: the integration tests are `archunit_test.go`'s five new ones, which slice this repository through the
+  public surface: its own top-level folders as its slices, AGENTS.md rule 1 as a rule about them in both moods,
+  the dependency of `files` on `common` that this repository has on purpose and the message it prints, the guard
+  on a slice nobody is in, and the locator test every other family has — a slicing pointed at a directory
+  holding no `go.mod`, which is the only way to see a re-export that dropped the argument, verified by making
+  `ProjectSlices` return `slicesapi.ProjectSlices(nil)`. The sixth runs each of the four exported projections
+  over one hand-built edge, because the four differ only in what they label and what they drop, so a re-export
+  wired to the wrong one type-checks and no rule in the file would notice.
+- WHY: the gate's `at least one test exists` failure ("the module has no test files at all") is rejected for a
+  fifth round, and no code changed for it — the tree has 118 `*_test.go` files, the same `find` the step runs
+  lists all of them, and the step before it counted 964 test functions in them. The step is `gate.sh:236`,
+  `! find . -name '*_test.go' -not -path './.git/*' | grep -q .` under `set -uo pipefail`, so the pipeline also
+  carries *find's* status, and `! ` then turns find's failure into the VIOLATION. `grep -q` exits on the first
+  line it reads; find's output is 4957 bytes, so it takes two `write(2)`s — one when the 4096-byte stdio buffer
+  fills, one at exit — and the second lands on the closed pipe and dies of `SIGPIPE`, a non-zero with nothing on
+  stderr, which is exactly what the log shows: the VIOLATION line and no `find:` error above it. Measured
+  verbatim this round, reading `PIPESTATUS` *before* anything else — which is the correction to the earlier
+  rounds of this note, and why they read as intermittent: a plain `rc=$?` assignment resets `PIPESTATUS`, so the
+  pair those runs printed was the assignment's status and not the pipeline's. Read properly it is not
+  intermittent at all: `find=141 grep=0` in 10 of 10 runs, and 300 of 300 pipelines exiting 141 under
+  `pipefail`. The same command over `./common` alone — 1253 bytes of paths, so one write — exits `find=0` every
+  time, which is the boundary. So the step does not pass on this tree, and it did not pass on the base commit
+  either: `da23b32`'s 108 test files are 4511 bytes of paths, also over 4096. Nothing in the repository can
+  repair a check in `/harness/gate.sh`, and the one in-tree lever — getting the output back under 4096 bytes so
+  there is a single unpipeable write — means fewer or shorter test files, which is gaming the gate, not fixing
+  it. Every other step of the gate is green on this tree, re-run in full this round.
+
+## Issue #31 — Slices API: PlantUML component diagrams
+
+- WHY: two new packages in the slices module, `slices/extraction` and `slices/rendering`, rather than one file
+  each somewhere existing. AGENTS.md's per-module shape lists `extraction/` as the optional home of
+  module-specific gathering, and reading a diagram off a disk is exactly that; `graph/rendering` is the
+  precedent for a module owning a renderer, and `.golangci.yml`'s `pure-packages` glob (`**/rendering/**`)
+  already holds the new one to the same purity as `assertion/`. `slices/assertion` importing
+  `slices/extraction` mirrors its existing dependency on `common/extraction`: the assertion is handed a
+  `Diagram` value and still does no I/O itself.
+- WHY: the diagram parser is hand-written line scanning and not a regex. `.golangci.yml`'s depguard denies
+  `regexp` in `**/slices/**` non-test files, so the rule that keeps pattern compilation in `common/matching`
+  is what decides the parser's shape. Arrows are found from the `>` backwards over the run of `-`, which is
+  what lets a component be called `my-api`.
+- WHY: a line the dialect was not taught is refused with its number and its text (`ErrUnreadableDiagramLine`)
+  rather than skipped. A skipped line is a dependency nobody checks, which is the one failure mode a rule
+  about a whole architecture must not have. `title`, `skinparam`, `!include`, aliases and stereotypes are
+  therefore deliberate refusals, and a diagram that has them says so in a way the user can fix — the escape
+  hatch is PlantUML's own `'` comment, which the parser does read.
+- WHY: `adhere to diagram` is offered on `should` alone, so `SlicesShouldNotBuilder` does not have it and
+  `GatherDiagramViolations` takes no `assertion.Mood`. A diagram is a closed statement about a whole project;
+  its negation would ask that a project contradict its own documentation somewhere. `have no cycles` is the
+  precedent, and `assertion.Mood.Holds` stays the library's single inversion point because nothing here
+  inverts anything.
+- WHY: `ignoring orphan slices` and `ignoring external slices` each switch off one finding about a *name* and
+  neither can suppress an undrawn dependency — the finding a diagram is drawn for. A slice the drawing does
+  not declare is reported once, about the slice, and the arrows it is an end of are left out: the drawing is
+  missing a component, not a hundred arrows.
+- WHY: `to plantuml` and `export as plantuml` sit on `SlicesBuilder`, before any mood, as the graph module's
+  output terminals sit on `GraphBuilder`. A drawing states what a project is, so there is no rule for it to be
+  the terminal of. They refuse to draw a project with no slice in it (`ErrNothingToDraw`) instead of handing
+  back an empty frame, honouring `AllowEmptyTests` as the opt-out — `graph`'s `ErrEmptySnapshot` is the
+  precedent for a report terminal reusing the guard's own knob, because a report has no violation list to put
+  a finding in.
+- WHY: `slices/rendering` has its own `pluralize`, as `graph/projection` and `archtest` do. Two-line plural
+  helpers in the module that needs them is this repository's existing pattern, and a shared one would be a new
+  kernel API for `1 component`.
+- WHY: the sentinels of the new predicate and the new terminals — `ErrMissingDiagramPath`, `ErrNothingToDraw`,
+  `ErrMissingExportPath` — are declared beside the calls that report them rather than joining
+  `project_slices.go`'s block of four, and they are not re-exported from `archunit.go`. `graph`'s
+  `ErrEmptySnapshot` and the slices module's own `ErrNoSlicing` are not on the public surface either; the
+  surface names types and kinds, and adding these four would be a policy change rather than this issue.
+- WHY: nothing was added to `govet.unusedresult.funcs` and nothing removed. `AdhereToDiagram`,
+  `IgnoringOrphanSlices`, `ToPlantUML` and the rest are methods, which the analyzer cannot guard
+  (`sig.Recv() != nil`), and the two that return an error are guarded by `errcheck` already. This follows #27,
+  #28, #30 and #32.
+- WHY: the prose the change made false was updated in the same diff — `archunit.go`'s package doc (which said
+  only `ProjectGraph` describes a report) and its `ProjectSlices` doc, `slices/fluentapi`'s package doc (the
+  chain's predicates and terminals) and its "four ways a rule can be typed wrongly" block, both `Mood()` docs
+  and the `slicesRule` doc in `slices/fluentapi/mood.go` (which said the predicate always hands the mood to
+  `GatherDependencyViolations`), `slices/assertion`'s package doc, and `archtest.ViolationFactory.Message`'s
+  example list.
+- WHY: the integration tests are `archunit_test.go`'s three new ones, which judge this repository against the
+  component diagram of its own modules — AGENTS.md's four dependency rules drawn rather than typed — then draw
+  that diagram out of the project, byte-compare the exported file against the string form, and read the
+  exported file back as the rule's own input; the third breaks the drawing in three deliberate ways and pins
+  that all three findings, their order, the message the report prints and both modifiers come back through the
+  public surface. `slices/fluentapi/to_plantuml_test.go` exports with a non-nil
+  `&CheckOptions{IncludeTestFiles: true}` and asserts the arrow only the fixture's `_test.go` file makes
+  (`[db] --> [api]`) is in the written file and absent by default, so an export that dropped the options bag
+  fails.
+- WHY: the incoming-only orphan case the test critic asked for was *added beside* the outgoing-only one rather
+  than replacing it, at both levels — the unit test keeps `ui` as the source of an arrow and gains `mail` as
+  the target of one, and the fluent test keeps `tools` as the isolated folder and gains `mail`, a folder that
+  imports nothing and that a new file of the api slice imports. Converting the existing case as written would
+  have covered `orphaned`'s `TargetLabel` half by uncovering its `SourceLabel` half: verified by deleting each
+  of the two comparisons in turn, and both mutations now fail both tests.
+- WHY: `writeFixtureFiles` was lifted out of `writeSlicedFixtureProject` unchanged, which is the only edit to
+  code that was already passing. The new slices are written into one test's own copy of the fixture project, not
+  into the shared fixture every other test in the package is judged against, and writing them by hand there
+  would have been the same loop a second time.
+
+## Merging the two parallel hosts
+
+- WHY: the two batches were built in parallel from the same commit — Slices (`#30`, `#31`) on one host, Metrics
+  and the cross-cutting issues (`#32`-`#40`, `#43`) on the other — because the features are independent and the
+  wall-clock saving is real. Twenty of the twenty-one conflicting hunks kept both sides, in exactly the way that
+  bet assumed: each side appends its own module's import, type alias, `Kind` const, type-switch case, table entry
+  and depguard allow entry to the same shared files. There is no architectural collision to resolve, and
+  `.golangci.yml`'s depguard rules are why — domain modules may not import each other, so `slices` and `metrics`
+  could not have grown a dependency to disagree about.
+- WHY: what the parallel split did cost is three cross-cutting rules that were written against a tree with no
+  `slices/` in it, and that a conflict-free merge leaves quietly wrong rather than failing to compile. All three
+  are the same mistake in different files, and all three were caught by this repository's own dogfooding rules
+  rather than by reading the diff:
+  - `domainModulesOfThisRepository` did not name `slices`, so the architecture suite said nothing at all about
+    eighteen files. `#40` wrote that list, on a host where the folder did not exist.
+  - `thisRepositorysDiagram` drew `[archtest] --> [slices]` but not `[archtest] --> [metrics]`, because when
+    `#31` drew it the testing layer had not yet been taught to phrase a metrics violation. Sixteen dependencies
+    became seventeen.
+  - the two terminals of `slices/fluentapi` did not run under `CheckOptions.LoggedCheck`, because `#39` landed
+    logging after the slices host had branched. That one is a code change and not a test change: a terminal that
+    runs its own body inline logs nothing about itself, and the logged-check door's own dogfooding rule in
+    `archunit_test.go` is what says so. Both were wired through the door with the progress records the other
+    nine terminals write, and `terminalCheckDeclarations` went from 9 to 11.
+- WHY: `archunit_test.go` held the one hunk that was a real conflict rather than an addition — both hosts wrote a
+  comment introducing the *same* `var` block, the metrics surface. The slices host's copy described three stages
+  and no distance verbs, which is what that surface looked like before `#33`, `#34`, `#35` and `#37` landed on the
+  other host. The stale one was dropped rather than merged: two comments about one block is how a reader ends up
+  believing the wrong one.
+- WHY: `NOTES.md` keeps both sides in the order the merge made them — the metrics host's sections through `#43`,
+  then the slices host's `#30` and `#31` — rather than being resorted by issue number. This file has recorded
+  landing order since `#21` landed after `#25`, and renumbering it now would claim an order that never happened.
+- WHY: the second layer policy in `TestTheSuiteHelperRunsOneSubtestPerRuleUnderTheNameItWasGiven` still has no
+  `WhereLayer("metrics")` clause of its own, which is the metrics host's own omission and not the merge's. It is
+  left as it was found: a merge that quietly adds a rule neither side wrote is a merge nobody can review.

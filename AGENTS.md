@@ -77,6 +77,7 @@ common/         the kernel — everything shared
   fluentapi/    Checkable, CheckOptions
   error/        TechnicalError, UserError
   matching/     globs, regex, match targets  <- was util/; see the note below
+  logging/      the log a check writes       <- the other half of that note
 files/          file-level dependency and naming rules
 layers/         named-layer policy
 slices/         component and diagram rules
@@ -89,10 +90,10 @@ archunit.go     the public surface — re-exports, nothing else
 **There is no `common/util`, and there will not be one.** The sibling libraries have one and this table
 used to say so, but `revive`'s `package-naming` rule in `.golangci.yml` rejects the name, citing
 [go.dev/blog/package-names](https://go.dev/blog/package-names#bad-package-names) — and in Go the
-directory *is* the package, so the directory has to carry a real name too. Logging and path helpers get
-their own named packages when they land, the same way pattern matching got `matching/`. This is the
-"idiomatic Go wins over a sibling convention" rule below, applied once so that nobody has to rediscover
-it against a failing lint run.
+directory *is* the package, so the directory has to carry a real name too. Logging landed as `logging/`
+the same way pattern matching landed as `matching/`, and path helpers get their own named package when
+they land too. This is the "idiomatic Go wins over a sibling convention" rule below, applied once so that
+nobody has to rediscover it against a failing lint run.
 
 Every domain module has the same internal shape. This is the single most useful convention in the
 whole file, because it means reading any one module teaches you how to navigate all of them.
@@ -185,10 +186,17 @@ the name.
 |---|---|---|
 | Entry | exactly 1 | a scope builder |
 | Scope | 0..n, chainable, combined with AND | a scope builder |
-| Mood | exactly 1 | a positive or negated predicate builder |
+| Mood | exactly 1, except where the predicate carries it | a positive or negated predicate builder |
 | Predicate | exactly 1 | a terminal, or an object builder if the predicate is relational |
 | Object | 1..n, chainable | a terminal |
+| Exclusion | 0..n after any selector, qualifying the one it follows | whatever the selector returned |
 | Terminal | exactly 1 | violations, or a rendered artifact |
+
+The one exception to the mood stage is the pair of layer predicates below: `may only depend on layers`
+and `may not depend on layers` are their own polarity, so a mood before them would read as `should not,
+may not depend on layers`. The mood is still what makes the two one piece of logic — it travels on the
+clause the predicate builds, where the allowlist is `should` and the blocklist `should not` — and every
+other family, existing or not yet written, has the stage.
 
 Word choice is fixed. Casing is yours. Exported identifiers are `PascalCase`, unexported ones `camelCase`. `depend on files` becomes `DependOnFiles`.
 
@@ -197,7 +205,18 @@ Word choice is fixed. Casing is yours. Exported identifiers are `PascalCase`, un
 an optional project locator; omitted means auto-detect. Never make it required.
 
 **Scope verbs** are prepositional, describing where or what — `with name`, `in folder`, `in path`,
-`in file`, `for classes matching`, `defined by`, `defined by regex`, `defined by folder`.
+`in file`, `for classes matching`, `defined by`, `defined by regex`, `defined by folder`, `layer`,
+`where layer`. The last two are the layer policy's pair: `layer(name)`, closed by a `defined by` verb,
+declares who exists, and `where layer(name)` picks the one a clause is about.
+
+**Exclusions** are the `except` family, and every selector takes one — a scope verb, an object verb, a
+layer declaration, a pattern modifier. `except` alone reads its patterns against the same part of an
+identifier as the selector it follows; `except with name`, `except in folder`, `except in path` and
+`except classes matching` name a target of their own, and a family offers exactly the ones its own
+selectors already name. An exclusion qualifies the selector in front of it and nothing else, it is
+repeatable, and `except` with no selector in front of it is a user error rather than a rule about
+everything. This is what keeps *everything under `app/`, but not the generated folder* one clause
+instead of an inverted rule about the generated folder.
 
 **Mood** is exactly two words, `should` and `should not`. No synonyms, ever.
 

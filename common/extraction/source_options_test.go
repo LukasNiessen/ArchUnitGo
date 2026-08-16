@@ -28,6 +28,9 @@ func TestNilSourceOptionsMeansTheDefaults(t *testing.T) {
 	if !defaults.IgnoredImportKinds.Empty() {
 		t.Errorf("IgnoredImportKinds defaults to %s; dropping an edge should be visible in the test that asked for it", defaults.IgnoredImportKinds)
 	}
+	if len(defaults.IgnoreScopes) != 0 {
+		t.Errorf("IgnoreScopes defaults to %v; a scoped directive should be honored only where it was asked for", defaults.IgnoreScopes)
+	}
 	// A nil bag has to answer the questions the walk and the graph extractor actually ask it, without
 	// being resolved first.
 	if !options.ExcludesFolder("vendor") {
@@ -39,6 +42,12 @@ func TestNilSourceOptionsMeansTheDefaults(t *testing.T) {
 	if options.IgnoresImportKind(ImportKindBlank) {
 		t.Error("a nil options bag drops blank imports")
 	}
+	if !options.IgnoresImport(ImportInfo{Path: "example.com/dependency", Ignore: IgnoreDirective{Present: true}}) {
+		t.Error("a nil options bag ignores an unscoped directive; a file needs no configuration to be believed")
+	}
+	if options.IgnoresImport(ImportInfo{Path: "example.com/dependency", Ignore: IgnoreDirective{Present: true, Scopes: "layers"}}) {
+		t.Error("a nil options bag honors a directive scoped to a name it does not answer to")
+	}
 }
 
 func TestSourceOptionsWithDefaultsIsACopy(t *testing.T) {
@@ -47,6 +56,7 @@ func TestSourceOptionsWithDefaultsIsACopy(t *testing.T) {
 		ExcludedFolders:    []string{"generated"},
 		BuildTags:          []string{"integration"},
 		IgnoredImportKinds: NewImportKindSet(ImportKindBlank),
+		IgnoreScopes:       []string{"layers"},
 	}
 
 	resolved := options.WithDefaults()
@@ -64,9 +74,13 @@ func TestSourceOptionsWithDefaultsIsACopy(t *testing.T) {
 	if !resolved.IgnoresImportKind(ImportKindBlank) || resolved.IgnoresImportKind(ImportKindPlain) {
 		t.Errorf("IgnoredImportKinds = %s, want just the blank imports the caller named", resolved.IgnoredImportKinds)
 	}
+	if !slices.Equal(resolved.IgnoreScopes, []string{"layers"}) {
+		t.Errorf("IgnoreScopes = %v, want the caller's own scopes", resolved.IgnoreScopes)
+	}
 
 	resolved.ExcludedFolders[0] = "vendor"
 	resolved.BuildTags[0] = "windows"
+	resolved.IgnoreScopes[0] = "slices"
 
 	// The resolved bag is passed around by whatever is walking; the user's own options, which a stored
 	// half-built rule shares, must not move underneath them.
@@ -75,6 +89,63 @@ func TestSourceOptionsWithDefaultsIsACopy(t *testing.T) {
 	}
 	if options.BuildTags[0] != "integration" {
 		t.Errorf("the caller's build tags changed with the resolved copy: %v", options.BuildTags)
+	}
+	if options.IgnoreScopes[0] != "layers" {
+		t.Errorf("the caller's ignore scopes changed with the resolved copy: %v", options.IgnoreScopes)
+	}
+}
+
+func TestSourceOptionsIgnoresImport(t *testing.T) {
+	// The two halves of the question together: the flavor of the declaration, which the options decide
+	// alone, and the directive the file wrote, which the options only decide the scope of.
+	options := &SourceOptions{
+		IgnoredImportKinds: NewImportKindSet(ImportKindBlank),
+		IgnoreScopes:       []string{"layers"},
+	}
+
+	tests := []struct {
+		name     string
+		imported ImportInfo
+		want     bool
+	}{
+		{
+			name:     "an ordinary import is a dependency",
+			imported: ImportInfo{Path: "example.com/dependency", Kind: ImportKindPlain},
+			want:     false,
+		},
+		{
+			name:     "a flavor the options drop",
+			imported: ImportInfo{Path: "example.com/driver", Kind: ImportKindBlank},
+			want:     true,
+		},
+		{
+			name:     "an unscoped directive, which needs nothing from the options",
+			imported: ImportInfo{Path: "example.com/dependency", Kind: ImportKindPlain, Ignore: IgnoreDirective{Present: true}},
+			want:     true,
+		},
+		{
+			name:     "a directive scoped to a name these options answer to",
+			imported: ImportInfo{Path: "example.com/dependency", Kind: ImportKindPlain, Ignore: IgnoreDirective{Present: true, Scopes: "layers"}},
+			want:     true,
+		},
+		{
+			name:     "and one scoped to a name they do not",
+			imported: ImportInfo{Path: "example.com/dependency", Kind: ImportKindPlain, Ignore: IgnoreDirective{Present: true, Scopes: "slices"}},
+			want:     false,
+		},
+		{
+			name:     "the two halves are independent: a dropped flavor stays dropped",
+			imported: ImportInfo{Path: "example.com/driver", Kind: ImportKindBlank, Ignore: IgnoreDirective{Present: true, Scopes: "slices"}},
+			want:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := options.IgnoresImport(test.imported); got != test.want {
+				t.Errorf("IgnoresImport(%+v) = %v, want %v", test.imported, got, test.want)
+			}
+		})
 	}
 }
 
