@@ -1,0 +1,78 @@
+# The documentation site, built from docs/ and published to GitHub Pages.
+#
+# The site is Markdown and nothing else: GitHub's own Jekyll turns docs/ into HTML, docs/_layouts holds
+# the one layout it is poured into, and docs/assets/docs.css is the whole of the styling. There is no
+# generator to install, no lockfile to refresh and no step that could produce a different site on a
+# different day — which matters because this repository's only direct dependency is golang.org/x/tools
+# and a docs toolchain would have been the second one.
+#
+# What is *not* here is the check. A page that names a verb this library does not have, an example that
+# does not parse, a link to a page nobody wrote — those are caught by docs_test.go on every push to every
+# branch, along with the rest of `go test ./...`, because they are wrong before they are published rather
+# than after. This workflow only builds and publishes; the CI gate is ci.yml.
+#
+# `main` alone is the trigger, unlike ci.yml, which watches every branch: publishing is not a check, and a
+# branch's half-written page is not what the site should show.
+
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deployment at a time, and never cancelled: a half-published site is worse than a stale one, so a
+# push that lands while a deploy is running waits for it instead of replacing it mid-upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Reading is all the build does — the repository for the pages, and the repository's Pages settings for
+    # the baseurl, which `configure-pages` asks the API for and gets a 403 without. Naming any permission
+    # here sets every other one to `none`, so the read of the settings has to be spelled as well as the read
+    # of the source. The token that can publish is the deploy job's, below.
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+      # What baseurl the site is served under is Pages' answer, not this file's: the site is
+      # https://lukasniessen.github.io/ArchUnitGo/, so every asset and every internal link has to be
+      # written relative to a prefix docs/_config.yml states and this step confirms.
+      - uses: actions/configure-pages@v6
+      # The site source is docs/ and not the repository root, so README.md is not a page of it. The two
+      # documents have different jobs — the README is what a reader skims before deciding, the site is what
+      # they read while writing rules — and docs/index.md links to the README for the parts that are only
+      # said once, such as what is not implemented yet.
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./_site
+
+  deploy:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    # `pages: write` publishes and `id-token: write` is what the deployment authenticates with. They are on
+    # this job alone: the build reads the repository and never needs either.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Belt and braces on top of the `main`-only trigger, because the manual one has no branch filter: a
+    # workflow_dispatch from a branch builds the site and stops, and only main is ever published.
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -53,7 +53,12 @@ const (
 // every rule in the document is written. Nothing here says which of the three a block has to be,
 // because that is the author's business and all three read correctly on the page.
 func TestTheReadmeExamplesAreValidGo(t *testing.T) {
-	for number, block := range goBlocksOfTheReadme(t) {
+	blocks := goBlocksOf(t, readmeFile)
+	if len(blocks) == 0 {
+		t.Fatalf("%s holds no Go example at all", readmeFile)
+	}
+
+	for number, block := range blocks {
 		if _, err := parseExample(block); err != nil {
 			t.Errorf("the %s Go example in %s does not parse: %v\n%s", ordinal(number+1), readmeFile, err, block)
 		}
@@ -70,7 +75,7 @@ func TestTheReadmeExamplesAreValidGo(t *testing.T) {
 func TestTheReadmeNamesOnlySymbolsThePublicSurfaceHas(t *testing.T) {
 	declared := declarationsOfThisModule(t)
 
-	for number, block := range goBlocksOfTheReadme(t) {
+	for number, block := range goBlocksOf(t, readmeFile) {
 		example, err := parseExample(block)
 		if err != nil {
 			continue // TestTheReadmeExamplesAreValidGo reports this one.
@@ -114,7 +119,12 @@ func TestTheReadmeNamesOnlyIdentifiersThisModuleDeclares(t *testing.T) {
 	declared := declarationsOfThisModule(t)
 	exempt := append(strings.Split(modulePathOfThisRepository(t), "/"), namesOfTheReadersProject...)
 
-	for _, named := range identifiersTheReadmeProseNames(t) {
+	inTheProse := identifiersNamedInTheProseOf(t, readmeFile)
+	if len(inTheProse) == 0 {
+		t.Fatalf("%s names no identifier of this library outside its code blocks", readmeFile)
+	}
+
+	for _, named := range inTheProse {
 		if slices.Contains(exempt, named.name) {
 			continue
 		}
@@ -136,7 +146,7 @@ func TestTheReadmeNamesOnlyIdentifiersThisModuleDeclares(t *testing.T) {
 // sentence a reader chooses this library on, and it stops being true in a commit that has nothing to do
 // with the README.
 func TestTheReadmeInstallsThisModuleTheWayGoModDescribesIt(t *testing.T) {
-	readme := readTheReadme(t)
+	readme := readDocument(t, readmeFile)
 	module := readTheModuleFile(t)
 
 	for _, required := range []string{
@@ -176,9 +186,9 @@ func TestTheReadmeInstallsThisModuleTheWayGoModDescribesIt(t *testing.T) {
 // `String` is exempt from the graph list: the README says once, of every stage of a chain that can describe
 // itself, that it is a fmt.Stringer, and repeating it per family would be noise.
 func TestTheReadmeNamesEveryVerbOfTheClosedSetsItDescribes(t *testing.T) {
-	readme := readTheReadme(t)
+	readme := readDocument(t, readmeFile)
 	declared := declarationsOfThisModule(t)
-	named := namesTheReadmeNames(t)
+	named := namesTheDocumentNames(t, readmeFile)
 
 	for _, verb := range declared.methodsOf("metrics/fluentapi") {
 		if !strings.HasPrefix(verb.name, "Should") {
@@ -232,7 +242,7 @@ func TestTheReadmeNamesEveryVerbOfTheClosedSetsItDescribes(t *testing.T) {
 // is one that hands back a report or an error, and `Except` is neither because an exclusion qualifies
 // the modifier in front of it.
 func TestTheReadmeCountsTheGraphFamilyCorrectly(t *testing.T) {
-	readme := readTheReadme(t)
+	readme := readDocument(t, readmeFile)
 	var modifiers, terminals []string
 
 	for _, method := range declarationsOfThisModule(t).methodsOf("graph/fluentapi") {
@@ -333,11 +343,20 @@ type declarations struct {
 	names map[string]bool
 	// byPackage is the exported methods of each package, keyed by its slash-separated directory.
 	byPackage map[string][]method
+	// fieldsByType is the exported fields of each struct type, keyed by its package's directory and its own
+	// name — `graph/projection.Summary`. A document that says *every field* of one type is what this is for,
+	// because the flat set of names above cannot say which type a field belongs to.
+	fieldsByType map[string][]string
 }
 
 // methodsOf are the exported methods this package declares, in the order they were read.
 func (d declarations) methodsOf(pkg string) []method {
 	return d.byPackage[pkg]
+}
+
+// fieldsOf are the exported fields this struct type declares, in the order they were read.
+func (d declarations) fieldsOf(pkg, name string) []string {
+	return d.fieldsByType[pkg+"."+name]
 }
 
 // declarationsOfThisModule reads every non-test Go file of the repository and collects what it declares.
@@ -347,10 +366,11 @@ func declarationsOfThisModule(t *testing.T) declarations {
 	t.Helper()
 
 	declared := declarations{
-		surface:   map[string]bool{},
-		methods:   map[string]bool{},
-		names:     map[string]bool{},
-		byPackage: map[string][]method{},
+		surface:      map[string]bool{},
+		methods:      map[string]bool{},
+		names:        map[string]bool{},
+		byPackage:    map[string][]method{},
+		fieldsByType: map[string][]string{},
 	}
 
 	for _, path := range goFilesOfThisRepository(t) {
@@ -391,20 +411,22 @@ func (d declarations) collect(pkg, path string, declaration ast.Decl) {
 		})
 	case *ast.GenDecl:
 		for _, spec := range typed.Specs {
-			d.collectSpec(path, spec)
+			d.collectSpec(pkg, path, spec)
 		}
 	}
 }
 
 // collectSpec files a type, constant or variable, and the exported members of a struct or an interface.
-// The members are here because most of what a README says about an options bag is its field names.
-func (d declarations) collectSpec(path string, spec ast.Spec) {
+// The members are here because most of what a README says about an options bag is its field names, and a
+// struct's are filed under the type they belong to as well, because a page that says *every field* of one
+// type has to be held to that type's fields rather than to every field the module declares.
+func (d declarations) collectSpec(pkg, path string, spec ast.Spec) {
 	switch typed := spec.(type) {
 	case *ast.TypeSpec:
 		d.declare(path, typed.Name)
 		switch underlying := typed.Type.(type) {
 		case *ast.StructType:
-			d.collectFields(underlying.Fields)
+			d.fieldsByType[pkg+"."+typed.Name.Name] = d.collectFields(underlying.Fields)
 		case *ast.InterfaceType:
 			d.collectFields(underlying.Methods)
 		}
@@ -415,19 +437,23 @@ func (d declarations) collectSpec(path string, spec ast.Spec) {
 	}
 }
 
-// collectFields files the exported members of a struct or an interface. An embedded field has no name
-// of its own, so it is skipped: whatever it names is declared where its type is.
-func (d declarations) collectFields(fields *ast.FieldList) {
+// collectFields files the exported members of a struct or an interface, and hands them back so that a
+// struct's can also be filed under the type they belong to. An embedded field has no name of its own, so it
+// is skipped: whatever it names is declared where its type is.
+func (d declarations) collectFields(fields *ast.FieldList) []string {
 	if fields == nil {
-		return
+		return nil
 	}
+	var exported []string
 	for _, field := range fields.List {
 		for _, name := range field.Names {
 			if name.IsExported() {
 				d.names[name.Name] = true
+				exported = append(exported, name.Name)
 			}
 		}
 	}
+	return exported
 }
 
 // declare files one exported name, and the public surface's own names twice.
@@ -562,31 +588,32 @@ func fieldNamesOfTheLiterals(example *ast.File) []string {
 	return found
 }
 
-// namesOfTheReadersProject are the backticked capitalised words of the README that name something in the
-// project a reader is holding this library against, not something in the library. `Handler` is the
-// declared type the match-target table walks `internal/api/handler.go` through, and a document that
-// could not name one would have to explain `ForClassesMatching` without an example of a class.
+// namesOfTheReadersProject are the backticked capitalised words of this repository's documents that name
+// something in the project a reader is holding this library against, not something in the library.
+// `Handler` is the declared type the match-target table walks `internal/api/handler.go` through, and a
+// document that could not name one would have to explain `ForClassesMatching` without an example of a class.
 //
 // The list is deliberately short. Anything on it is a name nothing checks, which is the cost of writing
 // an example, so a new entry is a decision rather than a way around a failing test.
 var namesOfTheReadersProject = []string{"Handler"}
 
-// namesTheReadmeQualifiesWithSomethingElse are the backticked words of the README that read as a Go name
-// qualified by something this module is not: an interface of the standard library, a package behind the
-// public surface written as a user would have to import it, and a declared type of the reader's own project.
+// namesTheDocumentsQualifyWithSomethingElse are the backticked words of this repository's documents that
+// read as a Go name qualified by something this module is not: an interface of the standard library, a
+// package behind the public surface written as a user would have to import it, and a declared type of the
+// reader's own project.
 //
 // They are exempt for the same reason namesOfTheReadersProject is, and the list is short for the same
 // reason: each entry is a name nothing checks.
-var namesTheReadmeQualifiesWithSomethingElse = []string{
+var namesTheDocumentsQualifyWithSomethingElse = []string{
 	"fmt.Stringer", "extraction.ImportKindSet", "internal/api.Handler",
 }
 
-// identifierInProse is a backticked word in the README that reads as an exported Go identifier: one
+// identifierInProse is a backticked word in a document that reads as an exported Go identifier: one
 // word, starting with a capital. A pattern, a shell command, a path and a lowercase keyword all fail it,
 // which is the point — those are not names this module can be asked about.
 var identifierInProse = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
 
-// proseName is one backticked word of the README that reads as a Go name, and where it has to be looked up.
+// proseName is one backticked word of a document that reads as a Go name, and where it has to be looked up.
 type proseName struct {
 	// spelled is the word as the document wrote it, qualifier and pointer included, so that a failure
 	// quotes the reader what they would search the document for.
@@ -598,7 +625,7 @@ type proseName struct {
 	onTheSurface bool
 }
 
-// identifiersTheReadmeProseNames are the identifiers the document names outside its code blocks: every
+// identifiersNamedInTheProseOf are the identifiers a document names outside its code blocks: every
 // `Backticked` word that reads as an exported Go name, with a trailing `()` taken off so that `Kind()`
 // is checked as the method it is.
 //
@@ -611,13 +638,13 @@ type proseName struct {
 //
 // The code blocks are cut out first because they are checked properly, against the syntax tree, by the
 // two tests above.
-func identifiersTheReadmeProseNames(t *testing.T) []proseName {
+func identifiersNamedInTheProseOf(t *testing.T, document string) []proseName {
 	t.Helper()
 
 	var found []proseName
-	for _, quoted := range regexp.MustCompile("`([^`\n]+)`").FindAllStringSubmatch(proseOfTheReadme(t), -1) {
+	for _, quoted := range regexp.MustCompile("`([^`\n]+)`").FindAllStringSubmatch(proseOf(t, document), -1) {
 		spelled := strings.TrimSuffix(quoted[1], "()")
-		if slices.Contains(namesTheReadmeQualifiesWithSomethingElse, spelled) {
+		if slices.Contains(namesTheDocumentsQualifyWithSomethingElse, spelled) {
 			continue
 		}
 		qualifier, name, qualified := strings.Cut(strings.TrimPrefix(spelled, "*"), ".")
@@ -632,27 +659,24 @@ func identifiersTheReadmeProseNames(t *testing.T) []proseName {
 		}
 		found = append(found, proseName{spelled: spelled, name: name, onTheSurface: qualifier == surfacePackage})
 	}
-	if len(found) == 0 {
-		t.Fatalf("%s names no identifier of this library outside its code blocks", readmeFile)
-	}
 	return found
 }
 
-// namesTheReadmeNames is every name the document states as a name, as a set: the identifiers of its prose
+// namesTheDocumentNames is every name a document states as a name, as a set: the identifiers of its prose
 // and the selections of its examples.
 //
 // It is what a completeness check has to be written against rather than a substring search over the
 // document, because a substring search cannot fail for a prefix — a README that names `ShouldBeBelow` and
 // nothing else satisfies `strings.Contains(readme, "ShouldBe")`, so three of the six threshold verbs would
 // be pinned by nothing.
-func namesTheReadmeNames(t *testing.T) map[string]bool {
+func namesTheDocumentNames(t *testing.T, document string) map[string]bool {
 	t.Helper()
 
 	named := map[string]bool{}
-	for _, name := range identifiersTheReadmeProseNames(t) {
+	for _, name := range identifiersNamedInTheProseOf(t, document) {
 		named[name.name] = true
 	}
-	for _, block := range goBlocksOfTheReadme(t) {
+	for _, block := range goBlocksOf(t, document) {
 		example, err := parseExample(block)
 		if err != nil {
 			continue // TestTheReadmeExamplesAreValidGo reports this one.
@@ -664,13 +688,13 @@ func namesTheReadmeNames(t *testing.T) map[string]bool {
 	return named
 }
 
-// proseOfTheReadme is the document with its fenced code blocks removed.
-func proseOfTheReadme(t *testing.T) string {
+// proseOf is a document with its fenced code blocks removed.
+func proseOf(t *testing.T, document string) string {
 	t.Helper()
 
 	var prose []string
 	fenced := false
-	for line := range strings.Lines(readTheReadme(t)) {
+	for line := range strings.Lines(readDocument(t, document)) {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 			continue
@@ -682,16 +706,15 @@ func proseOfTheReadme(t *testing.T) string {
 	return strings.Join(prose, "")
 }
 
-// goBlocksOfTheReadme are the document's ```go blocks, in the order they appear. A block fenced as
-// anything else — the shell command, the failure message a rule prints, the layout table — is not Go
-// and is not read as Go.
-func goBlocksOfTheReadme(t *testing.T) []string {
+// goBlocksOf are a document's ```go blocks, in the order they appear. A block fenced as anything else —
+// the shell command, the failure message a rule prints, the layout table — is not Go and is not read as Go.
+func goBlocksOf(t *testing.T, document string) []string {
 	t.Helper()
 
 	var blocks []string
 	var current []string
 	fenced := false
-	for line := range strings.Lines(readTheReadme(t)) {
+	for line := range strings.Lines(readDocument(t, document)) {
 		switch trimmed := strings.TrimSpace(line); {
 		case fenced && strings.HasPrefix(trimmed, "```"):
 			blocks = append(blocks, strings.Join(current, ""))
@@ -703,10 +726,7 @@ func goBlocksOfTheReadme(t *testing.T) []string {
 		}
 	}
 	if fenced {
-		t.Fatalf("%s has a code fence that is never closed", readmeFile)
-	}
-	if len(blocks) == 0 {
-		t.Fatalf("%s holds no Go example at all", readmeFile)
+		t.Fatalf("%s has a code fence that is never closed", document)
 	}
 	return blocks
 }
@@ -730,14 +750,19 @@ func parseExample(block string) (*ast.File, error) {
 	)
 }
 
-// readTheReadme returns the document's contents, failing the test if the one document a user starts from
-// is not there.
-func readTheReadme(t *testing.T) string {
+// readDocument returns a document's contents as text, failing the test if a document this repository is
+// supposed to hold is not there.
+//
+// It takes the path because README.md is not the only tested document any more: docs_test.go holds the pages
+// of the documentation site to the same syntax tree through the same helpers, and reads the site's
+// configuration, its layout and the workflow that publishes it with this too. A second reader of a file
+// would be a second thing to keep in step.
+func readDocument(t *testing.T, document string) string {
 	t.Helper()
 
-	content, err := os.ReadFile(readmeFile)
+	content, err := os.ReadFile(document)
 	if err != nil {
-		t.Fatalf("reading %s failed: %v", readmeFile, err)
+		t.Fatalf("reading %s failed: %v", document, err)
 	}
 	return string(content)
 }

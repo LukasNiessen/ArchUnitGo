@@ -19,8 +19,11 @@ import (
 // first, so that nothing below says anything about how the file is indented or where it wraps; what
 // they pin is that each command of the gate is in there, spelled the way a maintainer types it.
 
-// ciWorkflow is the one workflow of this repository. A second one would be a check somewhere the tests
-// below say nothing about, which is why the path is spelled here once.
+// ciWorkflow is the workflow that holds every check of this repository. It is not the only workflow —
+// .github/workflows/pages.yml publishes the documentation site, and docs_test.go is what holds that one to
+// what it is supposed to do — but it is the only one that gates a change, which is why the tests below are
+// about this path alone. A third workflow running a check none of them names would be a check nothing here
+// says anything about.
 const ciWorkflow = ".github/workflows/ci.yml"
 
 // gateOfThisRepository is every check a change has to pass, as the command that runs it. It is the list

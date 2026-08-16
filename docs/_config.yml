@@ -1,0 +1,47 @@
+# The documentation site's configuration. GitHub's own Jekyll is the whole toolchain: every page under
+# docs/ is Markdown with front matter, _layouts/default.html is what they are poured into, and
+# assets/docs.css is the styling. Nothing is installed, generated or vendored.
+#
+# .github/workflows/pages.yml builds this folder and publishes it; docs_test.go holds it to the library.
+
+title: ArchUnitGo
+description: Architecture rules as ordinary Go unit tests.
+lang: en
+
+# Where the site is served from. GitHub Pages puts a project site under the repository's name, so every
+# internal link and every asset is written through Jekyll's `relative_url` and never as an absolute path
+# — a link to /assets/docs.css would resolve above this site and 404.
+url: https://lukasniessen.github.io
+baseurl: /ArchUnitGo
+
+# The two places this site sends a reader who wants more than prose: the code, and the API reference the Go
+# toolchain generates from its doc comments. There is no generated reference in this site on purpose —
+# pkg.go.dev is where a Go reader looks for one, and a second copy of it would be a second thing to go stale.
+repository_url: https://github.com/LukasNiessen/ArchUnitGo
+api_reference_url: https://pkg.go.dev/github.com/LukasNiessen/ArchUnitGo
+
+# The sibling ports, named here rather than in each page's prose: someone who knows one of them should be
+# able to read this site without a map.
+siblings:
+  - name: ArchUnitTS
+    url: https://github.com/LukasNiessen/ArchUnitTS
+  - name: ArchUnitPython
+    url: https://github.com/LukasNiessen/ArchUnitPython
+
+markdown: kramdown
+highlighter: rouge
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  hard_wrap: false
+
+# Pages link to each other by filename — `[the files family](files.md)` — so that every link works while
+# reading the source on GitHub as well as on the built site. This plugin is what rewrites those links to
+# the pages' URLs; without it the site's links would 404 while the repository's still worked, which is the
+# one kind of broken link nobody notices.
+plugins:
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: false
