@@ -14,6 +14,7 @@ import (
 	"time"
 
 	archunit "github.com/LukasNiessen/ArchUnitGo"
+	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 )
 
 // The public surface names both mood stages by the type the chain actually returns, so that a
@@ -95,6 +96,41 @@ var (
 		Layer("kernel").DefinedBy("common/**").
 		Layer("files").DefinedBy("files/**").
 		WhereLayer("files").MayNotDependOnLayers("kernel")
+)
+
+// The slices family: the slicing, both moods and the terminal, each named by the type the chain actually returns
+// — including the slicing, because cutting a project into slices is the half of the rule a suite writes once and
+// branches every rule off.
+var (
+	_ archunit.SlicesBuilder          = archunit.ProjectSlices(nil).DefinedBy("internal/(**)/**")
+	_ archunit.SlicesBuilder          = archunit.ProjectSlices(nil).DefinedByRegex(`internal/([^/]+)/.*`)
+	_ archunit.SlicesShouldBuilder    = archunit.ProjectSlices(nil).DefinedBy("(*)/**").Should()
+	_ archunit.SlicesShouldNotBuilder = archunit.ProjectSlices(nil).DefinedBy("(*)/**").ShouldNot()
+	_ archunit.Checkable              = archunit.ProjectSlices(nil).
+		DefinedBy("(*)/**").Should().ContainDependency("files", "common")
+	_ archunit.SlicesDependencyCondition = archunit.ProjectSlices(nil).
+		DefinedBy("(*)/**").ShouldNot().ContainDependency("common", "files")
+	// The diagram predicate is on the positive mood alone, in both its forms, and its two modifiers are
+	// chainable in either order — so what is named here is the type the modified chain still returns.
+	_ archunit.Checkable = archunit.ProjectSlices(nil).
+		DefinedBy("(*)/**").Should().AdhereToDiagram("@startuml\ncomponent [common]\n@enduml")
+	_ archunit.SlicesDiagramCondition = archunit.ProjectSlices(nil).
+		DefinedBy("(*)/**").Should().AdhereToDiagramInFile("docs/architecture.puml").
+		IgnoringOrphanSlices().IgnoringExternalSlices()
+	// And the two report terminals a slicing has before any mood, as the method values they are: one hands the
+	// diagram back as a document, the other writes it where a reader will find it.
+	_ func(*archunit.CheckOptions) (string, error) = archunit.ProjectSlices(nil).DefinedBy("(*)/**").ToPlantUML
+	_ func(string, *archunit.CheckOptions) error   = archunit.ProjectSlices(nil).DefinedBy("(*)/**").ExportAsPlantUML
+)
+
+// And the four slicing projections, for a caller who wants the mapper rather than a rule: three of them cut a
+// name out of an identifier and the fourth relabels nothing, which is what a report of a project's own files
+// speaks. The two that take a pattern can fail, so their names are asserted in the shape they actually have.
+var (
+	_ func(string) (archunit.MapFunction, error) = archunit.SliceByPattern
+	_ func(string) (archunit.MapFunction, error) = archunit.SliceByRegex
+	_ func() archunit.MapFunction                = archunit.SliceByFileSuffix
+	_ func() archunit.MapFunction                = archunit.Identity
 )
 
 // The metrics family's four stages, each named by the type the chain actually returns, and the eight count and
@@ -270,6 +306,7 @@ var (
 	_ archunit.Violation     = archunit.MetricsZoneViolation{}
 	_ archunit.Violation     = archunit.MetricsThresholdViolation{}
 	_ archunit.Violation     = archunit.MetricsSatisfactionViolation{}
+	_ archunit.Violation     = archunit.SliceDependencyViolation{}
 	_ archunit.Circuit       = archunit.FileCycleViolation{}.Cycle
 	_ archunit.ViolationKind = archunit.KindFileCycle
 	_ archunit.ViolationKind = archunit.KindFileNaming
@@ -280,6 +317,7 @@ var (
 	_ archunit.ViolationKind = archunit.KindMetricsZone
 	_ archunit.ViolationKind = archunit.KindMetricsThreshold
 	_ archunit.ViolationKind = archunit.KindMetricsSatisfaction
+	_ archunit.ViolationKind = archunit.KindSliceDependency
 	_ archunit.Mood          = archunit.FileNamingViolation{}.Mood
 	_ archunit.Mood          = archunit.FileDependencyViolation{}.Mood
 	_ archunit.Mood          = archunit.FileExternalDependencyViolation{}.Mood
@@ -288,6 +326,7 @@ var (
 	_ archunit.Mood          = archunit.MetricsZoneViolation{}.Mood
 	_ archunit.Mood          = archunit.MetricsThresholdViolation{}.Mood
 	_ archunit.Mood          = archunit.MetricsSatisfactionViolation{}.Mood
+	_ archunit.Mood          = archunit.SliceDependencyViolation{}.Mood
 )
 
 // The report layer is on the surface too, because a user who has a rule's violations still needs the message
@@ -665,12 +704,12 @@ func TestEveryTerminalOfThisLibraryGoesThroughTheKernelsLoggedCheckDoor(t *testi
 }
 
 // terminalCheckDeclarations is how many files of this library declare a terminal's Check method: the five of
-// files/, the one of layers/ and the three of metrics/. The two dogfooding rules above are written over a
-// predicate rather than a pattern, and a predicate that matched nothing would leave both of them green, so the
-// population they read is pinned as a number as well.
+// files/, the one of layers/, the three of metrics/ and the two of slices/. The two dogfooding rules above are
+// written over a predicate rather than a pattern, and a predicate that matched nothing would leave both of them
+// green, so the population they read is pinned as a number as well.
 //
 // A rule family that lands is expected to move this by one, in the commit that adds its terminal.
-const terminalCheckDeclarations = 9
+const terminalCheckDeclarations = 11
 
 // declaresTerminalCheck says whether a file declares a terminal's Check method, which is the question the two
 // rules above — the empty-test guard's and the logged-check door's — ask of every file of this repository.
@@ -913,6 +952,7 @@ func TestThisRepositoryObeysItsOwnThirdPartyDependencyPolicy(t *testing.T) {
 		// here rather than in a reviewer's reading of go.mod.
 		archunit.ProjectFiles(nil).InFolder("files/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("layers/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
+		archunit.ProjectFiles(nil).InFolder("slices/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("metrics/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("graph/**").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
 		archunit.ProjectFiles(nil).InFolder("archtest").ShouldNot().DependOnExternalModules().Matching("*.*/**"),
@@ -1056,14 +1096,15 @@ func TestAnAdherenceRuleThisRepositoryBreaksReportsTheOffendingFiles(t *testing.
 }
 
 // theLayersOfThisRepository is the layout AGENTS.md describes, declared as a named-layer policy declares it:
-// the shared kernel, the four domain modules written so far and the report layer, one folder of this repository
-// each. It is a function rather than six repeated stages because that is the point of the declaration stage
+// the shared kernel, the five domain modules written so far and the report layer, one folder of this repository
+// each. It is a function rather than seven repeated stages because that is the point of the declaration stage
 // being a value — a project's layers are typed once and every policy below branches off them.
 func theLayersOfThisRepository() archunit.LayersBuilder {
 	return archunit.ProjectLayers(nil).
 		Layer("kernel").DefinedByFolder("common/**").
 		Layer("files").DefinedByFolder("files/**").
 		Layer("layers").DefinedByFolder("layers/**").
+		Layer("slices").DefinedByFolder("slices/**").
 		Layer("metrics").DefinedByFolder("metrics/**").
 		Layer("graph").DefinedByFolder("graph/**").
 		Layer("report").DefinedByFolder("archtest/**")
@@ -1082,7 +1123,7 @@ func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
 		t.Fatalf("SelectLayerFiles failed: %v", err)
 	}
 
-	if len(membership) != 6 {
+	if len(membership) != 7 {
 		t.Errorf("%s came to %d layers, want one key per declared layer", policy, len(membership))
 	}
 	for _, wanted := range []struct {
@@ -1092,6 +1133,7 @@ func TestProjectLayersSelectsTheFilesOfEachLayerOfThisRepository(t *testing.T) {
 		{layer: "kernel", file: "common/matching/filter.go"},
 		{layer: "files", file: "files/fluentapi/project_files.go"},
 		{layer: "layers", file: "layers/fluentapi/project_layers.go"},
+		{layer: "slices", file: "slices/fluentapi/project_slices.go"},
 		{layer: "metrics", file: "metrics/fluentapi/metrics.go"},
 		{layer: "graph", file: "graph/fluentapi/project_graph.go"},
 		{layer: "report", file: "archtest/violation_factory.go"},
@@ -1212,12 +1254,13 @@ func TestThisRepositoryObeysItsOwnLayerPolicy(t *testing.T) {
 		// which is what makes a module removable.
 		WhereLayer("files").MayOnlyDependOnLayers("kernel").
 		WhereLayer("layers").MayOnlyDependOnLayers("kernel").
+		WhereLayer("slices").MayOnlyDependOnLayers("kernel").
 		WhereLayer("metrics").MayOnlyDependOnLayers("kernel").
 		WhereLayer("graph").MayOnlyDependOnLayers("kernel").
-		// And the report layer reads what a rule reported: the kernel and the three modules that report violations,
+		// And the report layer reads what a rule reported: the kernel and the four modules that report violations,
 		// whose pure assertion halves are the only part of them it is allowed to reach — which the file rules above
 		// say the rest of. The graph module reports none, so it is left out and this clause forbids the dependency.
-		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers", "metrics").
+		WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers", "metrics", "slices").
 		// The same thing the other way round, as the blocklist a team tightening one edge would write.
 		WhereLayer("files").MayNotDependOnLayers("layers")
 
@@ -1309,10 +1352,13 @@ func TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T)
 	// forever. The guard names the layer, so a reader knows which of a policy's patterns went stale.
 	t.Cleanup(archunit.ClearGraphCache)
 
+	// The layer nobody is in is `common/util`, because AGENTS.md says in as many words that there is no such
+	// folder and there will not be one — so this test keeps failing for the reason it was written for, rather
+	// than going green the day the folder it named got filled in.
 	policy := archunit.ProjectLayers(nil).
 		Layer("kernel").DefinedByFolder("common/**").
-		Layer("slices").DefinedByFolder("slices/**").
-		WhereLayer("slices").MayOnlyDependOnLayers("kernel")
+		Layer("util").DefinedByFolder("common/util/**").
+		WhereLayer("util").MayOnlyDependOnLayers("kernel")
 
 	violations, err := policy.Check(nil)
 	if err != nil {
@@ -1329,7 +1375,7 @@ func TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T)
 	if !ok {
 		t.Fatalf("%s reports a %T, want an EmptyTestViolation", policy, violations[0])
 	}
-	if empty.Subject != `files in layer "slices"` {
+	if empty.Subject != `files in layer "util"` {
 		t.Errorf("the guard reports %q, want the layer nobody is in named", empty.Subject)
 	}
 	// And the opt-out, which is the same knob on the same bag every other terminal threads into the guard.
@@ -1339,6 +1385,423 @@ func TestALayerNoFileIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T)
 	}
 	if len(allowed) != 0 {
 		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", policy, allowed)
+	}
+}
+
+func TestProjectSlicesCutsThisRepositoryIntoItsModulesThroughThePublicSurface(t *testing.T) {
+	// The slicing half of a rule through the public surface, dogfooding on this library: no locator, so the
+	// project is the one this test is in, and the capture is the top-level folder every file of it lives in.
+	// Nothing declares the slices — this repository's own directories are the answer.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	slicing := archunit.ProjectSlices(nil).DefinedBy("(*)/**")
+
+	membership, err := slicing.SelectSliceFiles(nil)
+	if err != nil {
+		t.Fatalf("SelectSliceFiles failed: %v", err)
+	}
+
+	for _, wanted := range []struct {
+		slice string
+		file  string
+	}{
+		{slice: "common", file: "common/matching/filter.go"},
+		{slice: "files", file: "files/fluentapi/project_files.go"},
+		{slice: "layers", file: "layers/fluentapi/project_layers.go"},
+		{slice: "slices", file: "slices/fluentapi/project_slices.go"},
+		{slice: "metrics", file: "metrics/fluentapi/metrics.go"},
+		{slice: "graph", file: "graph/fluentapi/project_graph.go"},
+		{slice: "archtest", file: "archtest/violation_factory.go"},
+	} {
+		if !slices.Contains(membership[wanted.slice], wanted.file) {
+			t.Errorf("the slice %q came to %v, want %q among them", wanted.slice, membership[wanted.slice], wanted.file)
+		}
+	}
+	// The public surface is its own slice, because `(*)/**` reads a file at the root of the project as the whole
+	// of its own name. A slicing describes what it describes; there is no list of slices to leave it out of.
+	if want := []string{"archunit.go"}; !slices.Equal(membership["archunit.go"], want) {
+		t.Errorf("the slice %q came to %v, want %v", "archunit.go", membership["archunit.go"], want)
+	}
+}
+
+func TestTheLocatorReachesTheProjectThroughTheSlicesEntryPoint(t *testing.T) {
+	// The wrapper threads the locator through to the extraction, so a slicing pointed at a directory that holds no
+	// Go project says so — rather than quietly cutting up the repository this test runs in, which is what dropping
+	// the argument would look like, and which no comparison of two nil-located slicings would notice.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	slicing := archunit.ProjectSlices(&archunit.ProjectLocator{Directory: t.TempDir()}).DefinedBy("(*)/**")
+
+	membership, err := slicing.SelectSliceFiles(nil)
+
+	if err == nil {
+		t.Errorf("`project slices` came to %v against a directory that is no project, want an error naming it", membership)
+	}
+	if len(membership) != 0 {
+		t.Errorf("`project slices` came to %v, want nothing when the project cannot be located", membership)
+	}
+}
+
+func TestThisRepositoryObeysItsOwnSliceRule(t *testing.T) {
+	// AGENTS.md rule 1 as a rule about slices rather than about layers: the kernel is written against the
+	// standard library and the analysis toolchain, so no file of common/ imports a domain module. The two moods
+	// of the same sentence, on the same slicing.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	slicing := archunit.ProjectSlices(nil).DefinedBy("(*)/**")
+	for _, rule := range []archunit.Checkable{
+		slicing.ShouldNot().ContainDependency("common", "files"),
+		slicing.ShouldNot().ContainDependency("common", "layers"),
+		slicing.ShouldNot().ContainDependency("common", "slices"),
+		slicing.Should().ContainDependency("files", "common"),
+	} {
+		violations, err := rule.Check(nil)
+		if err != nil {
+			t.Fatalf("%s failed: %v", rule, err)
+		}
+		if len(violations) != 0 {
+			t.Errorf("%s reports %v, want the pass", rule, violations)
+		}
+	}
+}
+
+func TestASliceRuleThisRepositoryBreaksReportsTheFilesThatBrokeIt(t *testing.T) {
+	// The converse of the rule above, which this repository breaks on purpose: a domain module is written
+	// against the kernel, so `files` does depend on `common`. What comes back is the pair of slices and the
+	// imports that connect them, and the message a failing test would print.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectSlices(nil).DefinedBy("(*)/**").ShouldNot().ContainDependency("files", "common")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 1 {
+		t.Fatalf("%s reports %v, want the one dependency it forbids", rule, violations)
+	}
+	if kind := violations[0].Kind(); kind != archunit.KindSliceDependency {
+		t.Errorf("the violation is of kind %q, want %q", kind, archunit.KindSliceDependency)
+	}
+	broken, ok := violations[0].(archunit.SliceDependencyViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want a SliceDependencyViolation", rule, violations[0])
+	}
+	if broken.Slice != "files" || broken.DependsOn != "common" {
+		t.Errorf("the violation is about %q -> %q, want %q -> %q", broken.Slice, broken.DependsOn, "files", "common")
+	}
+	if broken.Mood != archunit.ShouldNot {
+		t.Errorf("the violation was judged in mood %s, want %s", broken.Mood, archunit.ShouldNot)
+	}
+	if len(broken.Dependencies) == 0 {
+		t.Errorf("the violation carries no files, want the imports that connect the two slices")
+	}
+
+	// And the report a test failure would print, through the same factory every other rule's violations go to.
+	message := archunit.NewViolationFactory(nil).Message(broken)
+	if !strings.HasPrefix(message, `slice "files": should not, contain dependency "common"; it depends on common through files/`) {
+		t.Errorf("the violation reads %q, want the pair of slices first and the files after it", message)
+	}
+}
+
+func TestASliceNobodyIsInFailsAsAnEmptyTestThroughThePublicSurface(t *testing.T) {
+	// The empty-test guard on this family's terminal, through the public surface: a rule about a slice the
+	// slicing did not produce is vacuous in both moods, so it is a violation rather than a pass, and the guard
+	// names the slice so a reader knows which half of the sentence went stale.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectSlices(nil).DefinedBy("(*)/**").ShouldNot().ContainDependency("files", "util")
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 1 {
+		t.Fatalf("%s reports %v, want the one slice nobody is in", rule, violations)
+	}
+	empty, ok := violations[0].(archunit.EmptyTestViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want an EmptyTestViolation", rule, violations[0])
+	}
+	if empty.Subject != `files in slice "util"` {
+		t.Errorf("the guard reports %q, want the slice nobody is in named", empty.Subject)
+	}
+	// And the opt-out, which is the same knob on the same bag every other terminal threads into the guard.
+	allowed, err := rule.Check(&archunit.CheckOptions{AllowEmptyTests: true})
+	if err != nil {
+		t.Fatalf("%s failed with AllowEmptyTests: %v", rule, err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("%s reports %v with AllowEmptyTests, want the pass", rule, allowed)
+	}
+}
+
+// thisRepositorysDiagram is the architecture of ArchUnitGo as the component diagram of its own modules, sliced
+// by top-level folder: the shared kernel that depends on nothing of the library's, the five domain modules that
+// depend on it and not on each other, the testing layer that phrases four of them, and the public surface that
+// re-exports the lot. It is AGENTS.md's four dependency rules drawn rather than typed.
+//
+// `archunit.go` is a component because `(*)/**` reads a file at the root of the project as the whole of its own
+// name — a slicing describes what it describes, and there is no list of slices to leave it out of.
+const thisRepositorysDiagram = `
+' the modules of ArchUnitGo
+@startuml
+component [common]
+component [files]
+component [layers]
+component [slices]
+component [metrics]
+component [graph]
+component [archtest]
+component [archunit.go]
+
+' every domain module is written against the kernel, and against no sibling
+[files] --> [common]
+[layers] --> [common]
+[slices] --> [common]
+[metrics] --> [common]
+[graph] --> [common]
+
+' the testing layer phrases the violations of the four families that have any
+[archtest] --> [common]
+[archtest] --> [files]
+[archtest] --> [layers]
+[archtest] --> [slices]
+[archtest] --> [metrics]
+
+' and the public surface re-exports everything, which is all it does
+[archunit.go] --> [common]
+[archunit.go] --> [files]
+[archunit.go] --> [layers]
+[archunit.go] --> [slices]
+[archunit.go] --> [metrics]
+[archunit.go] --> [graph]
+[archunit.go] --> [archtest]
+@enduml
+`
+
+func TestThisRepositoryAdheresToTheComponentDiagramOfItsOwnModules(t *testing.T) {
+	// The whole architecture as one rule, dogfooding on this library: eight components, every arrow a
+	// permission, and nothing about this repository outside the drawing. It is the rule AGENTS.md's four
+	// dependency rules are worth writing as — a sibling import nobody meant to add is an arrow the drawing does
+	// not have, and a module added without being drawn is a component nobody declared.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	rule := archunit.ProjectSlices(nil).DefinedBy("(*)/**").Should().AdhereToDiagram(thisRepositorysDiagram)
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, archunit.NewViolationFactory(nil).Message(violation))
+	}
+	// The two sizes are how the rule renders, because a whole document inside a one-line sentence would bury it.
+	if want := "adhere to diagram (8 components, 17 dependencies)"; !strings.Contains(rule.String(), want) {
+		t.Errorf("the rule reads %q, want %q in it", rule, want)
+	}
+}
+
+func TestThisRepositoryDrawsItselfAsTheDiagramItIsThenJudgedAgainst(t *testing.T) {
+	// The reverse direction and the round trip through the public surface: this library draws its own modules,
+	// writes the drawing where a reader would commit it, and the file is the string form byte for byte — which
+	// is what a user relies on when a diagram is committed beside the code. Then the rule reads that very file
+	// back and holds, which is how a codebase nobody has drawn yet starts being checked against itself.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	slicing := archunit.ProjectSlices(nil).DefinedBy("(*)/**")
+	path := filepath.Join(t.TempDir(), "docs", "architecture.puml")
+
+	document, err := slicing.ToPlantUML(nil)
+	if err != nil {
+		t.Fatalf("`to plantuml` failed: %v", err)
+	}
+	if err := slicing.ExportAsPlantUML(path, nil); err != nil {
+		t.Fatalf("`export as plantuml` failed: %v", err)
+	}
+
+	exported, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the exported diagram failed: %v", err)
+	}
+	if string(exported) != document {
+		t.Errorf("the exported diagram holds\n%s\nwant the document its string form renders\n%s", exported, document)
+	}
+	// Every module of this library is drawn, and the kernel is drawn as depending on none of them.
+	for _, want := range []string{"component [common]", "component [archtest]", "[files] --> [common]"} {
+		if !strings.Contains(document, want) {
+			t.Errorf("the drawn diagram does not hold %q:\n%s", want, document)
+		}
+	}
+	if strings.Contains(document, "[common] --> ") {
+		t.Errorf("the drawn diagram has the kernel depending on a module:\n%s", document)
+	}
+
+	rule := slicing.Should().AdhereToDiagramInFile(path)
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	for _, violation := range violations {
+		t.Errorf("%s: %s", rule, archunit.NewViolationFactory(nil).Message(violation))
+	}
+}
+
+func TestADiagramThisRepositoryBreaksReportsEveryDisagreementAtOnce(t *testing.T) {
+	// What a diagram is worth: one rule, and it reports every place the drawing and the code disagree in one
+	// run. This drawing is the one above with three deliberate mistakes — an arrow nobody drew, a module nobody
+	// declared, and a component nobody wrote — and the three findings come back in the order a reader works in.
+	t.Cleanup(archunit.ClearGraphCache)
+
+	stale := `@startuml
+component [common]
+component [files]
+component [layers]
+component [slices]
+component [graph]
+component [archtest]
+component [archunit.go]
+component [transport]
+[files] --> [common]
+[layers] --> [common]
+[slices] --> [common]
+[graph] --> [common]
+[archtest] --> [common]
+[archtest] --> [layers]
+[archtest] --> [slices]
+[archunit.go] --> [common]
+[archunit.go] --> [files]
+[archunit.go] --> [layers]
+[archunit.go] --> [slices]
+[archunit.go] --> [graph]
+[archunit.go] --> [archtest]
+@enduml
+`
+	rule := archunit.ProjectSlices(nil).DefinedBy("(*)/**").Should().AdhereToDiagram(stale)
+
+	violations, err := rule.Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+
+	if len(violations) != 3 {
+		t.Fatalf("%s reports %v, want the three disagreements it was written with", rule, violations)
+	}
+	if kind := violations[0].Kind(); kind != archunit.KindSliceDiagram {
+		t.Errorf("the violation is of kind %q, want %q", kind, archunit.KindSliceDiagram)
+	}
+	wanted := []struct {
+		finding archunit.SliceDiagramFinding
+		slice   string
+	}{
+		// The arrow the drawing is missing: the testing layer phrases the violations of the files module, and
+		// this drawing forgot to say so. Both ends are declared, which is what makes it this finding.
+		{finding: archunit.FindingUndrawnDependency, slice: "archtest"},
+		// The module the drawing does not declare. Every arrow it is an end of is left out, because what a
+		// reader has to do first is draw the component.
+		{finding: archunit.FindingUndeclaredSlice, slice: "metrics"},
+		// And the component this project has no slice for, which is how a drawing rots: a folder that was
+		// renamed or deleted after it was made.
+		{finding: archunit.FindingAbsentComponent, slice: "transport"},
+	}
+	for index, want := range wanted {
+		reported, ok := violations[index].(archunit.SliceDiagramViolation)
+		if !ok {
+			t.Fatalf("%s reports a %T, want a SliceDiagramViolation", rule, violations[index])
+		}
+		if reported.Finding != want.finding || reported.Slice != want.slice {
+			t.Errorf("the violation is %q %s, want %q %s", reported.Slice, reported.Finding, want.slice, want.finding)
+		}
+	}
+
+	// The undrawn arrow carries the imports that made it, and the report a failing test would print names them.
+	undrawn, ok := violations[0].(archunit.SliceDiagramViolation)
+	if !ok {
+		t.Fatalf("%s reports a %T, want a SliceDiagramViolation", rule, violations[0])
+	}
+	if undrawn.DependsOn != "files" || len(undrawn.Dependencies) == 0 {
+		t.Errorf("the undrawn dependency is on %q through %v, want files and the imports behind it",
+			undrawn.DependsOn, undrawn.Dependencies)
+	}
+	message := archunit.NewViolationFactory(nil).Message(undrawn)
+	if !strings.HasPrefix(message, `slice "archtest": should, adhere to diagram; `+
+		"it depends on files, which the diagram does not draw through archtest/") {
+		t.Errorf("the violation reads %q, want the slices first and the files after them", message)
+	}
+
+	// And the modifiers, on the same drawing: one of them is about the drawing's own extra components, the
+	// other about the project's isolated modules — of which this repository has none, so it changes nothing
+	// here and must not be the way the undeclared module went quiet.
+	external, err := rule.IgnoringExternalSlices().Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(external) != 2 {
+		t.Errorf("%s reports %v, want the component this project has no slice for left out", rule, external)
+	}
+	orphans, err := rule.IgnoringOrphanSlices().Check(nil)
+	if err != nil {
+		t.Fatalf("%s failed: %v", rule, err)
+	}
+	if len(orphans) != 3 {
+		t.Errorf("%s reports %v, want all three: no module of this repository is isolated", rule, orphans)
+	}
+}
+
+func TestTheSlicingsThemselvesAreOnThePublicSurfaceForDirectUse(t *testing.T) {
+	// The four projections `defined by` is written over, for a caller who wants the mapper rather than a rule —
+	// a projection of their own over common/projection, or a report in the vocabulary of slices. Each of them
+	// is run over one hand-built edge here, because what the surface owes a caller is the projection the doc
+	// comment names and not merely a function: the four differ only in what they label and what they drop, so
+	// a re-export wired to the wrong one type-checks. The two that take a pattern also reject one that does
+	// not name exactly one slice.
+	byPattern, err := archunit.SliceByPattern("internal/(**)/**")
+	if err != nil {
+		t.Fatalf("SliceByPattern failed: %v", err)
+	}
+	byRegex, err := archunit.SliceByRegex(`internal/([^/]+)/.*`)
+	if err != nil {
+		t.Fatalf("SliceByRegex failed: %v", err)
+	}
+
+	// Both pattern syntaxes slice by the folder under internal, so the dependency between two of the project's
+	// files is the dependency between the two slices they live in.
+	dependency := extraction.NewEdge("internal/api/handler.go", "internal/db/conn.go", false, extraction.ImportKindPlain)
+	for name, mapper := range map[string]archunit.MapFunction{"SliceByPattern": byPattern, "SliceByRegex": byRegex} {
+		mapped, sliced := mapper(dependency)
+		if !sliced || mapped.SourceLabel != "api" || mapped.TargetLabel != "db" {
+			t.Errorf("%s maps %v to %+v (sliced %t), want the dependency of slice \"api\" on slice \"db\"",
+				name, dependency, mapped, sliced)
+		}
+	}
+
+	// The suffix slicing names a file by what kind of file it is, and it keeps the self-edge that says a file
+	// exists at all — which is what the membership of a slice can be read off.
+	handler := extraction.SelfEdge("internal/api/order_handler.go")
+	if mapped, sliced := archunit.SliceByFileSuffix()(handler); !sliced || mapped.SourceLabel != "handler" ||
+		mapped.TargetLabel != "handler" {
+		t.Errorf("SliceByFileSuffix maps %v to %+v (sliced %t), want both ends in slice \"handler\"",
+			handler, mapped, sliced)
+	}
+
+	// Identity relabels nothing and drops nothing: the self-edge and the dependency that leaves the project
+	// both come back under the identifiers they already carried.
+	external := extraction.NewEdge("internal/api/handler.go", "gorm.io/gorm", true, extraction.ImportKindPlain)
+	for _, edge := range []extraction.Edge{handler, external} {
+		mapped, kept := archunit.Identity()(edge)
+		if !kept || mapped.SourceLabel != edge.Source || mapped.TargetLabel != edge.Target {
+			t.Errorf("Identity maps %v to %+v (kept %t), want the edge under its own identifiers", edge, mapped, kept)
+		}
+	}
+
+	if _, err := archunit.SliceByPattern("internal/**"); err == nil {
+		t.Error("SliceByPattern accepted a glob that captures nothing, want the pattern refused")
+	}
+	if _, err := archunit.SliceByRegex(`(\w+)/(\w+)/.*`); err == nil {
+		t.Error("SliceByRegex accepted an expression with two captures, want the pattern refused")
 	}
 }
 
@@ -2612,8 +3075,9 @@ func TestASuiteOfRulesThisRepositoryKeepsPassesAsNamedSubtests(t *testing.T) {
 			WhereLayer("kernel").MayOnlyDependOnLayers().
 			WhereLayer("files").MayOnlyDependOnLayers("kernel").
 			WhereLayer("layers").MayOnlyDependOnLayers("kernel").
+			WhereLayer("slices").MayOnlyDependOnLayers("kernel").
 			WhereLayer("graph").MayOnlyDependOnLayers("kernel").
-			WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers", "metrics"),
+			WhereLayer("report").MayOnlyDependOnLayers("kernel", "files", "layers", "metrics", "slices"),
 	}, nil)
 }
 

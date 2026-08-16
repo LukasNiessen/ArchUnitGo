@@ -11,9 +11,9 @@
 // layout — which is also why nothing inside the library is allowed to depend on it.
 //
 // A rule is a value, not an action: building one does no work, and only a terminal reads the project.
-// The chain starts at an entry point — ProjectFiles, ProjectLayers, Metrics and ProjectGraph today, one per
-// family as they land — and every entry point takes an optional *ProjectLocator, where nil means the project
-// the test itself is in.
+// The chain starts at an entry point — ProjectFiles, ProjectLayers, ProjectSlices, Metrics and ProjectGraph
+// today, one per family as they land — and every entry point takes an optional *ProjectLocator, where nil means
+// the project the test itself is in.
 //
 // Every selector in the library takes an exclusion, and it is spelled `except` in all four families: `in
 // folder "app/**", except "**/generated"` is one clause, so the rule a team means — everything under a folder
@@ -29,7 +29,8 @@
 // written to disk — rather than a list of what the code disagreed with. Everything else about it is the same —
 // a value, chainable modifiers, the same optional locator. A metrics chain can end in a report too: Count and
 // Distance each close with ExportAsHTML, and NewMetricsExporter writes the same page from numbers a caller has
-// already measured.
+// already measured. A slicing has such a terminal before its mood too: ToPlantUML and ExportAsPlantUML draw the
+// project's slices as the component diagram `should adhere to diagram` judges one against.
 package archunit
 
 import (
@@ -38,6 +39,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
 	"github.com/LukasNiessen/ArchUnitGo/common/logging"
+	kernelprojection "github.com/LukasNiessen/ArchUnitGo/common/projection"
 	"github.com/LukasNiessen/ArchUnitGo/common/projection/cycles"
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	filesextraction "github.com/LukasNiessen/ArchUnitGo/files/extraction"
@@ -51,6 +53,9 @@ import (
 	metricsextraction "github.com/LukasNiessen/ArchUnitGo/metrics/extraction"
 	metricsapi "github.com/LukasNiessen/ArchUnitGo/metrics/fluentapi"
 	metricsrendering "github.com/LukasNiessen/ArchUnitGo/metrics/rendering"
+	slicesassertion "github.com/LukasNiessen/ArchUnitGo/slices/assertion"
+	slicesapi "github.com/LukasNiessen/ArchUnitGo/slices/fluentapi"
+	slicesprojection "github.com/LukasNiessen/ArchUnitGo/slices/projection"
 )
 
 // ProjectLocator says where the project under analysis is. A nil *ProjectLocator means auto-detect,
@@ -200,6 +205,36 @@ type MetricsThresholdViolation = metricsassertion.ThresholdViolation
 // requirement in the words the user wrote beside their function, and the mood.
 type MetricsSatisfactionViolation = metricsassertion.SatisfactionViolation
 
+// SliceDependencyViolation says that one slice of a project depends on another and the rule does not allow it,
+// or that the rule required that dependency and the project does not have it. It is what `should contain
+// dependency` and `should not contain dependency` report, at most one per rule — carrying the two slices as the
+// slicing named them, the mood the rule was written in and the concrete file dependencies that connect them,
+// which a required dependency that is missing has none of.
+type SliceDependencyViolation = slicesassertion.DependencyViolation
+
+// SliceDiagramViolation says that a project and the component diagram somebody drew of it disagree in one
+// place. It is what `should adhere to diagram` and `should adhere to diagram in file` report, one per
+// disagreement rather than one per rule — carrying which of the three findings it is, the names it is about
+// and, for a dependency the diagram does not draw, the concrete file dependencies that made it.
+type SliceDiagramViolation = slicesassertion.DiagramViolation
+
+// SliceDiagramFinding is which of the three ways a project and a diagram of it can disagree a
+// SliceDiagramViolation reports, and the field a report reads before the others: the rest of the violation
+// means what the finding says it means.
+type SliceDiagramFinding = slicesassertion.DiagramFinding
+
+const (
+	// FindingUndrawnDependency is a dependency the project has and the diagram does not draw. It is the
+	// finding a diagram is drawn for, and the only one no modifier switches off.
+	FindingUndrawnDependency = slicesassertion.FindingUndrawnDependency
+	// FindingUndeclaredSlice is a slice the project has and the diagram does not declare, which `ignoring
+	// orphan slices` leaves out for the slices no dependency reaches.
+	FindingUndeclaredSlice = slicesassertion.FindingUndeclaredSlice
+	// FindingAbsentComponent is a component the diagram declares and the project has no slice for, which
+	// `ignoring external slices` leaves out.
+	FindingAbsentComponent = slicesassertion.FindingAbsentComponent
+)
+
 const (
 	// KindEmptyTest is the kind of EmptyTestViolation.
 	KindEmptyTest = assertion.KindEmptyTest
@@ -221,6 +256,10 @@ const (
 	KindMetricsThreshold = metricsassertion.KindMetricsThreshold
 	// KindMetricsSatisfaction is the kind of MetricsSatisfactionViolation.
 	KindMetricsSatisfaction = metricsassertion.KindMetricsSatisfaction
+	// KindSliceDependency is the kind of SliceDependencyViolation.
+	KindSliceDependency = slicesassertion.KindSliceDependency
+	// KindSliceDiagram is the kind of SliceDiagramViolation.
+	KindSliceDiagram = slicesassertion.KindSliceDiagram
 )
 
 // FilesBuilder is the scope stage of a rule about files, which ProjectFiles and Files return and every
@@ -290,6 +329,42 @@ type LayerPolicyBuilder = layersapi.LayerPolicyBuilder
 // first clause, because a chain that went back to declaring would leave Checkable — and it is a Checkable, so
 // a whole N-layer policy can be stored, passed to a helper or kept in a list of the suite's rules as one rule.
 type LayersPolicyCondition = layersapi.LayersPolicyCondition
+
+// SlicesBuilder is the entry point and the slicing of a rule about slices, which ProjectSlices returns and
+// both slicing verbs hand back a new one of. It is named here because the slicing is the half of the rule
+// worth typing once: one of these can be stored in a struct field or a package-level helper and branched into
+// as many rules as a suite needs.
+type SlicesBuilder = slicesapi.SlicesBuilder
+
+// SlicesShouldBuilder is the positive mood of a rule about slices, which SlicesBuilder.Should returns:
+// `project slices, defined by "internal/(**)/**", should`.
+type SlicesShouldBuilder = slicesapi.SlicesShouldBuilder
+
+// SlicesShouldNotBuilder is the negated mood of a rule about slices, which SlicesBuilder.ShouldNot returns:
+// `project slices, defined by "internal/(**)/**", should not`. It is the positive builder's twin — the same
+// slicing, the same predicate wherever a negation means anything, one flag apart — and it is the mood a rule
+// about slices is nearly always written in. `adhere to diagram` is offered on SlicesShouldBuilder alone,
+// because a diagram is a closed statement about a whole project and its negation would ask that a project
+// contradict its own documentation somewhere.
+type SlicesShouldNotBuilder = slicesapi.SlicesShouldNotBuilder
+
+// SlicesDependencyCondition is the terminal of `project slices, defined by "internal/(**)/**", should not,
+// contain dependency "api" -> "db"`, which ContainDependency returns on either mood. Both ends of the
+// dependency are arguments of that one verb, so there is no object stage to chain, and it is a Checkable, so a
+// built rule can be stored, passed to a helper or kept in a list of the suite's rules.
+type SlicesDependencyCondition = slicesapi.SlicesDependencyCondition
+
+// SlicesDiagramCondition is the predicate and the terminal of `project slices, defined by "internal/(**)/**",
+// should, adhere to diagram in file "docs/architecture.puml"`, which AdhereToDiagram and AdhereToDiagramInFile
+// return on the positive mood. Its two modifiers — IgnoringOrphanSlices, IgnoringExternalSlices — are chainable
+// in either order, and it is a Checkable, so a whole architecture's worth of rule can be stored, passed to a
+// helper or kept in a list of the suite's rules as one rule.
+type SlicesDiagramCondition = slicesapi.SlicesDiagramCondition
+
+// MapFunction is a projection: what one dependency of the graph becomes when the library relabels it, or
+// nothing at all when the projection is not about it. It is what SliceByPattern and its siblings return, and it
+// is named here so that a caller can hold one in a variable or a struct field.
+type MapFunction = kernelprojection.MapFunction
 
 // MetricsBuilder is the scope stage of a rule about the numbers a project's code adds up to, which Metrics
 // returns and every scope verb — WithName, InFolder, InPath, ForClassesMatching — hands back a new one of. It
@@ -518,6 +593,71 @@ func ProjectLayers(locator *ProjectLocator) LayersBuilder {
 // Layers is ProjectLayers under the shorter name the family also gives it. The two are one entry point.
 func Layers(locator *ProjectLocator) LayersBuilder {
 	return layersapi.Layers(locator)
+}
+
+// ProjectSlices is the entry point of every rule about slices: `project slices`. The locator is optional and
+// nil means auto-detect.
+//
+// A slice is a name cut out of a file's identifier, and the capture in the slicing pattern is where that name
+// comes from — so a rule says what the project's slices are and then what they may depend on:
+//
+//	rule := archunit.ProjectSlices(nil).
+//		DefinedBy("internal/(**)/**").
+//		ShouldNot().
+//		ContainDependency("api", "db")
+//
+// Nothing declares the slices: `internal/(**)/**` says that this project's slices are its folders under
+// internal, so `internal/api/handler.go` is in the slice `api`, and a file the pattern does not match is in no
+// slice at all. That is the difference from a layer policy, where every layer is named before any file is read.
+//
+// The other rule a slicing can be asked for is the whole architecture at once, against the component diagram
+// somebody drew of it — and the reverse of it, which draws the diagram out of the project as it is:
+//
+//	rule := archunit.ProjectSlices(nil).
+//		DefinedBy("internal/(**)/**").
+//		Should().
+//		AdhereToDiagramInFile("docs/architecture.puml")
+//	err := archunit.ProjectSlices(nil).DefinedBy("internal/(**)/**").ExportAsPlantUML("docs/architecture.puml", nil)
+//
+// There is no shorter alias for it, unlike ProjectFiles and ProjectLayers: `slices` alone is the name of a
+// standard library package, and a chain starting with it would read as one.
+func ProjectSlices(locator *ProjectLocator) SlicesBuilder {
+	return slicesapi.ProjectSlices(locator)
+}
+
+// SliceByPattern is the slicing behind `defined by`, for a caller who wants the projection itself: the mapper
+// that labels every dependency of the graph with the slices of its two ends, named by what the glob's one
+// capture matched. `internal/(**)/**` puts `internal/api/handler.go` in the slice `api`.
+//
+// The error is a glob that will not compile, or one that does not capture exactly one name.
+func SliceByPattern(glob string) (MapFunction, error) {
+	return slicesprojection.SliceByPattern(glob)
+}
+
+// SliceByRegex is SliceByPattern with the pattern read as Go's own regexp syntax, and the projection behind
+// `defined by regex`: `internal/([^/]+)/.*` is `internal/(**)/**` written in the substrate. The expression is
+// anchored at both ends, as every pattern in this library is.
+//
+// The error is an expression that will not compile, or one that does not have exactly one capturing group.
+func SliceByRegex(expression string) (MapFunction, error) {
+	return slicesprojection.SliceByRegex(expression)
+}
+
+// SliceByFileSuffix is the slicing that names a file by what kind of file it is rather than by where it lives:
+// the last `_`-separated word of its name, so `order_handler.go` and `user_handler.go` are both in the slice
+// `handler` wherever in the project they sit. A name with no `_` in it is its own slice.
+//
+// It is the slicing for a rule about a kind of file — every handler, every repository, every store — and the
+// one slicing that has no pattern to get wrong, so it takes no argument and returns no error.
+func SliceByFileSuffix() MapFunction {
+	return slicesprojection.SliceByFileSuffix()
+}
+
+// Identity is the projection that relabels nothing: every dependency of the graph under the identifiers it
+// already carries, self-dependencies included. It is the mapper a report of a project's own files speaks, and
+// the one to reach for when what is wanted is the graph as it was extracted.
+func Identity() MapFunction {
+	return kernelprojection.Identity()
 }
 
 // Metrics is the entry point of every rule about the numbers a project's code adds up to: `metrics`. The

@@ -15,6 +15,7 @@ import (
 	filesassertion "github.com/LukasNiessen/ArchUnitGo/files/assertion"
 	layersassertion "github.com/LukasNiessen/ArchUnitGo/layers/assertion"
 	metricsassertion "github.com/LukasNiessen/ArchUnitGo/metrics/assertion"
+	slicesassertion "github.com/LukasNiessen/ArchUnitGo/slices/assertion"
 )
 
 // theEmptyTestHint is the note a report adds to a rule that selected nothing, written out here rather than
@@ -299,6 +300,56 @@ func TestEveryViolationTheLibraryReportsIsPhrasedFromItsOwnData(t *testing.T) {
 			message: `internal/api: should not, satisfy "be mostly concrete"; ` +
 				"it does, at abstractness 0.3333333333333333",
 		},
+		{
+			name: "a slice that should not depend on another and does",
+			violation: slicesassertion.NewDependencyViolation("api", "db", kernel.ShouldNot,
+				extraction.NewEdge("internal/api/handler.go", "internal/db/conn.go", false, extraction.ImportKindPlain),
+			),
+			// The subject is the depending slice and the requirement names the other one, so the sentence is
+			// the rule without the end the subject already gave. The files are where to look, as they are for
+			// every family whose subject is a group rather than a file.
+			message: `slice "api": should not, contain dependency "db"; ` +
+				"it depends on db through internal/api/handler.go -> internal/db/conn.go",
+		},
+		{
+			name:      "a slice that should depend on another and does not",
+			violation: slicesassertion.NewDependencyViolation("db", "domain", kernel.Should),
+			// The one violation in the library that is about something absent, and it is phrased as the absence
+			// rather than as a list of no files: the projection has nothing to show, which is the offense.
+			message: `slice "db": should, contain dependency "domain"; it does not depend on domain`,
+		},
+		{
+			name: "a dependency the diagram of the project does not draw",
+			violation: slicesassertion.NewUndrawnDependencyViolation("api", "db",
+				extraction.NewEdge("internal/api/handler.go", "internal/db/conn.go", false, extraction.ImportKindPlain),
+			),
+			// The finding a diagram is drawn for, and the words say what to do about it: the arrow is missing
+			// from the drawing, and the files are what a reader decides between drawing it and deleting the
+			// import by. The requirement is spelled out because `adhere to diagram` has one mood.
+			message: `slice "api": should, adhere to diagram; ` +
+				"it depends on db, which the diagram does not draw through internal/api/handler.go -> internal/db/conn.go",
+		},
+		{
+			name:      "a slice the diagram of the project does not declare",
+			violation: slicesassertion.NewUndeclaredSliceViolation("ui"),
+			// The subject is a slice, so the reader is told to open the drawing and add a component to it. The
+			// arrows it is an end of are not reported until it is one of the components the diagram is about.
+			message: `slice "ui": should, adhere to diagram; the diagram does not declare it`,
+		},
+		{
+			name:      "a component the project has no slice for",
+			violation: slicesassertion.NewAbsentComponentViolation("cache"),
+			// The other direction, and the subject changes with it: a component rather than a slice, because
+			// the name is the drawing's own and it is the drawing a reader has to go and change.
+			message: `component "cache": should, adhere to diagram; the project has no slice for it`,
+		},
+		{
+			// A violation built by hand can carry a finding that is none of the three, and a report of it says
+			// what it can rather than dropping the line: a gap in a report is how a reader finds out.
+			name:      "a diagram violation of no finding at all",
+			violation: slicesassertion.DiagramViolation{Finding: 42, Slice: "api"},
+			message:   `slice "api": should, adhere to diagram; unknown finding`,
+		},
 	} {
 		t.Run(wanted.name, func(t *testing.T) {
 			message := archtest.NewViolationFactory(nil).Message(wanted.violation)
@@ -330,6 +381,9 @@ func TestEveryKindOfViolationTheLibraryDeclaresHasAPhrasingOfItsOwn(t *testing.T
 			"internal/api/handler.go", "lines of code", 900, "below", 400, kernel.Should),
 		metricsassertion.KindMetricsSatisfaction: metricsassertion.NewSatisfactionViolation(
 			"internal/api.Handler", "method count", 40, "be at most 10 methods wide", kernel.Should),
+		slicesassertion.KindSliceDependency: slicesassertion.NewDependencyViolation(
+			"api", "db", kernel.ShouldNot),
+		slicesassertion.KindSliceDiagram: slicesassertion.NewUndrawnDependencyViolation("api", "db"),
 	}
 
 	for kind, violation := range phrased {
