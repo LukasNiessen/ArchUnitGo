@@ -10,6 +10,12 @@ ArchUnitGo is the Go member of **ArchUnitEverything**, one architecture-testing 
 Siblings: [ArchUnitTS](https://github.com/LukasNiessen/ArchUnitTS) ·
 [ArchUnitPython](https://github.com/LukasNiessen/ArchUnitPython).
 
+**Documentation site:** <https://lukasniessen.github.io/ArchUnitGo/> — the same material as this file with
+a page per family, built from [docs/](docs). The API reference is
+[pkg.go.dev](https://pkg.go.dev/github.com/LukasNiessen/ArchUnitGo), generated from the doc comments in the
+source. This file stays the short version, and it is the one place that states
+[what is not implemented yet](#what-is-not-implemented-yet).
+
 - [Install](#install)
 - [Your first rule](#your-first-rule)
 - [What a failure looks like](#what-a-failure-looks-like)

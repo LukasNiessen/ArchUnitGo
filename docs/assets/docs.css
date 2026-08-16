@@ -1,0 +1,342 @@
+/*
+ * The whole of this site's styling. One stylesheet, no framework, no build step: the site is Markdown
+ * poured into _layouts/default.html, and this is what makes it readable.
+ *
+ * Both color schemes are declared as custom properties and switched by prefers-color-scheme, so the page a
+ * reader gets is the one their system asked for and neither scheme is an afterthought.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --page: #ffffff;
+  --sunken: #f4f6f8;
+  --ink: #1c2024;
+  --ink-soft: #4b5563;
+  --rule: #dfe3e8;
+  --accent: #006c85;
+  --accent-soft: #e3f1f5;
+  --code-ink: #22303a;
+
+  --measure: 46rem;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #11161a;
+    --sunken: #1a2127;
+    --ink: #e7ecf0;
+    --ink-soft: #a8b3bd;
+    --rule: #2b343c;
+    --accent: #67cde3;
+    --accent-soft: #17313a;
+    --code-ink: #dbe4ea;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.65;
+  -webkit-text-size-adjust: 100%;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip:focus {
+  left: 1rem;
+  top: 1rem;
+  z-index: 2;
+  padding: 0.5rem 0.75rem;
+  background: var(--page);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+/* ---- the banner ---- */
+
+.banner {
+  border-bottom: 1px solid var(--rule);
+  background: var(--sunken);
+}
+
+.banner-inner {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 1.25rem;
+}
+
+.wordmark {
+  font-size: 1.4rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.tagline {
+  margin: 0.15rem 0 0.6rem;
+  color: var(--ink-soft);
+}
+
+.elsewhere {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* ---- the two columns ---- */
+
+.page {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.25rem 3rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 2.5rem;
+}
+
+@media (min-width: 60rem) {
+  .page {
+    grid-template-columns: 14rem minmax(0, 1fr);
+  }
+
+  .chapters {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding-top: 2rem;
+  }
+}
+
+.chapters ol {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  font-size: 0.94rem;
+}
+
+.chapters li {
+  margin: 0;
+  border-left: 2px solid var(--rule);
+}
+
+.chapters a {
+  display: block;
+  padding: 0.35rem 0.75rem;
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.chapters a:hover {
+  color: var(--accent);
+}
+
+.chapters a[aria-current='page'] {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+}
+
+/* ---- the prose ---- */
+
+.prose {
+  max-width: var(--measure);
+  padding-top: 1.5rem;
+}
+
+.prose h1,
+.prose h2,
+.prose h3 {
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.prose h1 {
+  font-size: 2rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.prose h2 {
+  font-size: 1.4rem;
+  margin: 2.5rem 0 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rule);
+}
+
+.prose h3 {
+  font-size: 1.1rem;
+  margin: 1.75rem 0 0.5rem;
+}
+
+.prose blockquote {
+  margin: 1.25rem 0;
+  padding: 0.1rem 1rem;
+  border-left: 3px solid var(--accent);
+  color: var(--ink-soft);
+}
+
+.prose table {
+  width: 100%;
+  margin: 1.25rem 0;
+  border-collapse: collapse;
+  font-size: 0.94rem;
+}
+
+.prose th,
+.prose td {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose th {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.prose code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--code-ink);
+}
+
+.prose pre {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.86rem;
+}
+
+.prose hr {
+  margin: 2.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.prose li {
+  margin: 0.35rem 0;
+}
+
+/* ---- Rouge, the highlighter GitHub Pages ships with ---- */
+
+.highlight .c,
+.highlight .c1,
+.highlight .cm,
+.highlight .cs {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.highlight .k,
+.highlight .kd,
+.highlight .kn,
+.highlight .kp,
+.highlight .kr,
+.highlight .kt {
+  color: var(--accent);
+}
+
+.highlight .s,
+.highlight .s1,
+.highlight .s2,
+.highlight .sb,
+.highlight .se {
+  color: #a4432b;
+}
+
+.highlight .nf,
+.highlight .nx {
+  font-weight: 600;
+}
+
+.highlight .m,
+.highlight .mi,
+.highlight .mf {
+  color: #7a4bab;
+}
+
+@media (prefers-color-scheme: dark) {
+  .highlight .s,
+  .highlight .s1,
+  .highlight .s2,
+  .highlight .sb,
+  .highlight .se {
+    color: #e8a58c;
+  }
+
+  .highlight .m,
+  .highlight .mi,
+  .highlight .mf {
+    color: #c9a6ee;
+  }
+}
+
+/* ---- the colophon ---- */
+
+.colophon {
+  border-top: 1px solid var(--rule);
+  background: var(--sunken);
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.colophon p {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0.6rem 1.25rem;
+}
+
+.colophon p:first-child {
+  padding-top: 1.25rem;
+}
+
+.colophon p:last-child {
+  padding-bottom: 1.5rem;
+}

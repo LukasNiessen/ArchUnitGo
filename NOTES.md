@@ -2740,3 +2740,70 @@ Deviations from the issue text, `AGENTS.md` or sibling convention. One line each
   *nothing else gets into your module graph* while `golang.org/x/mod` and `golang.org/x/sync` come along
   indirectly. The module path and the Go version are read out of `go.mod` for the same reason, one line lower down:
   an install instruction naming a path this module does not have stops a reader at the first thing they type.
+
+## Issue #42 — Documentation site on GitHub Pages
+
+- WHY: the site is Markdown poured into one layout by GitHub's own Jekyll, with no generator, no theme gem
+  and no lockfile. "Same information architecture as the siblings" is a narrative guide beside a generated
+  API reference, and for a Go port the generated half already exists: `pkg.go.dev` renders every doc comment
+  of the public surface. A second reference generated into this repository would be a second thing to go
+  stale and the module's second toolchain, after `golang.org/x/tools` — which is a sentence the README and
+  `docs/index.md` both promise a reader. So the site holds the guide and links the reference, and says in as
+  many words that it does.
+- WHY: the check for the site is `docs_test.go`, run by `go test ./...` on every push to every branch, and
+  `.github/workflows/pages.yml` only builds and publishes. A page that names a verb this library does not
+  have is wrong before it is published rather than after, and a publish workflow watching `main` alone would
+  be a gate that runs after the merge. The test asserts that separation: the pages workflow runs no command
+  of `gateOfThisRepository`.
+- WHY: the navigation is generated in the layout from every page's `nav_order` front matter, and no page
+  filename appears in `_config.yml` or in `_layouts/default.html`. A hardcoded chapter list is the one part
+  of a docs folder that can silently disagree with what is in it; `docs_test.go` holds every page to stating
+  a layout, a title, a description and a contiguous unique `nav_order`, holds the front-matter title to the
+  page's own first heading, and holds the layout to naming no page.
+- WHY: pages link to each other by filename — `[the files family](files.md)` — plus the
+  `jekyll-relative-links` plugin, so every link works while reading the source on GitHub as well as on the
+  built site. A raw HTML `<a href>` is left unrewritten by that plugin and 404s once published, which is the
+  one kind of broken link nobody notices, so raw HTML links are a test failure. Internal links, including
+  their `#fragment`s, are resolved against the pages and their headings.
+- WHY: the completeness guard is per family: every exported method of `<family>/fluentapi` has to be named
+  on `docs/<family>.md`, exact match against the names the page states rather than `strings.Contains`. The
+  three self-describing methods — `String`, `Mood`, `Selectors` — are exempt because `docs/grammar.md`
+  documents them once for every family that has them, and the same test holds that page to naming them, so
+  the exemption cannot quietly become three verbs no page documents. They are not on every stage: `String`
+  is on all but `LayerPolicyBuilder`, `Mood` only on the files and slices mood stages — the layers and
+  metrics families carry the mood in the predicate and the graph family has none — and `Selectors` only on
+  the files and metrics scope stages, which are the two that hand their compiled filters back. The exemption
+  is by name, so a family that declares none of the three is unaffected by it. Every count the pages state
+  is recomputed off the syntax tree the way `readme_test.go` recomputes nine and thirteen.
+- WHY: the build job's permissions are `contents: read` **and** `pages: read`, not `contents: read` alone.
+  Naming one permission sets every unnamed one to `none`, and `actions/configure-pages` asks the API for the
+  repository's Pages settings to work out the baseurl — with no read of them it gets a 403 and nothing is
+  ever built. The write half stays on the deploy job.
+- WHY: the deploy job's condition is `github.ref == 'refs/heads/main'` rather than the sibling's
+  `github.event_name == 'push'` — the trigger already restricts pushes to `main`, and the branch test is
+  what also covers a `workflow_dispatch` from a branch, which has no branch filter of its own.
+- WHY: five helpers of `readme_test.go` now take the document as a parameter (`readDocument`, `proseOf`,
+  `goBlocksOf`, `identifiersNamedInTheProseOf`, `namesTheDocumentNames`) so that `docs_test.go` holds ten
+  pages to the same syntax tree through the same code. Two emptiness assertions moved out of the helpers
+  into the README's own tests, because they are true of that document and not of every one: `docs/internals.md`
+  has fenced blocks and no Go example in it at all. The two exemption lists are shared unchanged — a name
+  that is fine in the README is fine on the site — and their comments now say "this repository's documents".
+- WHY: `ci_test.go`'s comment on `ciWorkflow` said this repository has one workflow. Adding a second made
+  that prose false in the same diff, so it now names `pages.yml`, says which of the two gates a change, and
+  keeps the reason the tests below are about `ci.yml` alone.
+- WHY: `TestTheDocsSiteCountsTheSurfacesItStatesAsClosedSets` recomputed only sets of *methods*, which left
+  three of the site's closed sets pinned by nothing, because what states them is package-level. So: the four
+  exported projections of `docs/patterns.md` (`exportedProjections` — the `SliceBy` family plus `Identity`,
+  which has no shared prefix and so is looked up by name, and looked up rather than assumed so that
+  un-exporting it goes red too); the five `Project` names of `docs/grammar.md`'s entry-point table, which is
+  the four entry points and the `*ProjectLocator` each takes; and one exclusion count per family, held to
+  *four in the files family, five in metrics, three in layers*. The last is over the **distinct** `Except`
+  names of a family rather than its methods, because `files/fluentapi` declares the same four on its scope
+  stage and again on its dependency clause, while the page is counting the vocabulary a reader learns.
+  `verbsOf` still drops every `Except` — an exclusion is not a verb picked from a list — so `exclusionsOf`
+  is a second reading of the same tree rather than a change to that one.
+- WHY: the two dashes in `docs/grammar.md`'s `Also spelled` column are checked against the absence of
+  `archunit.Slices` and `archunit.Graph`, in the style of `TestTheReadmeIsHonestAboutWhatIsMissing`. An alias
+  somebody adds is one more package-level function: it makes that column, *the two families without a second
+  spelling*, `docs/slices.md`'s *no shorter alias* and `docs/metrics.md`'s *no second spelling* all false at
+  once, and no count of the surface and no lookup of what a page names can fail for a name that is not there.
