@@ -1,6 +1,14 @@
-# ArchUnitGo
+# ArchUnitGo - Architecture Testing
 
-[![CI](https://github.com/LukasNiessen/ArchUnitGo/actions/workflows/ci.yml/badge.svg)](https://github.com/LukasNiessen/ArchUnitGo/actions/workflows/ci.yml)
+<div align="center" name="top">
+  <img align="center" src="assets/AG-logo.jpg" width="150" height="150" alt="ArchUnitGo Logo">
+
+<!-- spacer -->
+<p></p>
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Build & tests](https://img.shields.io/github/actions/workflow/status/LukasNiessen/ArchUnitGo/ci.yml?branch=main&label=build%20%26%20tests)](https://github.com/LukasNiessen/ArchUnitGo/actions/workflows/ci.yml) [![GitHub stars](https://img.shields.io/github/stars/LukasNiessen/ArchUnitGo.svg)](https://github.com/LukasNiessen/ArchUnitGo) [![Go Reference](https://pkg.go.dev/badge/github.com/LukasNiessen/ArchUnitGo.svg)](https://pkg.go.dev/github.com/LukasNiessen/ArchUnitGo)
+
+</div>
 
 Architecture rules as ordinary Go unit tests. Write the sentence your team already says out loud —
 *the api does not touch the database* — as a value, and let `go test` tell you where the code
@@ -14,24 +22,13 @@ Siblings: [ArchUnitTS](https://github.com/LukasNiessen/ArchUnitTS) ·
 a page per family, built from [docs/](docs). The API reference is
 [pkg.go.dev](https://pkg.go.dev/github.com/LukasNiessen/ArchUnitGo), generated from the doc comments in the
 source. This file stays the short version, and it is the one place that states
-[what is not implemented yet](#what-is-not-implemented-yet).
+[what is not implemented yet](#-what-is-not-implemented-yet).
 
-- [Install](#install)
-- [Your first rule](#your-first-rule)
-- [What a failure looks like](#what-a-failure-looks-like)
-- [The grammar](#the-grammar)
-- [Patterns and identifiers](#patterns-and-identifiers)
-- [One example per family](#one-example-per-family)
-  - [Files](#files) · [Layers](#layers) · [Slices](#slices) · [Metrics](#metrics) · [Dependency graph](#dependency-graph)
-- [A whole suite](#a-whole-suite)
-- [Without a test framework](#without-a-test-framework)
-- [Check options](#check-options)
-- [Keeping one import out of the graph](#keeping-one-import-out-of-the-graph)
-- [When a rule selects nothing](#when-a-rule-selects-nothing)
-- [What is not implemented yet](#what-is-not-implemented-yet)
-- [The map](#the-map)
+_Inspired by the amazing [ArchUnit](https://www.archunit.org/) library, but we are not affiliated with ArchUnit._
 
-## Install
+[Install](#-install) • [Your First Rule](#-your-first-rule) • [What a Failure Looks Like](#-what-a-failure-looks-like) • [The Grammar](#-the-grammar) • [Patterns and Identifiers](#-patterns-and-identifiers) • [One Example per Family](#-one-example-per-family) • [A Whole Suite](#-a-whole-suite) • [Without a Test Framework](#-without-a-test-framework) • [Check Options](#-check-options) • [Keeping One Import Out of the Graph](#-keeping-one-import-out-of-the-graph) • [When a Rule Selects Nothing](#-when-a-rule-selects-nothing) • [What Is Not Implemented Yet](#-what-is-not-implemented-yet) • [The Map](#-the-map)
+
+## ⚡ Install
 
 ```sh
 go get github.com/LukasNiessen/ArchUnitGo
@@ -48,7 +45,7 @@ import the name it has:
 import archunit "github.com/LukasNiessen/ArchUnitGo"
 ```
 
-## Your first rule
+## 🚀 Your First Rule
 
 ```go
 package architecture_test
@@ -81,7 +78,7 @@ That is the whole setup. There is nothing to register, nothing to configure and 
   rule's result and the error is the library or the environment failing. `AssertPasses` turns the
   first into `t.Error` and the second into a message saying the check could not be run at all.
 
-## What a failure looks like
+## 📢 What a Failure Looks Like
 
 One `t.Error`, carrying the rule as it was written and then the violations, numbered from one:
 
@@ -98,7 +95,7 @@ reader has to compare their glob against. Violations carry data rather than pros
 requirement as a compiled pattern, what was found instead — and all phrasing happens in one place, so
 `AssertOptions.Message` is where colour (`archunit.DefaultPalette()`) and a violation limit live.
 
-## The grammar
+## 🗣️ The Grammar
 
 Every rule is an English sentence, read left to right, and every family spells the same stages:
 
@@ -137,7 +134,7 @@ The vocabulary is fixed, and deliberately small:
   small := api.Should().AdhereTo(under400Lines, "be at most 400 lines long")
   ```
 
-## Patterns and identifiers
+## 🔎 Patterns and Identifiers
 
 A file is identified by its path relative to the project root, always with forward slashes:
 `internal/api/handler.go`. A declared type — `classes`, in the family's vocabulary — is
@@ -171,7 +168,7 @@ violation message names it:
 `DefinedByRegex` and `SliceByRegex` take Go's own `regexp` syntax instead, for the patterns a glob
 cannot spell.
 
-## One example per family
+## 🎯 One Example per Family
 
 ### Files
 
@@ -349,7 +346,7 @@ Thirteen terminals: `Snapshot()` for the report as data, `ToDot`, `ToMermaid`, `
 for the same project every time, so a diagram committed beside the code is reviewable in a pull
 request.
 
-## A whole suite
+## 🧩 A Whole Suite
 
 More than one rule is a map and one call, each rule in its own named subtest:
 
@@ -376,7 +373,7 @@ is.
 `Check(*CheckOptions) ([]Violation, error)` is all of it — so a helper that loops over a list of rules
 never has to know which family they came from.
 
-## Without a test framework
+## 🧪 Without a Test Framework
 
 `Check` is the universal terminal, and the report layer is separate from it:
 
@@ -395,7 +392,7 @@ concrete type — `archunit.KindFileDependency`, `archunit.KindEmptyTest` and th
 switch on `archunit.FileDependencyViolation` and its siblings for the data itself.
 `NewViolationFactory` phrases one violation at a time, for a report of your own shape.
 
-## Check options
+## ⚙️ Check Options
 
 One options bag, and `nil` is always the defaults. Every default is a zero value, so a check is quiet,
 strict about empty selections, free to reuse a cached graph, and looks at the production code under
@@ -427,7 +424,7 @@ holds the file a CI job archives, and the four levels are `LogLevelDebug`, `LogL
 default), `LogLevelWarn` and `LogLevelError`. A technical failure is still the error `Check` returns;
 a log line is never how this library reports something.
 
-## Keeping one import out of the graph
+## 🚫 Keeping One Import Out of the Graph
 
 Some imports are not dependencies. The directive is written the way Go writes a machine-readable
 comment, so `gofmt` leaves it where you put it:
@@ -445,7 +442,7 @@ only by a check that names that scope in `CheckOptions.IgnoreScopes`, and counts
 dependency everywhere else. The directive belongs to the one import it is written on, either trailing
 it or on a comment-only line directly above it.
 
-## When a rule selects nothing
+## 🛡️ When a Rule Selects Nothing
 
 **Zero matches is a violation, not a pass.** A selector matching no file is almost always a stale glob or a
 renamed folder, and such a rule is green forever — so the guard is wired into every terminal, in whichever of
@@ -475,7 +472,7 @@ printed as well as when it is checked. The one stage that cannot is `LayerPolicy
 between `WhereLayer` and its predicate: it has named a layer and not yet said anything about it, so there is
 no sentence of its own for it to print.
 
-## What is not implemented yet
+## 🚧 What Is Not Implemented Yet
 
 Documented from the source, so this list is what is actually missing today:
 
@@ -501,7 +498,7 @@ Documented from the source, so this list is what is actually missing today:
 - **Everything is synchronous** and analysis is single-project: a rule is about one module, found by
   walking up to the nearest `go.mod`.
 
-## The map
+## 🔲 The Map
 
 The whole product is the fluent API; everything else is its implementation. The pipeline is
 `SOURCE -> EXTRACT -> PROJECT -> ASSERT -> REPORT`, and the SOURCE-and-EXTRACT stage is the only part that
@@ -529,3 +526,43 @@ this library and for every other ArchUnit port. It is what to read before changi
 This repository enforces its own architecture on itself:
 [architecture_test.go](architecture_test.go) is the four dependency rules of `AGENTS.md` written as a
 suite through this public surface, and it is the library's best worked example.
+
+## 💟 Community
+
+### Maintainers
+
+- **[LukasNiessen](https://github.com/LukasNiessen)** - Creator and main maintainer
+
+### Contributors
+
+<a href="https://github.com/LukasNiessen/ArchUnitGo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=LukasNiessen/ArchUnitGo&max=1000&contributors=10" />
+</a>
+
+### Questions
+
+Found a bug? Want to discuss features?
+
+- Submit an [issue on GitHub](https://github.com/LukasNiessen/ArchUnitGo/issues/new/choose)
+- Join our [GitHub Discussions](https://github.com/LukasNiessen/ArchUnitGo/discussions)
+
+If ArchUnitGo helps your project, please consider:
+
+- Starring the repository 💚
+- Sponsoring development via [GitHub Sponsors](https://github.com/sponsors/LukasNiessen)
+- Suggesting new features 💭
+- Contributing code or documentation ⌨️
+
+### Star History
+
+[![Star History Chart](https://star-history.dera.page/svg?repos=LukasNiessen/ArchUnitGo&type=Date)](https://star-history.dera.page/#LukasNiessen/ArchUnitGo&Date)
+
+## 📄 License
+
+This project is under the [MIT](LICENSE) license.
+
+---
+
+<p align="center">
+  <a href="#top"><strong>Go Back to Top</strong></a>
+</p>
