@@ -531,7 +531,7 @@ suite through this public surface, and it is the library's best worked example.
 
 ### Maintainers
 
-- **[LukasNiessen](https://github.com/LukasNiessen)** - Creator and main maintainer
+- **[RobeyBeswick](https://github.com/RobeyBeswick)** - Creator and main maintainer
 
 ### Contributors
 
