@@ -35,8 +35,7 @@ go get github.com/LukasNiessen/ArchUnitGo
 ```
 
 Go 1.26 or newer. The only direct dependency is `golang.org/x/tools`, which is how the extractor talks
-to the Go toolchain. There is no tagged release yet, so `go get` resolves to a pseudo-version of
-`main` and the API may still move.
+to the Go toolchain. The latest release is v0.0.1; it is pre-1.0, so the API may still move.
 
 The package is `archunit` while the last element of the module path is `ArchUnitGo`, so give the
 import the name it has:
@@ -476,7 +475,6 @@ no sentence of its own for it to print.
 
 Documented from the source, so this list is what is actually missing today:
 
-- **No tagged release.** `go get` resolves to a pseudo-version of `main`, and names may still change.
 - **Files are the node vocabulary.** There are no package-level selectors, and no rule about a
   declared type's own dependencies. The metrics family reaches beyond files — its distance metrics are
   about a folder and `ForClassesMatching` selects declared types — but a rule of the files family is
