@@ -11,9 +11,9 @@
 //
 // Two decisions shape the whole package. The destination is injected per check rather than owned by the
 // library, so nothing is logged until a rule is handed a bag that says where to write; and the vocabulary
-// uses five lifecycle records plus debug inspection — start check, end check, log progress, log violation, log metric — so that a
-// log has the same five shapes of line whatever family of rule wrote it, and a reader who has learned one
-// has learned all of them. Level says which of them are written.
+// uses five lifecycle records — start check, end check, log progress, log violation, log metric — plus
+// debug inspection of graphs and selections. Every family uses the same aligned format, and Level says
+// which records are written.
 //
 // Nothing here is a channel for reporting a failure. A technical failure is the error Check returns and a
 // broken rule is a violation in the list it returns; both are logged as well, because a log of a run is
