@@ -1,13 +1,3 @@
-
-
-https://github.com/user-attachments/assets/47d2a4d0-9287-4d87-812f-383b1d0356ae
-
-
-
-https://github.com/user-attachments/assets/73897b3a-32cc-47eb-80cb-a9d15563fd7d
-
-
-
 # ArchUnitGo - Architecture Testing
 
 <div align="center" name="top">
