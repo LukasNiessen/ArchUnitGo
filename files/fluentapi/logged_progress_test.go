@@ -2,6 +2,7 @@ package fluentapi_test
 
 import (
 	"bytes"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -125,4 +126,32 @@ func loggedRecords(t *testing.T, rule kernel.Checkable, prefix string) []string 
 		}
 	}
 	return records
+}
+
+func TestDebugInspectionExplainsSelectionWithoutChangingResults(t *testing.T) {
+	fixture := fixtureLocator(t, writeFixtureProject(t))
+	rule := fluentapi.ProjectFiles(fixture).InFolder("internal/api/**").Should().HaveName("*_missing.go")
+	baseline, err := rule.Check(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []logging.Level{logging.LevelDebug, logging.LevelInfo} {
+		var output bytes.Buffer
+		actual, err := rule.Check(&kernel.CheckOptions{Logging: &logging.Options{Writer: &output, Level: level}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(actual, baseline) {
+			t.Fatalf("logging changed violations: %v", actual)
+		}
+		if level == logging.LevelDebug {
+			for _, want := range []string{"inspect: discovered file:", "inspect: dependency:", "inspect: selected file:"} {
+				if !strings.Contains(output.String(), want) {
+					t.Errorf("missing %q in %s", want, &output)
+				}
+			}
+		} else if strings.Contains(output.String(), "inspect:") {
+			t.Fatal("info must omit inspection")
+		}
+	}
 }

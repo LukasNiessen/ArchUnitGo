@@ -158,7 +158,7 @@ func (b MetricBuilder) ShouldBeAboveOrEqual(limit float64) MetricsThresholdCondi
 // opened, written or closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c MetricsThresholdCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
 	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
-		subjects, err := c.rule.scope.resolve(options)
+		subjects, err := c.rule.scope.resolveLogged(options, log)
 		if err != nil {
 			return nil, err
 		}

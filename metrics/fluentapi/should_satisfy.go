@@ -137,7 +137,7 @@ func (b MetricBuilder) ShouldSatisfy(predicate metricsassertion.Satisfaction, re
 // nothing.
 func (c MetricsSatisfactionCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
 	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
-		subjects, err := c.rule.scope.resolve(options)
+		subjects, err := c.rule.scope.resolveLogged(options, log)
 		if err != nil {
 			return nil, err
 		}

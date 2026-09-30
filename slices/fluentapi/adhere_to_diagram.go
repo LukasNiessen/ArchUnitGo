@@ -211,6 +211,8 @@ func (c SlicesDiagramCondition) Check(options *kernel.CheckOptions) ([]assertion
 		if err != nil {
 			return nil, err
 		}
+		log.LogGraph(graph)
+		log.LogMembership("slice", membership)
 		log.LogProgress("slices the slicing found", len(membership))
 
 		diagram, err := c.drawing()

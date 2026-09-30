@@ -11,7 +11,7 @@
 //
 // Two decisions shape the whole package. The destination is injected per check rather than owned by the
 // library, so nothing is logged until a rule is handed a bag that says where to write; and the vocabulary
-// is fixed at five records — start check, end check, log progress, log violation, log metric — so that a
+// uses five lifecycle records plus debug inspection — start check, end check, log progress, log violation, log metric — so that a
 // log has the same five shapes of line whatever family of rule wrote it, and a reader who has learned one
 // has learned all of them. Level says which of them are written.
 //

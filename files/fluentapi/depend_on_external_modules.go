@@ -146,6 +146,8 @@ func (c FilesExternalDependencyCondition) Check(options *kernel.CheckOptions) ([
 		if err != nil {
 			return nil, err
 		}
+		log.LogGraph(graph)
+		log.LogSelection("selected file", selected)
 		log.LogProgress("selected files", len(selected))
 
 		if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
@@ -155,6 +157,7 @@ func (c FilesExternalDependencyCondition) Check(options *kernel.CheckOptions) ([
 		}
 
 		modules := projection.SelectExternalModules(graph, c.modules...)
+		log.LogSelection("external module", modules)
 		log.LogProgress("external modules matched", len(modules))
 		dependencies := kernelprojection.ProjectEdges(graph, projection.PerExternalDependencyEdge(selected, modules))
 		log.LogProgress("dependencies from the selected files to those modules", len(dependencies))

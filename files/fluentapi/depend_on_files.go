@@ -134,7 +134,10 @@ func (c FilesDependencyCondition) Check(options *kernel.CheckOptions) ([]asserti
 			return nil, err
 		}
 		objects := projection.SelectFiles(graph, c.objects...)
+		log.LogGraph(graph)
+		log.LogSelection("selected file", selected)
 		log.LogProgress("selected files", len(selected))
+		log.LogSelection("target file", objects)
 		log.LogProgress("files to depend on", len(objects))
 
 		if empty := options.GatherEmptyTestViolations(c.populations(len(selected), len(objects))...); len(empty) > 0 {
