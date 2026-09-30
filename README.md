@@ -26,7 +26,7 @@ source. This file stays the short version, and it is the one place that states
 
 _Inspired by the amazing [ArchUnit](https://www.archunit.org/) library, but we are not affiliated with ArchUnit._
 
-[Install](#-install) • [Your First Rule](#-your-first-rule) • [What a Failure Looks Like](#-what-a-failure-looks-like) • [The Grammar](#-the-grammar) • [Patterns and Identifiers](#-patterns-and-identifiers) • [One Example per Family](#-one-example-per-family) • [A Whole Suite](#-a-whole-suite) • [Without a Test Framework](#-without-a-test-framework) • [Check Options](#-check-options) • [Keeping One Import Out of the Graph](#-keeping-one-import-out-of-the-graph) • [When a Rule Selects Nothing](#-when-a-rule-selects-nothing) • [What Is Not Implemented Yet](#-what-is-not-implemented-yet) • [The Map](#-the-map)
+[Install](#-install) • [Your First Rule](#-your-first-rule) • [Demo](#-demo) • [What a Failure Looks Like](#-what-a-failure-looks-like) • [The Grammar](#-the-grammar) • [Patterns and Identifiers](#-patterns-and-identifiers) • [One Example per Family](#-one-example-per-family) • [A Whole Suite](#-a-whole-suite) • [Without a Test Framework](#-without-a-test-framework) • [Check Options](#-check-options) • [Keeping One Import Out of the Graph](#-keeping-one-import-out-of-the-graph) • [When a Rule Selects Nothing](#-when-a-rule-selects-nothing) • [What Is Not Implemented Yet](#-what-is-not-implemented-yet) • [The Map](#-the-map)
 
 ## ⚡ Install
 
@@ -76,6 +76,12 @@ That is the whole setup. There is nothing to register, nothing to configure and 
 - **A failing rule is not an error.** `Check` returns `([]Violation, error)`; the violations are the
   rule's result and the error is the library or the environment failing. `AssertPasses` turns the
   first into `t.Error` and the second into a message saying the check could not be run at all.
+
+## 🎬 Demo
+
+[![Watch the silent ArchUnitGo demo on YouTube](https://img.youtube.com/vi/dFtiuRMr_MQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=dFtiuRMr_MQ)
+
+_A silent walkthrough of architecture testing with ArchUnitGo. Select the image to watch it on YouTube._
 
 ## 📢 What a Failure Looks Like
 
