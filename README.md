@@ -1,3 +1,13 @@
+
+
+https://github.com/user-attachments/assets/47d2a4d0-9287-4d87-812f-383b1d0356ae
+
+
+
+https://github.com/user-attachments/assets/73897b3a-32cc-47eb-80cb-a9d15563fd7d
+
+
+
 # ArchUnitGo - Architecture Testing
 
 <div align="center" name="top">
@@ -79,9 +89,7 @@ That is the whole setup. There is nothing to register, nothing to configure and 
 
 ## 🎬 Demo
 
-[![Watch the silent ArchUnitGo demo on YouTube](https://img.youtube.com/vi/dFtiuRMr_MQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=dFtiuRMr_MQ)
-
-_A silent walkthrough of architecture testing with ArchUnitGo. Select the image to watch it on YouTube._
+https://github.com/user-attachments/assets/63b2aaae-8d33-4874-8444-80aaea2b0cc2
 
 ## 📢 What a Failure Looks Like
 
