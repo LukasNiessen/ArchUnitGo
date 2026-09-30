@@ -35,7 +35,7 @@ go get github.com/LukasNiessen/ArchUnitGo
 ```
 
 Go 1.26 or newer. The only direct dependency is `golang.org/x/tools`, which is how the extractor talks
-to the Go toolchain. The latest release is v0.0.1; it is pre-1.0, so the API may still move.
+to the Go toolchain. Releases are pre-1.0, so the API may still move.
 
 The package is `archunit` while the last element of the module path is `ArchUnitGo`, so give the
 import the name it has:
@@ -422,6 +422,59 @@ check, so one test can assert on a log while the rest of the suite runs beside i
 holds the file a CI job archives, and the four levels are `LogLevelDebug`, `LogLevelInfo` (the
 default), `LogLevelWarn` and `LogLevelError`. A technical failure is still the error `Check` returns;
 a log line is never how this library reports something.
+
+### Detailed inspection
+
+`LogLevelDebug` shows each extracted file and dependency, import kinds and external targets,
+selected source/target files, layer and slice membership, progress counts, metric measurements,
+violations, and the outcome. It observes the graph used by the check, including cached graphs,
+without repeating custom calculations.
+
+```go
+violations, err := rule.Check(&archunit.CheckOptions{
+    Logging: &archunit.LogOptions{
+        Writer: os.Stderr,
+        Level: archunit.LogLevelDebug,
+        File: "build/archunit.log",
+    },
+})
+```
+
+| Level | Included output |
+| --- | --- |
+| `LogLevelDebug` | Graph inspection, selections, progress, and everything below |
+| `LogLevelInfo` | Check start/end, metric measurements, warnings and errors |
+| `LogLevelWarn` | Violations and technical failures |
+| `LogLevelError` | Technical failures |
+
+Example debug lines:
+
+```text
+debug inspect: discovered file: "internal/api/handler.go"
+debug inspect: selected file: "internal/api/handler.go"
+debug progress: selected files: 1
+```
+
+`Writer` and `File` can be used together; omit `Writer` for file-only logging. Files append unless
+`Overwrite` is true. `Timestamp` adds a caller-supplied timestamp to the filename. Archive the log
+as a CI artifact. A requested log that cannot be opened, written, or closed still returns a
+technical error. No destination means no output or file creation.
+
+### Readable, colored failure reports
+
+Numbered violations retain the source, requirement, and dependency or metric evidence. Enable
+the existing semantic palette when displaying them in a terminal:
+
+```go
+report := archunit.NewResultFactory(&archunit.MessageOptions{
+    Palette: archunit.DefaultPalette(),
+}).Result(violations)
+fmt.Println(report.Message)
+```
+
+Failures are red, subjects cyan, requirements yellow, and successful results green. Omit the
+palette for plain text in CI logs and artifacts. `MaxViolations` limits a long report and its
+footer states how many violations were omitted. Formatting leaves returned violations unchanged.
 
 ## 🚫 Keeping One Import Out of the Graph
 

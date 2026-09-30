@@ -58,6 +58,7 @@ import (
 	"github.com/LukasNiessen/ArchUnitGo/common/archerror"
 	"github.com/LukasNiessen/ArchUnitGo/common/extraction"
 	kernel "github.com/LukasNiessen/ArchUnitGo/common/fluentapi"
+	"github.com/LukasNiessen/ArchUnitGo/common/logging"
 	"github.com/LukasNiessen/ArchUnitGo/common/matching"
 	metricsextraction "github.com/LukasNiessen/ArchUnitGo/metrics/extraction"
 	"github.com/LukasNiessen/ArchUnitGo/metrics/projection"
@@ -188,6 +189,11 @@ func (b MetricsBuilder) String() string {
 // A pattern a scope verb rejected is returned before the project is read, and the error is otherwise a
 // project that cannot be located, extracted or read. It is never a rule failure.
 func (b MetricsBuilder) resolve(options *kernel.CheckOptions) (projection.Subjects, error) {
+	return b.resolveLogged(options, nil)
+}
+
+// resolveLogged shares the existing extraction and observes it only when debug is enabled.
+func (b MetricsBuilder) resolveLogged(options *kernel.CheckOptions, log *logging.Logger) (projection.Subjects, error) {
 	if b.err != nil {
 		return projection.Subjects{}, b.err
 	}
@@ -195,11 +201,14 @@ func (b MetricsBuilder) resolve(options *kernel.CheckOptions) (projection.Subjec
 	if err != nil {
 		return projection.Subjects{}, err
 	}
+	log.LogGraph(graph)
+	selected := projection.SelectFiles(graph, b.fileSelectors()...)
+	log.LogSelection("metric file", selected)
 	root, err := extraction.LocateProject(b.locator)
 	if err != nil {
 		return projection.Subjects{}, err
 	}
-	files, err := metricsextraction.ExtractFileInfo(root, projection.SelectFiles(graph, b.fileSelectors()...))
+	files, err := metricsextraction.ExtractFileInfo(root, selected)
 	if err != nil {
 		return projection.Subjects{}, err
 	}

@@ -3322,8 +3322,7 @@ func TestARuleOfThisRepositoryLogsWhatItDidThroughThePublicSurface(t *testing.T)
 	if len(violations) != 2 {
 		t.Fatalf("%s reported %v, want the two empty populations", rule, violations)
 	}
-	// The five records of the fixed vocabulary, in the order a check writes them: the rule, the steps it took
-	// and how much of the project each came to, what it found, and what came of it.
+	// The lifecycle records retain their order and shape alongside graph inspection.
 	want := strings.Join([]string{
 		"info  start check: " + rule.String(),
 		"debug progress: selected files: 0",
@@ -3333,8 +3332,15 @@ func TestARuleOfThisRepositoryLogsWhatItDidThroughThePublicSurface(t *testing.T)
 		"info  end check: " + rule.String() + ": 2 violations",
 		"",
 	}, "\n")
-	if log.String() != want {
-		t.Errorf("the log holds\n%s\nwant\n%s", log.String(), want)
+	records := strings.Split(log.String(), "\n")
+	lifecycle := slices.DeleteFunc(records, func(record string) bool {
+		return strings.HasPrefix(record, "debug inspect:")
+	})
+	if actual := strings.Join(lifecycle, "\n"); actual != want {
+		t.Errorf("the lifecycle log holds\n%s\nwant\n%s", actual, want)
+	}
+	if !strings.Contains(log.String(), `debug inspect: discovered file: "common/logging/inspection.go"`) {
+		t.Error("debug logging must expose discovered files even when the selectors match nothing")
 	}
 }
 

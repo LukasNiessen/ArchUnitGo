@@ -63,6 +63,8 @@ func (c LayersPolicyCondition) Check(options *kernel.CheckOptions) ([]assertion.
 		if err != nil {
 			return nil, err
 		}
+		log.LogGraph(graph)
+		log.LogMembership("layer", membership)
 		log.LogProgress("declared layers", len(c.policy.declaredLayers()))
 		log.LogProgress("clauses", len(c.policy.clauses))
 

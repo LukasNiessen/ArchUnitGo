@@ -98,6 +98,8 @@ func (c SlicesDependencyCondition) Check(options *kernel.CheckOptions) ([]assert
 		if err != nil {
 			return nil, err
 		}
+		log.LogGraph(graph)
+		log.LogMembership("slice", membership)
 		log.LogProgress("slices the slicing found", len(membership))
 
 		if empty := options.GatherEmptyTestViolations(c.populations(membership)...); len(empty) > 0 {

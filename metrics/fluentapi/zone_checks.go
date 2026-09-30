@@ -91,7 +91,7 @@ func (b MetricsDistanceBuilder) ShouldNotBeInZoneOfUselessness() MetricsZoneCond
 // closed — and never a failing rule. When it is non-nil the violations say nothing.
 func (c MetricsZoneCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
 	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
-		subjects, err := c.scope.resolve(options)
+		subjects, err := c.scope.resolveLogged(options, log)
 		if err != nil {
 			return nil, err
 		}

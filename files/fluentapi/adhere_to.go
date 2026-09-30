@@ -126,12 +126,13 @@ func (b FilesShouldNotBuilder) AdhereTo(predicate filesassertion.FilePredicate, 
 // violations say nothing.
 func (c FilesAdherenceCondition) Check(options *kernel.CheckOptions) ([]assertion.Violation, error) {
 	return options.LoggedCheck(c, func(log *logging.Logger) ([]assertion.Violation, error) {
-		// The graph is deliberately dropped: this rule judges each selected file on its own contents, so the
-		// dependencies between them say nothing about it.
-		_, selected, err := c.rule.scope.resolve(options)
+		// Dependencies are available for debug inspection; the assertion still judges only file contents.
+		graph, selected, err := c.rule.scope.resolve(options)
 		if err != nil {
 			return nil, err
 		}
+		log.LogGraph(graph)
+		log.LogSelection("selected file", selected)
 		log.LogProgress("selected files", len(selected))
 
 		if empty := options.GatherEmptyTestViolations(c.rule.selection(len(selected))); len(empty) > 0 {
